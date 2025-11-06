@@ -1,0 +1,149 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slurm-emulator"
+version = "0.1.0"
+description = "SLURM command emulator with time manipulation for testing periodic limits"
+authors = [
+    {name = "Waldur Team", email = "info@waldur.com"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "python-dateutil>=2.8.0",
+    "pyyaml>=6.0",
+    "click>=8.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.12.1",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+    "types-requests",
+    "types-PyYaml",
+    "types-python-dateutil",
+]
+
+[project.scripts]
+slurm-emulator = "emulator.cli.main:main"
+sacctmgr = "emulator.commands.dispatcher:sacctmgr_main"
+sacct = "emulator.commands.dispatcher:sacct_main"
+sinfo = "emulator.commands.dispatcher:sinfo_main"
+scancel = "emulator.commands.dispatcher:scancel_main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["emulator*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py39']
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+lint.extend-select = ["UP"]
+lint.select = ["ALL"]
+lint.ignore = [
+  "A005",
+  "PGH003",
+  "FBT002",
+  "FBT003",
+  "B006",
+  "PLR0913",
+  "C901",
+  "SLF001",
+  "BLE001",
+  "DTZ007",
+  "PERF203",
+  "FBT001",
+  "EM102",
+  'TRY003',
+  'PLW2901',
+  'TC001',
+  'TC002',
+  'TC003',
+  'TD002',
+  'TD003',
+  'FIX002',
+  'S603',
+  'DTZ001',
+  'DTZ005',
+  "PLR0915",
+  "PLR0912",
+  "B012",
+  "TRY300",
+  "FA102",
+  "T201",     # print statements (allow for CLI tool)
+  "D101",     # missing docstring in public class
+  "D102",     # missing docstring in public method
+  "D103",     # missing docstring in public function
+  "D107",     # missing docstring in __init__
+  "ANN001",   # missing type annotation for function argument
+  "ANN002",   # missing type annotation for *args
+  "ANN003",   # missing type annotation for **kwargs
+  "ANN201",   # missing return type annotation for public function
+  "ANN202",   # missing return type annotation for private function
+  "ANN204",   # missing return type annotation for special method
+  "E501",     # line too long (handled by formatter)
+  "S104",     # possible binding to all interfaces (needed for dev server)
+  "RUF013",   # PEP 484 prohibits implicit Optional
+  "S108",     # probable insecure usage of temp file (dev tool)
+  "F821",     # undefined name (missing imports to be fixed)
+  "PLR0911",  # too many return statements
+  "PERF401",  # use list comprehension
+  "F841",     # local variable assigned but never used
+  "RUF001",   # string contains ambiguous character
+  "SIM108",   # use ternary operator
+  "PLR2004",  # magic value used in comparison
+  "ARG002",   # unused method argument
+  "PLW0603",  # using global statement (singleton pattern)
+  "S110",     # try-except-pass (appropriate for file operations)
+]
+lint.extend-ignore = [
+  "COM812",
+  "ISC001",
+]
+
+[tool.ruff.format]
+indent-style = "space"
+quote-style = "double"
+
+[tool.ruff.lint.pep8-naming]
+classmethod-decorators = ["pydantic.validator", "pydantic.root_validator"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**/*.py" = [
+  "S101",   # we can (and MUST!) use 'assert' in test files.
+  "ANN001", # annotations for fixtures are sometimes a pain for test files
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["emulator"]
+
+[tool.ruff.lint.pyupgrade]
+keep-runtime-typing = true
+
+[tool.pytest.ini_options]
+addopts = "--cov=emulator/"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = false
+warn_unused_configs = true
+disallow_untyped_defs = false
+explicit_package_bases = true
+ignore_missing_imports = true

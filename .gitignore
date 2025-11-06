@@ -1,0 +1,30 @@
+/dist
+/build
+/venv
+*.egg
+*.egg-info
+*.pyc
+*.mo
+.DS_Store
+
+# Editor artifacts
+/.idea
+/.project
+/.pydevproject
+
+# llm
+.claude/settings.local.json
+
+# Testing artifacts
+
+TEST-*.xml
+coverage.xml
+test_report.xml
+.cache/
+.pytest_cache/
+pytest.ini
+
+/static
+__pycache__/
+
+.vscode/
