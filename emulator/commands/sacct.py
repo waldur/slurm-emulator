@@ -1,7 +1,7 @@
 """sacct command emulator for usage reporting."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional, Union
 
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
@@ -30,7 +30,7 @@ class SacctEmulator:
 
     def _parse_args(self, args: list[str]) -> dict[str, Any]:
         """Parse sacct command line arguments."""
-        config = {
+        config: dict[str, Union[bool, str, list[Any], Optional[datetime]]] = {
             "accounts": [],
             "users": [],
             "start_time": None,
@@ -73,9 +73,13 @@ class SacctEmulator:
                 # All jobs (including completed)
                 pass
             elif arg.startswith("--account="):
-                config["accounts"].append(arg.split("=", 1)[1])
+                accounts = config["accounts"]
+                if isinstance(accounts, list):
+                    accounts.append(arg.split("=", 1)[1])
             elif arg.startswith("--user="):
-                config["users"].append(arg.split("=", 1)[1])
+                users = config["users"]
+                if isinstance(users, list):
+                    users.append(arg.split("=", 1)[1])
 
             i += 1
 
@@ -151,7 +155,7 @@ class SacctEmulator:
 
             # Format summary records
             for data in summary.values():
-                line_data = []
+                line_data: list[str] = []
                 for field in format_fields:
                     if field == "Account":
                         line_data.append(data["account"])
@@ -169,8 +173,9 @@ class SacctEmulator:
                         line_data.append(",".join(tres_parts))
                     elif field == "Elapsed":
                         # Convert node-hours to elapsed time representation
-                        hours = int(data["total_node_hours"])
-                        minutes = int((data["total_node_hours"] - hours) * 60)
+                        total_hours = float(data["total_node_hours"])
+                        hours = int(total_hours)
+                        minutes = int((total_hours - hours) * 60)
                         line_data.append(f"{hours:02d}:{minutes:02d}:00")
                     else:
                         line_data.append("")
@@ -179,7 +184,7 @@ class SacctEmulator:
         else:
             # Job mode - individual records (simulated as jobs)
             for i, record in enumerate(records):
-                line_data = []
+                line_data: list[str] = []
                 for field in format_fields:
                     if field == "JobID":
                         line_data.append(f"job_{i + 1}")

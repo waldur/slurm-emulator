@@ -1,6 +1,7 @@
 """Usage simulation for injecting node-hour consumption."""
 
 from datetime import datetime, timedelta
+from typing import Optional
 
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
@@ -19,7 +20,7 @@ class UsageSimulator:
         }
 
     def inject_usage(
-        self, account: str, user: str, node_hours: float, at_time: datetime = None
+        self, account: str, user: str, node_hours: float, at_time: Optional[datetime] = None
     ) -> None:
         """Inject specific usage amount at given time."""
         if at_time is None:

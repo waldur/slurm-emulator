@@ -41,20 +41,22 @@ class TraditionalMaxTRESMinsScenario:
         self.time_engine.set_time(datetime(2024, 1, 1))
 
         account_obj = self.database.get_account(self.account)
+        if account_obj is not None:
+            # Apply traditional MaxTRESMins limits (raw TRES, no billing units)
+            account_obj.limits["MaxTRESMins:CPU"] = 43200  # 30 days * 24 hours * 60 mins
+            account_obj.limits["MaxTRESMins:mem"] = 2160000  # 1000GB * 30 days * 24 * 60 / 1024
+            account_obj.limits["MaxTRESMins:gres/gpu"] = 2880  # 2 GPUs * 30 days * 24 * 60
 
-        # Apply traditional MaxTRESMins limits (raw TRES, no billing units)
-        account_obj.limits["MaxTRESMins:CPU"] = 43200  # 30 days * 24 hours * 60 mins
-        account_obj.limits["MaxTRESMins:mem"] = 2160000  # 1000GB * 30 days * 24 * 60 / 1024
-        account_obj.limits["MaxTRESMins:gres/gpu"] = 2880  # 2 GPUs * 30 days * 24 * 60
+            # Set fairshare
+            account_obj.fairshare = 100
 
-        # Set fairshare
-        account_obj.fairshare = 100
-
-        self.database.save_state()
-        print(f"✅ Account '{self.account}' configured with MaxTRESMins limits")
-        print(f"   CPU: {account_obj.limits['MaxTRESMins:CPU']} minutes")
-        print(f"   Memory: {account_obj.limits['MaxTRESMins:mem']} MB-minutes")
-        print(f"   GPU: {account_obj.limits['MaxTRESMins:gres/gpu']} GPU-minutes")
+            self.database.save_state()
+            print(f"✅ Account '{self.account}' configured with MaxTRESMins limits")
+            print(f"   CPU: {account_obj.limits['MaxTRESMins:CPU']} minutes")
+            print(f"   Memory: {account_obj.limits['MaxTRESMins:mem']} MB-minutes")
+            print(f"   GPU: {account_obj.limits['MaxTRESMins:gres/gpu']} GPU-minutes")
+        else:
+            print(f"❌ Error: Account '{self.account}' not found")
 
     def run_usage_pattern(self) -> None:
         """Simulate typical usage under MaxTRESMins limits."""
@@ -105,6 +107,10 @@ class TraditionalMaxTRESMinsScenario:
         print("\n🔍 Checking MaxTRESMins limit enforcement...")
 
         account_obj = self.database.get_account(self.account)
+        if account_obj is None:
+            print(f"❌ Error: Account '{self.account}' not found")
+            return
+
         current_quarter = self.time_engine.get_current_quarter()
 
         for user in self.users:
@@ -169,20 +175,22 @@ class ModernBillingUnitsScenario:
         self.time_engine.set_time(datetime(2024, 1, 1))
 
         account_obj = self.database.get_account(self.account)
+        if account_obj is not None:
+            # Apply GrpTRESMins with billing units
+            # 1000 billing units * 60 minutes = 60000 billing-minutes per quarter
+            account_obj.limits["GrpTRESMins:billing"] = 60000
 
-        # Apply GrpTRESMins with billing units
-        # 1000 billing units * 60 minutes = 60000 billing-minutes per quarter
-        account_obj.limits["GrpTRESMins:billing"] = 60000
+            # Set fairshare for group sharing
+            account_obj.fairshare = 500
 
-        # Set fairshare for group sharing
-        account_obj.fairshare = 500
+            # Configure QoS thresholds (manually set in account metadata)
+            account_obj.qos_threshold = 48000  # 80% threshold
 
-        # Configure QoS thresholds (manually set in account metadata)
-        account_obj.qos_threshold = 48000  # 80% threshold
-
-        self.database.save_state()
-        print(f"✅ Account '{self.account}' configured with billing-based GrpTRESMins")
-        print(f"   Group limit: {account_obj.limits['GrpTRESMins:billing']} billing-minutes")
+            self.database.save_state()
+            print(f"✅ Account '{self.account}' configured with billing-based GrpTRESMins")
+            print(f"   Group limit: {account_obj.limits['GrpTRESMins:billing']} billing-minutes")
+        else:
+            print(f"❌ Error: Account '{self.account}' not found")
         print("   Billing weights: 64 CPU = 512GB = 4 GPU = 1 billing unit")
 
     def run_mixed_workloads(self) -> None:
@@ -228,6 +236,10 @@ class ModernBillingUnitsScenario:
         print("\n💰 Checking billing unit consumption...")
 
         account_obj = self.database.get_account(self.account)
+        if account_obj is None:
+            print(f"❌ Error: Account '{self.account}' not found")
+            return
+
         current_quarter = self.time_engine.get_current_quarter()
 
         total_usage = self.database.get_total_usage(self.account, current_quarter)
@@ -306,25 +318,27 @@ class ConcurrentResourceLimitsScenario:
         self.time_engine.set_time(datetime(2024, 1, 1))
 
         account_obj = self.database.get_account(self.account)
+        if account_obj is not None:
+            # Apply GrpTRES concurrent limits (not time-based)
+            account_obj.limits["GrpTRES:node"] = 10  # Max 10 nodes simultaneously
+            account_obj.limits["GrpTRES:CPU"] = 640  # Max 640 CPUs simultaneously
+            account_obj.limits["GrpTRES:gres/gpu"] = 8  # Max 8 GPUs simultaneously
 
-        # Apply GrpTRES concurrent limits (not time-based)
-        account_obj.limits["GrpTRES:node"] = 10  # Max 10 nodes simultaneously
-        account_obj.limits["GrpTRES:CPU"] = 640  # Max 640 CPUs simultaneously
-        account_obj.limits["GrpTRES:gres/gpu"] = 8  # Max 8 GPUs simultaneously
+            # Also set time-based limits for total consumption
+            account_obj.limits["GrpTRESMins:billing"] = 72000  # Total time budget
 
-        # Also set time-based limits for total consumption
-        account_obj.limits["GrpTRESMins:billing"] = 72000  # Total time budget
+            # Set fairshare
+            account_obj.fairshare = 200
 
-        # Set fairshare
-        account_obj.fairshare = 200
-
-        self.database.save_state()
-        print(f"✅ Account '{self.account}' configured with concurrent GrpTRES limits")
-        print(
-            f"   Concurrent limits: {account_obj.limits['GrpTRES:node']} nodes, "
-            f"{account_obj.limits['GrpTRES:CPU']} CPUs, {account_obj.limits['GrpTRES:gres/gpu']} GPUs"
-        )
-        print(f"   Time budget: {account_obj.limits['GrpTRESMins:billing']} billing-minutes")
+            self.database.save_state()
+            print(f"✅ Account '{self.account}' configured with concurrent GrpTRES limits")
+            print(
+                f"   Concurrent limits: {account_obj.limits['GrpTRES:node']} nodes, "
+                f"{account_obj.limits['GrpTRES:CPU']} CPUs, {account_obj.limits['GrpTRES:gres/gpu']} GPUs"
+            )
+            print(f"   Time budget: {account_obj.limits['GrpTRESMins:billing']} billing-minutes")
+        else:
+            print(f"❌ Error: Account '{self.account}' not found")
 
     def simulate_concurrent_jobs(self) -> None:
         """Simulate jobs running concurrently against GrpTRES limits."""
@@ -357,12 +371,15 @@ class ConcurrentResourceLimitsScenario:
             print("   ❌ Job 3: Rejected (would exceed concurrent CPU limit)")
 
         # Show resource utilization
-        account_obj = self.database.get_account(self.account)
         self._show_resource_utilization(current_cpu_usage, current_gpu_usage)
 
     def _check_concurrent_limit(self, resource_type: str, requested_amount: int) -> bool:
         """Check if concurrent resource request fits within GrpTRES limits."""
         account_obj = self.database.get_account(self.account)
+        if account_obj is None:
+            print(f"❌ Error: Account '{self.account}' not found")
+            return False
+
         limit_key = f"GrpTRES:{resource_type}"
         limit = account_obj.limits.get(limit_key, 0)
         return requested_amount <= limit
@@ -372,6 +389,9 @@ class ConcurrentResourceLimitsScenario:
         print("\n📊 Current concurrent resource utilization:")
 
         account_obj = self.database.get_account(self.account)
+        if account_obj is None:
+            print(f"❌ Error: Account '{self.account}' not found")
+            return
 
         cpu_limit = account_obj.limits.get("GrpTRES:CPU", 0)
         gpu_limit = account_obj.limits.get("GrpTRES:gres/gpu", 0)
@@ -415,30 +435,32 @@ class MixedLimitsConfigurationScenario:
         self.time_engine.set_time(datetime(2024, 1, 1))
 
         account_obj = self.database.get_account(self.account)
+        if account_obj is not None:
+            # Group concurrent limits (GrpTRES)
+            account_obj.limits["GrpTRES:node"] = 20
+            account_obj.limits["GrpTRES:CPU"] = 1280
+            account_obj.limits["GrpTRES:gres/gpu"] = 16
 
-        # Group concurrent limits (GrpTRES)
-        account_obj.limits["GrpTRES:node"] = 20
-        account_obj.limits["GrpTRES:CPU"] = 1280
-        account_obj.limits["GrpTRES:gres/gpu"] = 16
+            # Group time-based limits (GrpTRESMins)
+            account_obj.limits["GrpTRESMins:billing"] = 120000  # Large group allocation
 
-        # Group time-based limits (GrpTRESMins)
-        account_obj.limits["GrpTRESMins:billing"] = 120000  # Large group allocation
+            # Individual user time limits (MaxTRESMins)
+            account_obj.limits["MaxTRESMins:CPU"] = 86400  # 60 days worth for power users
+            account_obj.limits["MaxTRESMins:gres/gpu"] = 14400  # 10 days worth of GPU time
 
-        # Individual user time limits (MaxTRESMins)
-        account_obj.limits["MaxTRESMins:CPU"] = 86400  # 60 days worth for power users
-        account_obj.limits["MaxTRESMins:gres/gpu"] = 14400  # 10 days worth of GPU time
+            # Set fairshare
+            account_obj.fairshare = 750
 
-        # Set fairshare
-        account_obj.fairshare = 750
+            # Configure progressive QoS thresholds (manually set in account metadata)
+            account_obj.qos_threshold = 96000  # 80% threshold
 
-        # Configure progressive QoS thresholds (manually set in account metadata)
-        account_obj.qos_threshold = 96000  # 80% threshold
-
-        self.database.save_state()
-        print(f"✅ Account '{self.account}' configured with mixed limit types")
-        print("   Concurrent: 20 nodes, 1280 CPUs, 16 GPUs")
-        print("   Group time: 120000 billing-minutes")
-        print("   User time: 86400 CPU-minutes, 14400 GPU-minutes per user")
+            self.database.save_state()
+            print(f"✅ Account '{self.account}' configured with mixed limit types")
+            print("   Concurrent: 20 nodes, 1280 CPUs, 16 GPUs")
+            print("   Group time: 120000 billing-minutes")
+            print("   User time: 86400 CPU-minutes, 14400 GPU-minutes per user")
+        else:
+            print(f"❌ Error: Account '{self.account}' not found")
 
     def run_comprehensive_scenario(self) -> None:
         """Run scenario testing all limit types."""
@@ -472,6 +494,10 @@ class MixedLimitsConfigurationScenario:
         print(f"\n🔍 Limit status check - {period}:")
 
         account_obj = self.database.get_account(self.account)
+        if account_obj is None:
+            print(f"❌ Error: Account '{self.account}' not found")
+            return
+
         current_quarter = self.time_engine.get_current_quarter()
 
         # Check group time limits (GrpTRESMins)

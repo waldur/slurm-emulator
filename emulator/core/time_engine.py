@@ -51,7 +51,7 @@ class TimeEngine:
         quarter = (self.current_time.month - 1) // 3 + 1
         return f"{year}-Q{quarter}"
 
-    def get_quarter_start_end(self, quarter_str: str = None) -> tuple[datetime, datetime]:
+    def get_quarter_start_end(self, quarter_str: Optional[str] = None) -> tuple[datetime, datetime]:
         """Get start/end dates for quarter."""
         if not quarter_str:
             quarter_str = self.get_current_quarter()

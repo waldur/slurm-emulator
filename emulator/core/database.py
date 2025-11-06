@@ -82,7 +82,7 @@ class SlurmDatabase:
         self.add_account("root", "Root account", "system")
 
     def add_account(
-        self, name: str, description: str, organization: str, parent: str = None
+        self, name: str, description: str, organization: str, parent: Optional[str] = None
     ) -> None:
         """Add account to database."""
         self.accounts[name] = Account(
@@ -110,7 +110,9 @@ class SlurmDatabase:
         """Get user by name."""
         return self.users.get(name)
 
-    def add_association(self, user: str, account: str, limits: dict[str, int] = None) -> None:
+    def add_association(
+        self, user: str, account: str, limits: Optional[dict[str, int]] = None
+    ) -> None:
         """Add user-account association."""
         key = f"{user}:{account}"
         self.associations[key] = Association(account=account, user=user, limits=limits or {})
@@ -139,7 +141,10 @@ class SlurmDatabase:
         self.usage_records.append(record)
 
     def get_usage_records(
-        self, account: str = None, user: str = None, period: str = None
+        self,
+        account: Optional[str] = None,
+        user: Optional[str] = None,
+        period: Optional[str] = None,
     ) -> list[UsageRecord]:
         """Get usage records with optional filtering."""
         records = self.usage_records
@@ -153,7 +158,7 @@ class SlurmDatabase:
 
         return records
 
-    def get_total_usage(self, account: str, period: str = None) -> float:
+    def get_total_usage(self, account: str, period: Optional[str] = None) -> float:
         """Get total usage for account in period."""
         records = self.get_usage_records(account=account, period=period)
         return sum(r.node_hours for r in records)
@@ -189,7 +194,7 @@ class SlurmDatabase:
         """Get job by ID."""
         return self.jobs.get(job_id)
 
-    def list_jobs(self, account: str = None, user: str = None) -> list[Job]:
+    def list_jobs(self, account: Optional[str] = None, user: Optional[str] = None) -> list[Job]:
         """List jobs with optional filtering."""
         jobs = list(self.jobs.values())
 

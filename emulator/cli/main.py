@@ -7,6 +7,7 @@ import readline
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Optional
 
 from emulator.commands.dispatcher import SlurmEmulator
 from emulator.core.database import SlurmDatabase
@@ -22,7 +23,7 @@ from emulator.scenarios.sequence_scenario import SequenceScenario
 class EmulatorCLI:
     """Interactive CLI for SLURM emulator."""
 
-    def __init__(self, slurm_config_path: str = None):
+    def __init__(self, slurm_config_path: Optional[str] = None):
         self.time_engine = TimeEngine()
         self.database = SlurmDatabase()
 
@@ -67,11 +68,11 @@ class EmulatorCLI:
         self.database.load_state()
 
         # State management
-        self.checkpoints = {}
+        self.checkpoints: dict[str, Any] = {}
 
         # Auto-completion setup
         self.autocomplete_enabled = False
-        self._completion_cache = []
+        self._completion_cache: list[str] = []
         self._last_completion_line = ""
         self._setup_autocomplete()
 
@@ -163,7 +164,7 @@ class EmulatorCLI:
             print("⚠️  Auto-completion not available (readline unavailable)")
             print("💡 Commands still work normally, just type them out fully")
 
-    def _completer(self, text: str, state: int) -> str:
+    def _completer(self, text: str, state: int) -> Optional[str]:
         """Auto-completion function."""
         try:
             line = readline.get_line_buffer()
@@ -316,11 +317,11 @@ class EmulatorCLI:
         """Complete file paths."""
         try:
             if text:
-                matches = list(Path().glob(text + "*"))
-                matches = [str(p) for p in matches]
+                path_matches = list(Path().glob(text + "*"))
+                matches = [str(p) for p in path_matches]
             else:
-                matches = list(Path().glob("*"))
-                matches = [str(p) for p in matches]
+                path_matches = list(Path().glob("*"))
+                matches = [str(p) for p in path_matches]
             return matches
         except Exception:
             return []
@@ -672,7 +673,7 @@ class EmulatorCLI:
 
             # Show breakdown by user
             records = self.database.get_usage_records(account=account, period=period)
-            user_usage = {}
+            user_usage: dict[str, float] = {}
             for record in records:
                 user_usage[record.user] = user_usage.get(record.user, 0) + record.node_hours
 

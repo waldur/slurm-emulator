@@ -102,16 +102,25 @@ class QoSManager:
         current_qos = self.get_account_qos(account)
         projected_qos = self._determine_qos_level(projected_usage, qos_threshold, grace_limit)
 
-        impact = {
-            "account": account,
-            "current_qos": current_qos,
-            "projected_qos": projected_qos,
-            "projected_usage": projected_usage,
-            "qos_change_needed": current_qos != projected_qos,
-            "impact_severity": self._calculate_impact_severity(current_qos, projected_qos),
-        }
+        # Get account users for affected_users list
+        affected_users = self.database.list_account_users(account)
+
+        # Determine impact description and type
+        if current_qos == projected_qos:
+            impact_description = f"No QoS change needed - remains at {current_qos}"
+            impact_type = "no_change"
+        elif projected_qos == "blocked":
+            impact_description = "Account will be blocked due to usage exceeding grace limit"
+            impact_type = "restriction"
+        elif projected_qos == "slowdown":
+            impact_description = "Account will be slowed down due to usage exceeding threshold"
+            impact_type = "restriction"
+        else:
+            impact_description = f"Account QoS improved from {current_qos} to {projected_qos}"
+            impact_type = "improvement"
 
         return {
+            "account": account,
             "impact_description": impact_description,
             "impact_type": impact_type,
             "affected_users": affected_users,
@@ -148,9 +157,11 @@ class QoSManager:
             "summary": {"normal": 0, "slowdown": 0, "blocked": 0},
         }
 
+        current_period = str(report["period"])
+
         for account in accounts:
             qos = self.get_account_qos(account)
-            current_usage = self.database.get_total_usage(account, report["period"])
+            current_usage = self.database.get_total_usage(account, current_period)
 
             account_info = {"qos": qos, "usage": current_usage, "qos_info": self.get_qos_info(qos)}
 

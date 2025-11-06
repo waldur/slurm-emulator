@@ -9,6 +9,7 @@ import readline
 import shlex
 import sys
 from datetime import datetime
+from typing import Any, Optional
 
 from emulator.commands.dispatcher import SlurmEmulator
 from emulator.core.database import SlurmDatabase
@@ -32,7 +33,7 @@ Type 'help <command>' for detailed help on specific commands.
 
     prompt = "slurm-emulator> "
 
-    def __init__(self, slurm_config_path: str = None):
+    def __init__(self, slurm_config_path: Optional[str] = None):
         super().__init__()
 
         # Store config path for later
@@ -81,7 +82,7 @@ Type 'help <command>' for detailed help on specific commands.
         self.database.load_state()
 
         # State management
-        self.checkpoints = {}
+        self.checkpoints: dict[str, Any] = {}
 
         # Show initial status
         print(f"Current time: {self.time_engine.get_current_time()}")

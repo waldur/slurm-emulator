@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 
 class SlurmConfigParser:
@@ -66,7 +66,7 @@ class SlurmConfigParser:
 
     def _process_config_values(self) -> None:
         """Process and validate configuration values."""
-        processors = {
+        processors: dict[str, Callable[[str], Any]] = {
             "PriorityDecayHalfLife": self._parse_time_duration,
             "PriorityCalcPeriod": self._parse_time_duration,
             "PriorityMaxAge": self._parse_time_duration,

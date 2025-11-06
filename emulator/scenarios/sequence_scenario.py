@@ -1,6 +1,7 @@
 """Implementation of the SLURM_PERIODIC_LIMITS_SEQUENCE.md scenario."""
 
 from datetime import datetime
+from typing import Any
 
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
@@ -25,8 +26,8 @@ class SequenceScenario:
         self.base_allocation = 1000  # node-hours per quarter
         self.grace_ratio = 0.2  # 20% overconsumption allowed
 
-        self.steps = []
-        self.checkpoints = {}
+        self.steps: list[str] = []
+        self.checkpoints: dict[str, Any] = {}
 
     def setup_scenario(self) -> None:
         """Set up initial scenario state."""
@@ -124,10 +125,11 @@ class SequenceScenario:
 
         # Apply settings to account
         account_obj = self.database.get_account(self.account)
-        account_obj.fairshare = settings["fairshare"]
-        account_obj.limits["GrpTRESMins:billing"] = settings["billing_minutes"]
-        account_obj.qos = "normal"
-        account_obj.last_period = settings["period"]
+        if account_obj is not None:
+            account_obj.fairshare = settings["fairshare"]
+            account_obj.limits["GrpTRESMins:billing"] = settings["billing_minutes"]
+            account_obj.qos = "normal"
+            account_obj.last_period = settings["period"]
 
         print(f"   ⚖️  Set fairshare to {settings['fairshare']}")
         print(f"   🚫 Set GrpTRESMins to {settings['billing_minutes']} billing-minutes")
@@ -214,8 +216,9 @@ class SequenceScenario:
         # Apply new settings
         settings = self.limits_calculator.calculate_periodic_settings(self.account)
         account_obj = self.database.get_account(self.account)
-        account_obj.limits["GrpTRESMins:billing"] = settings["billing_minutes"]
-        account_obj.last_period = "2024-Q2"
+        if account_obj is not None:
+            account_obj.limits["GrpTRESMins:billing"] = settings["billing_minutes"]
+            account_obj.last_period = "2024-Q2"
 
         print(f"   🚫 Updated GrpTRESMins to {settings['billing_minutes']} billing-minutes")
         print(f"   🎯 New QoS threshold: {settings['qos_threshold']:.1f}Nh")
@@ -305,8 +308,9 @@ class SequenceScenario:
 
         # Apply new settings
         account_obj = self.database.get_account(self.account)
-        account_obj.fairshare = settings["fairshare"]
-        account_obj.limits["GrpTRESMins:billing"] = settings["billing_minutes"]
+        if account_obj is not None:
+            account_obj.fairshare = settings["fairshare"]
+            account_obj.limits["GrpTRESMins:billing"] = settings["billing_minutes"]
 
         print(f"   💰 Allocation: {old_allocation}Nh → {settings['total_allocation']:.1f}Nh")
         print(f"   ⚖️  Fairshare: {settings['fairshare']}")
@@ -415,9 +419,10 @@ class SequenceScenario:
         # Apply Q3 settings
         settings = self.limits_calculator.calculate_periodic_settings(self.account)
         account_obj = self.database.get_account(self.account)
-        account_obj.fairshare = settings["fairshare"]
-        account_obj.limits["GrpTRESMins:billing"] = settings["billing_minutes"]
-        account_obj.last_period = "2024-Q3"
+        if account_obj is not None:
+            account_obj.fairshare = settings["fairshare"]
+            account_obj.limits["GrpTRESMins:billing"] = settings["billing_minutes"]
+            account_obj.last_period = "2024-Q3"
 
         # Reset QoS and raw usage for new period
         self.qos_manager.restore_qos_for_new_period(self.account)

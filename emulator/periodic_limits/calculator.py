@@ -1,5 +1,7 @@
 """Periodic limits calculations including decay and carryover logic."""
 
+from typing import Any, Optional
+
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
 from emulator.core.usage_simulator import UsageSimulator
@@ -31,7 +33,7 @@ class PeriodicLimitsCalculator:
             self.qos_weight = 500000
             self.fairshare_weight = 259200
 
-    def calculate_decay_factor(self, days_elapsed: int, half_life: float = None) -> float:
+    def calculate_decay_factor(self, days_elapsed: int, half_life: Optional[float] = None) -> float:
         """Calculate decay factor using half-life formula."""
         if half_life is None:
             half_life = self.half_life_days
@@ -100,7 +102,9 @@ class PeriodicLimitsCalculator:
         """Calculate QoS threshold (when to trigger slowdown) - should be at allocation limit."""
         return allocation  # Slowdown at 100% of allocation
 
-    def calculate_periodic_settings(self, account: str, config: dict = None) -> dict:
+    def calculate_periodic_settings(
+        self, account: str, config: Optional[dict[Any, Any]] = None
+    ) -> dict:
         """Calculate all periodic settings for an account."""
         if config is None:
             config = {
@@ -179,7 +183,9 @@ class PeriodicLimitsCalculator:
             "carryover_details": carryover_details,
         }
 
-    def check_usage_thresholds(self, account: str, settings: dict = None) -> dict:
+    def check_usage_thresholds(
+        self, account: str, settings: Optional[dict[Any, Any]] = None
+    ) -> dict:
         """Check current usage against thresholds and return status."""
         if settings is None:
             settings = self.calculate_periodic_settings(account)
@@ -212,7 +218,9 @@ class PeriodicLimitsCalculator:
 
         return status
 
-    def apply_period_transition(self, account: str, config: dict = None) -> dict:
+    def apply_period_transition(
+        self, account: str, config: Optional[dict[Any, Any]] = None
+    ) -> dict:
         """Apply period transition for account."""
         settings = self.calculate_periodic_settings(account, config)
 
