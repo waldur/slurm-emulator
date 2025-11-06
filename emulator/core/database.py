@@ -69,7 +69,7 @@ class Job:
 class SlurmDatabase:
     """In-memory database for SLURM emulator."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.accounts: dict[str, Account] = {}
         self.users: dict[str, User] = {}
         self.associations: dict[str, Association] = {}  # key: "user:account"

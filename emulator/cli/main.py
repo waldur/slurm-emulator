@@ -976,12 +976,13 @@ class EmulatorCLI:
                 return
 
             name = args[1]
-            account = self.database.get_account(name)
+            account_opt = self.database.get_account(name)
 
-            if not account:
+            if account_opt is None:
                 print(f"❌ Account {name} not found")
                 return
 
+            account = account_opt  # Now we know it's not None
             print(f"📊 Account: {account.name}")
             print(f"   Description: {account.description}")
             print(f"   Organization: {account.organization}")

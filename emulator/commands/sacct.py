@@ -146,34 +146,45 @@ class SacctEmulator:
                         "raw_tres": {"CPU": 0, "Mem": 0, "GRES/gpu": 0},
                         "elapsed_time": "00:00:00",
                     }
-                summary[key]["total_node_hours"] += record.node_hours
+                record_data = summary[key]
+                if isinstance(record_data, dict) and "total_node_hours" in record_data:
+                    current_hours = record_data["total_node_hours"]
+                    if isinstance(current_hours, (int, float)):
+                        record_data["total_node_hours"] = current_hours + record.node_hours
 
                 # Sum raw TRES
                 for tres_type, value in record.raw_tres.items():
-                    if tres_type in summary[key]["raw_tres"]:
-                        summary[key]["raw_tres"][tres_type] += value
+                    raw_tres = record_data.get("raw_tres", {})
+                    if isinstance(raw_tres, dict) and tres_type in raw_tres:
+                        raw_tres[tres_type] += value
 
             # Format summary records
             for data in summary.values():
                 line_data: list[str] = []
                 for field in format_fields:
                     if field == "Account":
-                        line_data.append(data["account"])
+                        line_data.append(str(data.get("account", "")))
                     elif field == "User":
-                        line_data.append(data["user"])
+                        line_data.append(str(data.get("user", "")))
                     elif field == "ReqTRES":
                         # Format as TRES string
                         tres_parts = []
-                        for tres_type, value in data["raw_tres"].items():
-                            if value > 0:
-                                if tres_type == "GRES/gpu":
-                                    tres_parts.append(f"gres/gpu={value}")
-                                else:
-                                    tres_parts.append(f"{tres_type.lower()}={value}")
+                        raw_tres = data.get("raw_tres", {})
+                        if isinstance(raw_tres, dict):
+                            for tres_type, value in raw_tres.items():
+                                if value > 0:
+                                    if tres_type == "GRES/gpu":
+                                        tres_parts.append(f"gres/gpu={value}")
+                                    else:
+                                        tres_parts.append(f"{tres_type.lower()}={value}")
                         line_data.append(",".join(tres_parts))
                     elif field == "Elapsed":
                         # Convert node-hours to elapsed time representation
-                        total_hours = float(data["total_node_hours"])
+                        hours_value = data.get("total_node_hours", 0)
+                        if isinstance(hours_value, (int, float)):
+                            total_hours = float(hours_value)
+                        else:
+                            total_hours = 0.0
                         hours = int(total_hours)
                         minutes = int((total_hours - hours) * 60)
                         line_data.append(f"{hours:02d}:{minutes:02d}:00")
@@ -184,31 +195,31 @@ class SacctEmulator:
         else:
             # Job mode - individual records (simulated as jobs)
             for i, record in enumerate(records):
-                line_data: list[str] = []
+                job_line_data: list[str] = []
                 for field in format_fields:
                     if field == "JobID":
-                        line_data.append(f"job_{i + 1}")
+                        job_line_data.append(f"job_{i + 1}")
                     elif field == "JobName":
-                        line_data.append(f"emulated_job_{i + 1}")
+                        job_line_data.append(f"emulated_job_{i + 1}")
                     elif field == "Account":
-                        line_data.append(record.account)
+                        job_line_data.append(record.account)
                     elif field == "User":
-                        line_data.append(record.user)
+                        job_line_data.append(record.user)
                     elif field == "State":
-                        line_data.append("COMPLETED")
+                        job_line_data.append("COMPLETED")
                     elif field == "Elapsed":
                         hours = int(record.node_hours)
                         minutes = int((record.node_hours - hours) * 60)
-                        line_data.append(f"{hours:02d}:{minutes:02d}:00")
+                        job_line_data.append(f"{hours:02d}:{minutes:02d}:00")
                     elif field == "Timelimit":
-                        line_data.append("UNLIMITED")
+                        job_line_data.append("UNLIMITED")
                     elif field == "NodeList":
                         node_count = max(1, int(record.node_hours))
-                        line_data.append(f"node[001-{node_count:03d}]")
+                        job_line_data.append(f"node[001-{node_count:03d}]")
                     else:
-                        line_data.append("")
+                        job_line_data.append("")
 
-                lines.append("|".join(line_data))
+                lines.append("|".join(job_line_data))
 
         return "\n".join(lines)
 
@@ -232,7 +243,7 @@ class SacctEmulator:
                 if records:
                     # Use real data
                     total_tres = {"CPU": 0, "Mem": 0, "GRES/gpu": 0}
-                    total_hours = 0
+                    total_hours = 0.0
 
                     for record in records:
                         total_hours += record.node_hours

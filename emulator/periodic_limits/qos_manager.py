@@ -1,5 +1,7 @@
 """QoS management for threshold-based switching."""
 
+from typing import Any
+
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
 
@@ -148,7 +150,7 @@ class QoSManager:
 
         return "none"
 
-    def generate_qos_report(self, accounts: list[str]) -> dict:
+    def generate_qos_report(self, accounts: list[str]) -> dict[str, Any]:
         """Generate QoS status report for multiple accounts."""
         report = {
             "timestamp": self.time_engine.get_current_time(),
@@ -165,8 +167,12 @@ class QoSManager:
 
             account_info = {"qos": qos, "usage": current_usage, "qos_info": self.get_qos_info(qos)}
 
-            report["accounts"][account] = account_info
-            report["summary"][qos] = report["summary"].get(qos, 0) + 1
+            accounts_dict = report["accounts"]
+            if isinstance(accounts_dict, dict):
+                accounts_dict[account] = account_info
+            summary_dict = report["summary"]
+            if isinstance(summary_dict, dict):
+                summary_dict[qos] = summary_dict.get(qos, 0) + 1
 
         return report
 

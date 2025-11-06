@@ -184,7 +184,7 @@ class ModernBillingUnitsScenario:
             account_obj.fairshare = 500
 
             # Configure QoS thresholds (manually set in account metadata)
-            account_obj.qos_threshold = 48000  # 80% threshold
+            account_obj.limits["qos_threshold"] = 48000  # 80% threshold
 
             self.database.save_state()
             print(f"✅ Account '{self.account}' configured with billing-based GrpTRESMins")
@@ -452,7 +452,7 @@ class MixedLimitsConfigurationScenario:
             account_obj.fairshare = 750
 
             # Configure progressive QoS thresholds (manually set in account metadata)
-            account_obj.qos_threshold = 96000  # 80% threshold
+            account_obj.limits["qos_threshold"] = 96000  # 80% threshold
 
             self.database.save_state()
             print(f"✅ Account '{self.account}' configured with mixed limit types")

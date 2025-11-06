@@ -147,7 +147,7 @@ class ScenarioDefinition:
 class ScenarioRegistry:
     """Registry for managing all available scenarios."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.scenarios: dict[str, ScenarioDefinition] = {}
         self._register_built_in_scenarios()
 
