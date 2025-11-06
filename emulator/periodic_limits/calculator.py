@@ -171,12 +171,12 @@ class PeriodicLimitsCalculator:
         return {
             "period": current_period,
             "base_allocation": base_allocation,
-            "total_allocation": new_total_allocation,
+            "total_allocation": total_allocation,
             "fairshare": fairshare,
             "qos_threshold": qos_threshold,
             "grace_limit": grace_limit,
             "billing_minutes": billing_minutes,
-            "carryover_details": calculation_details,
+            "carryover_details": carryover_details,
         }
 
     def check_usage_thresholds(self, account: str, settings: dict = None) -> dict:

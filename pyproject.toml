@@ -1,15 +1,29 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "slurm-emulator"
 version = "0.1.0"
 description = "SLURM command emulator with time manipulation for testing periodic limits"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Software Development :: Testing",
+]
 authors = [
     {name = "Waldur Team", email = "info@waldur.com"}
 ]
-license = {text = "MIT"}
+license = "MIT"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
@@ -41,9 +55,19 @@ sacct = "emulator.commands.dispatcher:sacct_main"
 sinfo = "emulator.commands.dispatcher:sinfo_main"
 scancel = "emulator.commands.dispatcher:scancel_main"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["emulator*"]
+[project.urls]
+Homepage = "https://waldur.com"
+Documentation = "https://docs.waldur.com"
+Repository = "https://gitlab.com/waldur/slurm-emulator"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.sdist]
+include = ["emulator"]
+
+[tool.hatch.build.targets.wheel]
+include = ["emulator"]
 
 [tool.black]
 line-length = 100
