@@ -4,15 +4,15 @@ A comprehensive SLURM command emulator with time manipulation capabilities for t
 
 ## Features
 
-🎮 **Interactive CLI** - Full command-line interface with time travel
-⏰ **Time Manipulation** - Advance time by days, months, or quarters
-💾 **Usage Injection** - Add specific node-hour usage at any time point
-🔄 **Decay Calculations** - 15-day half-life fairshare decay simulation
-🎯 **QoS Management** - Threshold-based QoS switching (normal → slowdown → blocked)
-📊 **Periodic Limits** - Quarterly allocation with carryover logic
-🎬 **Scenario Runner** - Complete SLURM_PERIODIC_LIMITS_SEQUENCE.md validation
-🔌 **API Integration** - REST API for waldur-site-agent integration
-💾 **State Management** - Checkpoint/restore functionality for testing
+- 🎮 **Interactive CLI** - Full command-line interface with time travel
+- ⏰ **Time Manipulation** - Advance time by days, months, or quarters
+- 💾 **Usage Injection** - Add specific node-hour usage at any time point
+- 🔄 **Decay Calculations** - 15-day half-life fairshare decay simulation
+- 🎯 **QoS Management** - Threshold-based QoS switching (normal → slowdown → blocked)
+- 📊 **Periodic Limits** - Quarterly allocation with carryover logic
+- 🎬 **Scenario Runner** - Complete SLURM_PERIODIC_LIMITS_SEQUENCE.md validation
+- 🔌 **API Integration** - REST API for waldur-site-agent integration
+- 💾 **State Management** - Checkpoint/restore functionality for testing
 
 ## Quick Start
 
