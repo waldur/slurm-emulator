@@ -19,7 +19,11 @@ A comprehensive SLURM command emulator with time manipulation capabilities for t
 ### Installation
 
 ```bash
-cd /Users/ilja/workspace/slurm-emulator
+# Clone the repository
+git clone https://github.com/waldur/slurm-emulator.git
+cd slurm-emulator
+
+# Install dependencies using uv
 uv sync
 ```
 
@@ -133,8 +137,8 @@ test-account|cpu=12800,mem=102400,gres/gpu=800|08:00:00|user1
 Start the API server for waldur-site-agent integration:
 
 ```bash
-cd /Users/ilja/workspace/slurm-emulator
-uvicorn emulator.api.emulator_server:app --host 0.0.0.0 --port 8080
+# From the slurm-emulator directory
+uv run uvicorn emulator.api.emulator_server:app --host 0.0.0.0 --port 8080
 ```
 
 ### API Endpoints
