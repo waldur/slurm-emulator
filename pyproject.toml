@@ -58,7 +58,7 @@ scancel = "emulator.commands.dispatcher:scancel_main"
 [project.urls]
 Homepage = "https://waldur.com"
 Documentation = "https://docs.waldur.com"
-Repository = "https://gitlab.com/waldur/slurm-emulator"
+Repository = "https://github.com/waldur/slurm-emulator"
 
 [tool.hatch.metadata]
 allow-direct-references = true
