@@ -3,6 +3,7 @@
 import sys
 from pathlib import Path
 
+from emulator import __version__
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacctmgr import SacctmgrEmulator
 from emulator.core.database import SlurmDatabase
@@ -38,7 +39,7 @@ class SlurmEmulator:
     def _handle_sinfo(self, args: list[str]) -> str:
         """Handle sinfo command."""
         if args and args[0] == "-V":
-            return "slurm-emulator 0.1.0"
+            return f"slurm-emulator {__version__}"
 
         # Return basic cluster info
         return """PARTITION AVAIL  TIMELIMIT  NODES  STATE NODELIST

@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import Any, Optional, Union
 
+from emulator import __version__
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
 
@@ -20,7 +21,7 @@ class SacctEmulator:
         config = self._parse_args(args)
 
         if config.get("version"):
-            return "slurm-emulator 0.1.0"
+            return f"slurm-emulator {__version__}"
 
         # Get usage records based on filters
         records = self._get_filtered_records(config)

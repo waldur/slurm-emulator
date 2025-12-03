@@ -77,6 +77,27 @@ Use these commands:
 - **Type check**: `uv run --with mypy mypy emulator/`
 - **Run all pre-commit checks**: `uv run pre-commit run --all-files`
 
+### Release Management
+
+**Local Development Commands:**
+- **Check current version**: `uv run scripts/release.py status`
+- **Update version only**: `uv run scripts/release.py version-update X.Y.Z`
+- **Run local checks**: `uv run scripts/release.py check` (linting, type checking)
+- **Test local build**: `uv run scripts/release.py build`
+- **Full release workflow**: `uv run scripts/release.py release X.Y.Z`
+
+**Automated CI/CD (GitHub Actions):**
+- **Testing**: Runs automatically on every push/PR (multiple Python versions)
+- **Publishing**: Triggered by pushing version tags (e.g., `0.1.1`)
+- **PyPI Release**: Automatically builds and publishes when version tag is pushed
+
+The release script handles local version management and creates git tags that trigger automated CI/CD for testing and publishing.
+
+**Version Management:**
+- **Single Source**: Version defined in `pyproject.toml` only
+- **Automatic Propagation**: All code imports version from `emulator.__init__.py`
+- **No Hardcoding**: All version references are automatically updated
+
 #### Linting Configuration
 
 The project uses Ruff with a balanced configuration that:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "slurm-emulator"
-version = "0.1.0"
+version = "0.1.1"
 description = "SLURM command emulator with time manipulation for testing periodic limits"
 classifiers = [
     "Development Status :: 4 - Beta",

@@ -1,5 +1,6 @@
 """sacctmgr command emulator."""
 
+from emulator import __version__
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
 
@@ -29,7 +30,7 @@ class SacctmgrEmulator:
         if command == "show":
             return self._handle_show(args[1:])
         if command == "-V":
-            return "slurm-emulator 0.1.0"
+            return f"slurm-emulator {__version__}"
         return f"sacctmgr: error: Unknown command: {command}"
 
     def _handle_add(self, args: list[str]) -> str:

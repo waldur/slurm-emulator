@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from emulator import __version__
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
 from emulator.core.usage_simulator import UsageSimulator
@@ -47,7 +48,7 @@ class EmulatorServer:
     """FastAPI server for waldur-site-agent integration."""
 
     def __init__(self):
-        self.app = FastAPI(title="SLURM Emulator API", version="0.1.0")
+        self.app = FastAPI(title="SLURM Emulator API", version=__version__)
 
         # Initialize emulator components
         self.time_engine = TimeEngine()
@@ -69,7 +70,7 @@ class EmulatorServer:
         async def root():
             return {
                 "message": "SLURM Emulator API",
-                "version": "0.1.0",
+                "version": __version__,
                 "current_time": self.time_engine.get_current_time(),
                 "current_period": self.time_engine.get_current_quarter(),
             }
