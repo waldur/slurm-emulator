@@ -148,7 +148,9 @@ class UsageSimulator:
     def _convert_to_raw_tres(self, node_hours: float) -> dict[str, int]:
         """Convert billing units to raw TRES based on standard node config."""
         # Standard node: 64 CPUs, 512GB RAM, 4 GPUs
+        # Include "node" component for site agent compatibility
         return {
+            "node-hours": int(node_hours),  # Direct node-hours mapping for site agent
             "CPU": int(node_hours * 64),
             "Mem": int(node_hours * 512),  # GB
             "GRES/gpu": int(node_hours * 4),

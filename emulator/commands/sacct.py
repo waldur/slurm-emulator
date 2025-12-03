@@ -167,16 +167,26 @@ class SacctEmulator:
                     elif field == "User":
                         line_data.append(str(data.get("user", "")))
                     elif field == "ReqTRES":
-                        # Format as TRES string
+                        # Format as TRES string - ensure non-empty for site agent parsing
                         tres_parts = []
                         raw_tres = data.get("raw_tres", {})
+                        hours = data.get("total_node_hours", 0)
+
+                        # Always include node-hours component first for site agent compatibility
+                        if hours > 0:
+                            tres_parts.append(f"node-hours={int(hours)}")
+
+                        # Add other TRES components
                         if isinstance(raw_tres, dict):
                             for tres_type, value in raw_tres.items():
-                                if value > 0:
+                                if (
+                                    value > 0 and tres_type != "node-hours"
+                                ):  # Skip node-hours, already added
                                     if tres_type == "GRES/gpu":
                                         tres_parts.append(f"gres/gpu={value}")
                                     else:
                                         tres_parts.append(f"{tres_type.lower()}={value}")
+
                         line_data.append(",".join(tres_parts))
                     elif field == "Elapsed":
                         # Convert node-hours to elapsed time representation
@@ -207,6 +217,28 @@ class SacctEmulator:
                         job_line_data.append(record.user)
                     elif field == "State":
                         job_line_data.append("COMPLETED")
+                    elif field == "ReqTRES":
+                        # Format as TRES string - ensure non-empty for site agent parsing
+                        tres_parts = []
+                        raw_tres = record.raw_tres
+                        hours = record.node_hours
+
+                        # Always include node-hours component first for site agent compatibility
+                        if hours > 0:
+                            tres_parts.append(f"node-hours={int(hours)}")
+
+                        # Add other TRES components
+                        if isinstance(raw_tres, dict):
+                            for tres_type, value in raw_tres.items():
+                                if (
+                                    value > 0 and tres_type != "node-hours"
+                                ):  # Skip node-hours, already added
+                                    if tres_type == "GRES/gpu":
+                                        tres_parts.append(f"gres/gpu={value}")
+                                    else:
+                                        tres_parts.append(f"{tres_type.lower()}={value}")
+
+                        job_line_data.append(",".join(tres_parts))
                     elif field == "Elapsed":
                         hours = int(record.node_hours)
                         minutes = int((record.node_hours - hours) * 60)
