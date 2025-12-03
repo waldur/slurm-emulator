@@ -170,7 +170,8 @@ class SacctEmulator:
                         # Format as TRES string - ensure non-empty for site agent parsing
                         tres_parts = []
                         raw_tres = data.get("raw_tres", {})
-                        hours = data.get("total_node_hours", 0)
+                        hours_raw = data.get("total_node_hours", 0)
+                        hours = float(hours_raw) if isinstance(hours_raw, (int, float, str)) else 0
 
                         # Always include node-hours component first for site agent compatibility
                         if hours > 0:
