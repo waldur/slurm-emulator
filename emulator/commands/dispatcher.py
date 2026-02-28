@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 from emulator import __version__
 from emulator.commands.sacct import SacctEmulator
@@ -21,6 +22,29 @@ class SlurmEmulator:
 
         # Load existing state
         self.database.load_state()
+
+    # Flags that are only valid for specific commands
+    _VALID_FLAGS: ClassVar[dict[str, set[str]]] = {
+        "sacctmgr": {"--parsable2", "--noheader", "--immediate"},
+        "sacct": {"--parsable2", "--noheader"},
+        "scancel": set(),
+        "id": set(),
+        "sinfo": {"-V"},
+    }
+
+    # The set of SLURM formatting/control flags that we validate
+    _SLURM_FLAGS = frozenset({"--parsable2", "--noheader", "--immediate"})
+
+    def validate_flags(self, command_name: str, args: list[str]) -> None:
+        """Validate flags for the given command.
+
+        Raises SystemExit for flags not supported by the command, matching
+        real SLURM behavior.
+        """
+        valid = self._VALID_FLAGS.get(command_name, set())
+        invalid = [a for a in args if a in self._SLURM_FLAGS and a not in valid]
+        if invalid:
+            raise SystemExit(f"{command_name}: error: unrecognized arguments: {' '.join(invalid)}")
 
     def execute_command(self, command_name: str, args: list[str]) -> str:
         """Execute a SLURM command and return output."""
@@ -110,16 +134,11 @@ def sacctmgr_main():
     emulator = get_emulator()
     args = sys.argv[1:]
 
-    # Filter out common SLURM flags
-    filtered_args = []
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg in ["--parsable2", "--noheader", "--immediate"]:
-            pass  # Skip these flags
-        else:
-            filtered_args.append(arg)
-        i += 1
+    # Validate flags (all three are valid for sacctmgr)
+    emulator.validate_flags("sacctmgr", args)
+
+    # Filter out formatting/control flags handled by the emulator internally
+    filtered_args = [a for a in args if a not in ("--parsable2", "--noheader", "--immediate")]
 
     try:
         output = emulator.execute_command("sacctmgr", filtered_args)
@@ -134,8 +153,18 @@ def sacct_main():
     emulator = get_emulator()
     args = sys.argv[1:]
 
+    # Validate flags (--immediate is NOT valid for sacct)
     try:
-        output = emulator.execute_command("sacct", args)
+        emulator.validate_flags("sacct", args)
+    except SystemExit as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+    # Filter out formatting flags handled by the emulator internally
+    filtered_args = [a for a in args if a not in ("--parsable2", "--noheader")]
+
+    try:
+        output = emulator.execute_command("sacct", filtered_args)
         print(output)
     except Exception as e:
         print(f"sacct: error: {e}", file=sys.stderr)
@@ -159,6 +188,13 @@ def scancel_main():
     """Entry point for scancel command."""
     emulator = get_emulator()
     args = sys.argv[1:]
+
+    # Validate flags (--immediate, --parsable2, --noheader are NOT valid for scancel)
+    try:
+        emulator.validate_flags("scancel", args)
+    except SystemExit as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
 
     try:
         output = emulator.execute_command("scancel", args)

@@ -196,29 +196,35 @@ class SacctmgrEmulator:
                     account.qos = value
                     modifications.append(f"qos={value}")
                 elif key.startswith("grptresmin"):
-                    # Handle GrpTRESMins=billing=72000 or GrpTRESMins=CPU=1000
+                    # Handle GrpTRESMins=billing=72000 or GrpTRESMins=cpu=600000,ram=614400
                     tres_spec = value
                     if "=" in tres_spec:
-                        tres_type, tres_value = tres_spec.split("=", 1)
-                        account.limits[f"GrpTRESMins:{tres_type}"] = int(tres_value)
+                        for tres_item in tres_spec.split(","):
+                            if "=" in tres_item:
+                                tres_type, tres_value = tres_item.split("=", 1)
+                                account.limits[f"GrpTRESMins:{tres_type}"] = int(tres_value)
                     else:
                         account.limits["GrpTRESMins"] = int(tres_spec)
                     modifications.append(f"GrpTRESMins={value}")
                 elif key.startswith("maxtresmin"):
-                    # Handle MaxTRESMins
+                    # Handle MaxTRESMins=billing=72000 or MaxTRESMins=cpu=600000,ram=614400
                     tres_spec = value
                     if "=" in tres_spec:
-                        tres_type, tres_value = tres_spec.split("=", 1)
-                        account.limits[f"MaxTRESMins:{tres_type}"] = int(tres_value)
+                        for tres_item in tres_spec.split(","):
+                            if "=" in tres_item:
+                                tres_type, tres_value = tres_item.split("=", 1)
+                                account.limits[f"MaxTRESMins:{tres_type}"] = int(tres_value)
                     else:
                         account.limits["MaxTRESMins"] = int(tres_spec)
                     modifications.append(f"MaxTRESMins={value}")
                 elif key.startswith("grptres") and not key.startswith("grptresmin"):
-                    # Handle GrpTRES=CPU=10 or GrpTRES=node=5 (concurrent limits)
+                    # Handle GrpTRES=CPU=10 or GrpTRES=cpu=10,node=5 (concurrent limits)
                     tres_spec = value
                     if "=" in tres_spec:
-                        tres_type, tres_value = tres_spec.split("=", 1)
-                        account.limits[f"GrpTRES:{tres_type}"] = int(tres_value)
+                        for tres_item in tres_spec.split(","):
+                            if "=" in tres_item:
+                                tres_type, tres_value = tres_item.split("=", 1)
+                                account.limits[f"GrpTRES:{tres_type}"] = int(tres_value)
                     else:
                         account.limits["GrpTRES"] = int(tres_spec)
                     modifications.append(f"GrpTRES={value}")
