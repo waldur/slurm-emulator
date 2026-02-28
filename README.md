@@ -459,21 +459,31 @@ slurm-emulator/
 │   ├── core/
 │   │   ├── time_engine.py          # Time manipulation
 │   │   ├── database.py             # In-memory state
+│   │   ├── slurm_config.py         # SLURM config parsing
 │   │   └── usage_simulator.py      # Usage injection
 │   ├── commands/
-│   │   ├── sacctmgr.py            # sacctmgr emulator
-│   │   ├── sacct.py               # sacct emulator
-│   │   └── dispatcher.py          # Command routing
+│   │   ├── sacctmgr.py             # sacctmgr emulator
+│   │   ├── sacct.py                # sacct emulator
+│   │   └── dispatcher.py           # Command routing
 │   ├── periodic_limits/
-│   │   ├── calculator.py          # Decay & carryover
-│   │   └── qos_manager.py         # QoS management
+│   │   ├── calculator.py           # Decay & carryover
+│   │   └── qos_manager.py          # QoS management
 │   ├── scenarios/
-│   │   └── sequence_scenario.py   # Complete scenario
+│   │   ├── sequence_scenario.py    # Complete scenario
+│   │   ├── scenario_registry.py    # Scenario discovery & running
+│   │   └── limits_configuration_scenarios.py
 │   ├── cli/
-│   │   └── main.py                # Interactive CLI
+│   │   ├── main.py                 # Interactive CLI
+│   │   └── cmd_cli.py              # CMD-based CLI
 │   └── api/
-│       └── emulator_server.py     # REST API
-└── tests/                         # Test suites
+│       └── emulator_server.py      # REST API
+├── scripts/
+│   ├── release.py                  # Release management
+│   ├── changelog.sh                # Changelog generation
+│   ├── generate_changelog_data.py  # Commit data collection
+│   └── prompts/
+│       └── changelog-prompt.md     # Changelog prompt template
+└── tests/                          # Test suites
 ```
 
 ## Development
@@ -481,8 +491,20 @@ slurm-emulator/
 ### Running Tests
 
 ```bash
-uv run python -m pytest tests/ -v
+uv run pytest
 ```
+
+### Releasing
+
+```bash
+# Full release: update version, generate changelog, tag, push
+uv run scripts/release.py release X.Y.Z
+
+# Skip changelog generation
+uv run scripts/release.py release X.Y.Z --skip-changelog
+```
+
+Pushing the tag triggers GitHub Actions for testing and PyPI publishing.
 
 ### Adding New Scenarios
 
