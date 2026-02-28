@@ -101,6 +101,7 @@ lint.ignore = [
   'TD003',
   'FIX002',
   'S603',
+  'S607',     # partial executable path (CLI tool uses git, uv, bash)
   'DTZ001',
   'DTZ005',
   "PLR0915",

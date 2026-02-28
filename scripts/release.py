@@ -118,12 +118,30 @@ def build_package() -> None:
     print("Note: Production builds and PyPI publishing are handled by GitHub Actions")
 
 
+def generate_changelog(version: str) -> None:
+    """Generate changelog entry for the release."""
+    script = Path(__file__).parent / "changelog.sh"
+    if not script.exists():
+        print(f"Warning: {script} not found, skipping changelog generation")
+        return
+
+    print(f"Generating changelog entry for {version}...")
+    result = subprocess.run(
+        ["bash", str(script), version],
+        check=False,
+    )
+    if result.returncode != 0:
+        print("Warning: Changelog generation failed or was aborted")
+        if not click.confirm("Continue release without changelog update?"):
+            sys.exit(1)
+
+
 def create_git_tag(version: str) -> None:
     """Create and push git tag (triggers GitHub Actions for PyPI publishing)."""
     tag_name = f"{version}"  # GitHub Actions expects tags like "0.1.1" not "v0.1.1"
 
     # Create tag
-    run_command(["git", "add", "pyproject.toml"])
+    run_command(["git", "add", "pyproject.toml", "CHANGELOG.md"])
     run_command(["git", "commit", "-m", f"Release version {version}"])
     run_command(["git", "tag", "-a", tag_name, "-m", f"Release {version}"])
 
@@ -164,7 +182,10 @@ def status():
 @click.option("--skip-checks", is_flag=True, help="Skip local pre-release checks")
 @click.option("--skip-build", is_flag=True, help="Skip local build test")
 @click.option("--skip-tag", is_flag=True, help="Skip creating git tag (no PyPI release)")
-def release(version: str, skip_checks: bool, skip_build: bool, skip_tag: bool):
+@click.option("--skip-changelog", is_flag=True, help="Skip changelog generation")
+def release(
+    version: str, skip_checks: bool, skip_build: bool, skip_tag: bool, skip_changelog: bool
+):
     """Create a new release - updates version and optionally creates git tag for CI/CD."""
     current_version = get_current_version()
 
@@ -188,6 +209,10 @@ def release(version: str, skip_checks: bool, skip_build: bool, skip_tag: bool):
 
     # Update version
     update_version(version)
+
+    # Generate changelog
+    if not skip_changelog:
+        generate_changelog(version)
 
     # Build package
     if not skip_build:
