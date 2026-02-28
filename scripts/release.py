@@ -179,14 +179,13 @@ def status():
 
 @cli.command()
 @click.argument("version")
-@click.option("--skip-checks", is_flag=True, help="Skip local pre-release checks")
-@click.option("--skip-build", is_flag=True, help="Skip local build test")
-@click.option("--skip-tag", is_flag=True, help="Skip creating git tag (no PyPI release)")
 @click.option("--skip-changelog", is_flag=True, help="Skip changelog generation")
-def release(
-    version: str, skip_checks: bool, skip_build: bool, skip_tag: bool, skip_changelog: bool
-):
-    """Create a new release - updates version and optionally creates git tag for CI/CD."""
+@click.option("--skip-tag", is_flag=True, help="Skip creating git tag (no PyPI release)")
+def release(version: str, skip_changelog: bool, skip_tag: bool):
+    """Create a new release - updates version, generates changelog, and creates git tag.
+
+    Building, testing, and publishing are handled by GitHub Actions.
+    """
     current_version = get_current_version()
 
     if not validate_version(version):
@@ -203,20 +202,12 @@ def release(
     # Check git status
     check_git_status()
 
-    # Run pre-release checks
-    if not skip_checks:
-        run_pre_release_checks()
-
     # Update version
     update_version(version)
 
     # Generate changelog
     if not skip_changelog:
         generate_changelog(version)
-
-    # Build package
-    if not skip_build:
-        build_package()
 
     # Create git tag
     if not skip_tag:

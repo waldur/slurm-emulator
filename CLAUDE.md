@@ -85,6 +85,14 @@ Use these commands:
 - **Run local checks**: `uv run scripts/release.py check` (linting, type checking)
 - **Test local build**: `uv run scripts/release.py build`
 - **Full release workflow**: `uv run scripts/release.py release X.Y.Z`
+- **Skip changelog**: `uv run scripts/release.py release X.Y.Z --skip-changelog`
+
+**Release Flow** (`release X.Y.Z`):
+1. Check git status
+2. Update version in `pyproject.toml`
+3. Generate changelog entry via `scripts/changelog.sh` — skip with `--skip-changelog`
+4. Create git tag, commit (`pyproject.toml` + `CHANGELOG.md`), optionally push — skip with `--skip-tag`
+5. GitHub Actions handles testing, building, and PyPI publishing
 
 **Automated CI/CD (GitHub Actions):**
 - **Testing**: Runs automatically on every push/PR (multiple Python versions)
@@ -97,6 +105,12 @@ The release script handles local version management and creates git tags that tr
 - **Single Source**: Version defined in `pyproject.toml` only
 - **Automatic Propagation**: All code imports version from `emulator.__init__.py`
 - **No Hardcoding**: All version references are automatically updated
+
+**Changelog Generation:**
+- **Changelog file**: `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/) format
+- **Collect commit data**: `python3 scripts/generate_changelog_data.py <new_ref> <old_ref>` — outputs categorized JSON
+- **Generate entry**: `bash scripts/changelog.sh <version>` — uses `claude --print` with prompt from `scripts/prompts/changelog-prompt.md`, interactive accept/edit/regenerate/quit flow
+- **Integrated in release**: Runs automatically between version update and build (skip with `--skip-changelog`)
 
 #### Linting Configuration
 
