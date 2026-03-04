@@ -1,0 +1,98 @@
+include:
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/stages.yml"
+  - project: "waldur/waldur-pipelines"
+    file: "/templates/release/publish-multiarch.yml"
+
+variables:
+  COMPONENT_VERSION: "latest"
+
+.uv-setup:
+  image: registry.hpc.ut.ee/mirror/library/python:3.12-bullseye
+  before_script:
+    - pip install uv
+    - uv sync --extra dev
+
+Run linters:
+  extends: .uv-setup
+  stage: test
+  script:
+    - uv run ruff check emulator/
+    - uv run ruff format emulator/ --check
+    - uv run mypy emulator/ --ignore-missing-imports
+
+.test-base:
+  stage: test
+  script:
+    - pip install uv
+    - uv sync --extra dev
+    - uv run pytest --junitxml=report.xml --cov=emulator/ --cov-report=xml
+  artifacts:
+    reports:
+      junit: report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+
+Run tests v3.9:
+  extends: .test-base
+  image: registry.hpc.ut.ee/mirror/library/python:3.9-bullseye
+
+Run tests v3.10:
+  extends: .test-base
+  image: registry.hpc.ut.ee/mirror/library/python:3.10-bullseye
+
+Run tests v3.11:
+  extends: .test-base
+  image: registry.hpc.ut.ee/mirror/library/python:3.11-bullseye
+
+Run tests v3.12:
+  extends: .test-base
+  image: registry.hpc.ut.ee/mirror/library/python:3.12-bullseye
+
+Run tests v3.13:
+  extends: .test-base
+  image: registry.hpc.ut.ee/mirror/library/python:3.13-bullseye
+
+Publish to PyPI:
+  stage: release
+  image: registry.hpc.ut.ee/mirror/library/python:3.12-bullseye
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
+  script:
+    - pip install uv
+    - |
+      # Update version in pyproject.toml from tag
+      echo "Publishing version: $CI_COMMIT_TAG"
+      sed -i "s/^version = \".*\"$/version = \"$CI_COMMIT_TAG\"/" pyproject.toml
+    - uv build
+    - uv publish --token $PYPI_TOKEN
+
+Publish latest docker image:
+  stage: release
+  interruptible: true
+  image:
+    name: quay.io/containers/buildah:latest
+    entrypoint: [""]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  variables:
+    BUILDAH_FORMAT: docker
+    BUILDAH_ISOLATION: chroot
+    DOCKER_HUB_REGISTRY: "docker.io"
+    IMAGE_TAG: "opennode/slurm-emulator:latest"
+  before_script:
+    - echo "[+] Build and publish latest docker image for ${CI_DEFAULT_BRANCH} branch"
+    - echo "${WALDUR_DOCKER_HUB_PASSWORD}" | buildah login -u "${WALDUR_DOCKER_HUB_USER}" --password-stdin "${DOCKER_HUB_REGISTRY}"
+  script:
+    - echo "[+] Building image ${IMAGE_TAG}"
+    - |
+      buildah bud \
+        --build-arg COMMIT_INFO="${CI_COMMIT_SHA}" \
+        --build-arg VERSION="latest" \
+        -t "${IMAGE_TAG}" \
+        -f "${CI_PROJECT_DIR}/Dockerfile" \
+        "${CI_PROJECT_DIR}"
+    - buildah push "${IMAGE_TAG}" "docker://${IMAGE_TAG}"
