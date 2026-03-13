@@ -34,6 +34,7 @@ class SacctEmulator:
         config: dict[str, Union[bool, str, list[Any], Optional[datetime]]] = {
             "accounts": [],
             "users": [],
+            "clusters": [],
             "start_time": None,
             "end_time": None,
             "format": "Account,ReqTRES,Elapsed,User",
@@ -68,6 +69,9 @@ class SacctEmulator:
             elif arg.startswith("--users="):
                 users_str = arg.split("=", 1)[1]
                 config["users"] = [u.strip() for u in users_str.split(",")]
+            elif arg.startswith("--clusters="):
+                clusters_str = arg.split("=", 1)[1]
+                config["clusters"] = [c.strip() for c in clusters_str.split(",")]
             elif arg.startswith("--format="):
                 config["format"] = arg.split("=", 1)[1]
             elif arg == "-a":
@@ -103,6 +107,13 @@ class SacctEmulator:
     def _get_filtered_records(self, config: dict[str, Any]) -> list[UsageRecord]:
         """Get usage records based on filters."""
         records = self.database.usage_records.copy()
+
+        # Filter by clusters (use current_cluster if not specified)
+        clusters = config.get("clusters", [])
+        if clusters:
+            records = [r for r in records if r.cluster in clusters]
+        else:
+            records = [r for r in records if r.cluster == self.database.current_cluster]
 
         # Filter by accounts
         if config["accounts"]:

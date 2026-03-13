@@ -36,11 +36,11 @@ def test_periodic_limits_modules_import():
 
 def test_command_modules_import():
     """Test that command modules import without errors."""
+    from emulator.commands.dispatcher import SlurmEmulator
+    from emulator.commands.sacct import SacctEmulator
+    from emulator.commands.sacctmgr import SacctmgrEmulator
     from emulator.core.database import SlurmDatabase
     from emulator.core.time_engine import TimeEngine
-    from emulator.commands.sacctmgr import SacctmgrEmulator
-    from emulator.commands.sacct import SacctEmulator
-    from emulator.commands.dispatcher import SlurmEmulator
 
     time_engine = TimeEngine()
     database = SlurmDatabase()
@@ -58,8 +58,8 @@ def test_scenario_modules_import():
     """Test that scenario modules import without errors."""
     from emulator.core.database import SlurmDatabase
     from emulator.core.time_engine import TimeEngine
-    from emulator.scenarios.sequence_scenario import SequenceScenario
     from emulator.scenarios.scenario_registry import ScenarioRegistry
+    from emulator.scenarios.sequence_scenario import SequenceScenario
 
     time_engine = TimeEngine()
     database = SlurmDatabase()
@@ -73,8 +73,8 @@ def test_scenario_modules_import():
 
 def test_cli_modules_import():
     """Test that CLI modules import without errors."""
-    from emulator.cli.main import EmulatorCLI
     from emulator.cli.cmd_cli import SlurmEmulatorCmd
+    from emulator.cli.main import EmulatorCLI
 
     cli = EmulatorCLI()
     cmd_cli = SlurmEmulatorCmd()

@@ -1,7 +1,7 @@
 """sacctmgr command emulator."""
 
 from emulator import __version__
-from emulator.core.database import SlurmDatabase
+from emulator.core.database import Association, ClusterClassification, SlurmDatabase
 from emulator.core.time_engine import TimeEngine
 
 
@@ -44,6 +44,8 @@ class SacctmgrEmulator:
             return self._add_account(args[1:])
         if entity == "user":
             return self._add_user(args[1:])
+        if entity == "cluster":
+            return self._add_cluster(args[1:])
         return f"sacctmgr: error: Unknown entity for add: {entity}"
 
     def _handle_modify(self, args: list[str]) -> str:
@@ -70,6 +72,8 @@ class SacctmgrEmulator:
             return self._remove_account(args[1:])
         if entity == "user":
             return self._remove_user(args[1:])
+        if entity == "cluster":
+            return self._remove_cluster(args[1:])
         return f"sacctmgr: error: Unknown entity for remove: {entity}"
 
     def _handle_list(self, args: list[str]) -> str:
@@ -87,6 +91,8 @@ class SacctmgrEmulator:
             return self._list_associations(args[1:])
         if entity == "tres":
             return self._list_tres()
+        if entity in {"cluster", "clusters"}:
+            return self._list_clusters(args[1:])
         return f"sacctmgr: error: Unknown entity for list: {entity}"
 
     def _handle_show(self, args: list[str]) -> str:
@@ -113,6 +119,7 @@ class SacctmgrEmulator:
         description = ""
         organization = "emulator"
         parent = None
+        target_cluster = None
 
         for arg in args[1:]:
             if arg.startswith("description="):
@@ -121,13 +128,36 @@ class SacctmgrEmulator:
                 organization = arg.split("=", 1)[1].strip('"')
             elif arg.startswith("parent="):
                 parent = arg.split("=", 1)[1]
+            elif arg.startswith("cluster="):
+                target_cluster = arg.split("=", 1)[1]
 
         # Check if account already exists
         if self.database.get_account(account_name):
+            # Account exists globally — but if cluster= specified, just create association
+            if target_cluster:
+                if not self.database.get_cluster(target_cluster):
+                    return f"sacctmgr: error: Cluster {target_cluster} does not exist"
+                assoc_key = self.database._association_key("", account_name, target_cluster)
+                if assoc_key not in self.database.associations:
+                    self.database.associations[assoc_key] = Association(
+                        account=account_name, user="", cluster=target_cluster
+                    )
+                self.database.save_state()
+                return f" Adding Account(s)\n  {account_name}\n Settings\n  Cluster    = {target_cluster}"
             return f"sacctmgr: error: Account {account_name} already exists"
 
-        # Add account
+        # Add global account
         self.database.add_account(account_name, description, organization, parent)
+
+        # If cluster= specified, create association on that cluster
+        if target_cluster:
+            if not self.database.get_cluster(target_cluster):
+                return f"sacctmgr: error: Cluster {target_cluster} does not exist"
+            assoc_key = self.database._association_key("", account_name, target_cluster)
+            self.database.associations[assoc_key] = Association(
+                account=account_name, user="", cluster=target_cluster
+            )
+
         self.database.save_state()
 
         return f" Adding Account(s)\n  {account_name}\n Settings\n  Parent     = {parent or 'root'}\n  Description = {description}"
@@ -140,6 +170,7 @@ class SacctmgrEmulator:
         username = args[0]
         account = ""
         default_account = ""
+        target_cluster = None
 
         # Parse parameters
         for arg in args[1:]:
@@ -147,6 +178,8 @@ class SacctmgrEmulator:
                 account = arg.split("=", 1)[1]
             elif arg.startswith("DefaultAccount="):
                 default_account = arg.split("=", 1)[1]
+            elif arg.startswith("cluster="):
+                target_cluster = arg.split("=", 1)[1]
 
         # Add user if doesn't exist
         if not self.database.get_user(username):
@@ -156,7 +189,7 @@ class SacctmgrEmulator:
         if account:
             if not self.database.get_account(account):
                 return f"sacctmgr: error: Account {account} does not exist"
-            self.database.add_association(username, account)
+            self.database.add_association(username, account, cluster=target_cluster)
 
         self.database.save_state()
         return f" Adding User(s)\n  {username}\n Settings\n  Account     = {account}\n  DefaultAccount = {default_account}"
@@ -322,6 +355,88 @@ class SacctmgrEmulator:
 
         self.database.save_state()
         return result
+
+    def _add_cluster(self, args: list[str]) -> str:
+        """Add cluster command."""
+        if not args:
+            return "sacctmgr: error: No cluster name specified"
+
+        cluster_name = args[0]
+
+        # Parse optional parameters
+        control_host = "localhost"
+        control_port = 6817
+        classification = ""
+
+        for arg in args[1:]:
+            if arg.startswith("control_host="):
+                control_host = arg.split("=", 1)[1]
+            elif arg.startswith("control_port="):
+                control_port = int(arg.split("=", 1)[1])
+            elif arg.startswith("classification="):
+                classification = arg.split("=", 1)[1]
+
+        # Validate classification value
+        valid_values = [e.value for e in ClusterClassification]
+        if classification and classification not in valid_values:
+            return (
+                f"sacctmgr: error: Invalid classification '{classification}'. "
+                f"Valid values: {', '.join(v for v in valid_values if v)}"
+            )
+
+        if self.database.get_cluster(cluster_name):
+            return f"sacctmgr: error: Cluster {cluster_name} already exists"
+
+        self.database.add_cluster(cluster_name, control_host, control_port, classification)
+        self.database.save_state()
+
+        return f" Adding Cluster(s)\n  Name          = {cluster_name}\n  Control Host  = {control_host}\n  Control Port  = {control_port}"
+
+    def _remove_cluster(self, args: list[str]) -> str:
+        """Remove cluster command."""
+        if "where" not in args:
+            return "sacctmgr: error: No where clause found"
+
+        where_index = args.index("where")
+        cluster_name = ""
+        for arg in args[where_index + 1 :]:
+            if arg.startswith("name="):
+                cluster_name = arg.split("=", 1)[1]
+
+        if not cluster_name:
+            return "sacctmgr: error: No cluster name specified in where clause"
+
+        if cluster_name == "default":
+            return "sacctmgr: error: Cannot delete the default cluster"
+
+        if not self.database.get_cluster(cluster_name):
+            return f"sacctmgr: error: Cluster {cluster_name} does not exist"
+
+        try:
+            self.database.delete_cluster(cluster_name)
+        except ValueError as e:
+            return f"sacctmgr: error: {e}"
+
+        self.database.save_state()
+
+        return f" Deleting cluster(s)...\n  {cluster_name}"
+
+    def _list_clusters(self, args: list[str]) -> str:
+        """List clusters command."""
+        clusters = self.database.list_clusters()
+
+        if not clusters:
+            return "Cluster|ControlHost|ControlPort|RPC|Classification|"
+
+        lines = ["Cluster|ControlHost|ControlPort|RPC|Classification|"]
+        for cluster in clusters:
+            cls_val = cluster.classification.value if cluster.classification else ""
+            lines.append(
+                f"{cluster.name}|{cluster.control_host}|{cluster.control_port}|"
+                f"{cluster.rpc_version}|{cls_val}|"
+            )
+
+        return "\n".join(lines)
 
     def _list_accounts(self, args: list[str]) -> str:
         """List accounts command."""
