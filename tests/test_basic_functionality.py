@@ -1,12 +1,12 @@
 """Basic functionality tests that should pass."""
 
-import pytest
 from datetime import datetime
-from emulator.core.database import SlurmDatabase, Account, User, UsageRecord
+
+from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
 from emulator.core.usage_simulator import UsageSimulator
-from emulator.scenarios.sequence_scenario import SequenceScenario
 from emulator.scenarios.scenario_registry import ScenarioRegistry
+from emulator.scenarios.sequence_scenario import SequenceScenario
 
 
 class TestBasicDatabase:
@@ -196,9 +196,9 @@ class TestBasicCommands:
 
     def test_command_imports(self):
         """Test command modules can be imported."""
-        from emulator.commands.sacctmgr import SacctmgrEmulator
-        from emulator.commands.sacct import SacctEmulator
         from emulator.commands.dispatcher import SlurmEmulator
+        from emulator.commands.sacct import SacctEmulator
+        from emulator.commands.sacctmgr import SacctmgrEmulator
 
         sacctmgr = SacctmgrEmulator(self.database, self.time_engine)
         sacct = SacctEmulator(self.database, self.time_engine)
@@ -210,8 +210,8 @@ class TestBasicCommands:
 
     def test_basic_command_handling(self):
         """Test basic command handling doesn't crash."""
-        from emulator.commands.sacctmgr import SacctmgrEmulator
         from emulator.commands.sacct import SacctEmulator
+        from emulator.commands.sacctmgr import SacctmgrEmulator
 
         sacctmgr = SacctmgrEmulator(self.database, self.time_engine)
         sacct = SacctEmulator(self.database, self.time_engine)
@@ -229,8 +229,8 @@ class TestBasicCLI:
 
     def test_cli_imports(self):
         """Test CLI modules can be imported."""
-        from emulator.cli.main import EmulatorCLI
         from emulator.cli.cmd_cli import SlurmEmulatorCmd
+        from emulator.cli.main import EmulatorCLI
 
         # Test basic instantiation doesn't crash
         cli = EmulatorCLI()

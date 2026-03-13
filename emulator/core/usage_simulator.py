@@ -20,11 +20,18 @@ class UsageSimulator:
         }
 
     def inject_usage(
-        self, account: str, user: str, node_hours: float, at_time: Optional[datetime] = None
+        self,
+        account: str,
+        user: str,
+        node_hours: float,
+        at_time: Optional[datetime] = None,
+        cluster: Optional[str] = None,
     ) -> None:
         """Inject specific usage amount at given time."""
         if at_time is None:
             at_time = self.time_engine.get_current_time()
+
+        cl = cluster or self.database.current_cluster
 
         # Ensure user and account exist
         if not self.database.get_user(user):
@@ -34,8 +41,8 @@ class UsageSimulator:
             self.database.add_account(account, f"Account {account}", "emulator")
 
         # Ensure association exists
-        if not self.database.get_association(user, account):
-            self.database.add_association(user, account)
+        if not self.database.get_association(user, account, cluster=cl):
+            self.database.add_association(user, account, cluster=cl)
 
         # Create usage record
         usage_record = UsageRecord(
@@ -46,6 +53,7 @@ class UsageSimulator:
             timestamp=at_time,
             period=self.time_engine.get_current_quarter(),
             raw_tres=self._convert_to_raw_tres(node_hours),
+            cluster=cl,
         )
 
         self.database.add_usage_record(usage_record)

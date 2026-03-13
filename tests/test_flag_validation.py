@@ -1,6 +1,7 @@
 """Tests for per-command SLURM flag validation."""
 
 import pytest
+
 from emulator.commands.dispatcher import SlurmEmulator
 
 

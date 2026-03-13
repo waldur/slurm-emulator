@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Optional
 
 from emulator import __version__
 from emulator.commands.sacct import SacctEmulator
@@ -46,19 +46,58 @@ class SlurmEmulator:
         if invalid:
             raise SystemExit(f"{command_name}: error: unrecognized arguments: {' '.join(invalid)}")
 
+    def extract_cluster_flag(self, args: list[str]) -> tuple[list[str], Optional[str]]:
+        """Extract -M <cluster> or --clusters=<cluster> from args.
+
+        Returns (filtered_args, cluster_name_or_None).
+        """
+        filtered: list[str] = []
+        cluster: Optional[str] = None
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg == "-M" and i + 1 < len(args):
+                cluster = args[i + 1]
+                i += 2
+                continue
+            if arg.startswith("-M") and len(arg) > 2:
+                cluster = arg[2:]
+                i += 1
+                continue
+            if arg.startswith("--clusters="):
+                cluster = arg.split("=", 1)[1]
+                i += 1
+                continue
+            filtered.append(arg)
+            i += 1
+        return filtered, cluster
+
     def execute_command(self, command_name: str, args: list[str]) -> str:
         """Execute a SLURM command and return output."""
-        if command_name == "sacctmgr":
-            return self.sacctmgr.handle_command(args)
-        if command_name == "sacct":
-            return self.sacct.handle_command(args)
-        if command_name == "sinfo":
-            return self._handle_sinfo(args)
-        if command_name == "scancel":
-            return self._handle_scancel(args)
-        if command_name == "id":
-            return self._handle_id(args)
-        return f"slurm-emulator: Unknown command: {command_name}"
+        # Only sacct supports -M flag; sacctmgr uses cluster= in args
+        cluster = None
+        if command_name in ("sacct",):
+            args, cluster = self.extract_cluster_flag(args)
+        saved_cluster = self.database.current_cluster
+        if cluster:
+            if not self.database.get_cluster(cluster):
+                return f"slurm-emulator: error: Cluster '{cluster}' does not exist"
+            self.database.current_cluster = cluster
+
+        try:
+            if command_name == "sacctmgr":
+                return self.sacctmgr.handle_command(args)
+            if command_name == "sacct":
+                return self.sacct.handle_command(args)
+            if command_name == "sinfo":
+                return self._handle_sinfo(args)
+            if command_name == "scancel":
+                return self._handle_scancel(args)
+            if command_name == "id":
+                return self._handle_id(args)
+            return f"slurm-emulator: Unknown command: {command_name}"
+        finally:
+            self.database.current_cluster = saved_cluster
 
     def _handle_sinfo(self, args: list[str]) -> str:
         """Handle sinfo command."""
@@ -138,6 +177,7 @@ def sacctmgr_main():
     emulator.validate_flags("sacctmgr", args)
 
     # Filter out formatting/control flags handled by the emulator internally
+    # Keep -M and --clusters= for cluster handling in execute_command
     filtered_args = [a for a in args if a not in ("--parsable2", "--noheader", "--immediate")]
 
     try:
