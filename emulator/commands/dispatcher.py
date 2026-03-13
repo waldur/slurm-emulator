@@ -74,8 +74,10 @@ class SlurmEmulator:
 
     def execute_command(self, command_name: str, args: list[str]) -> str:
         """Execute a SLURM command and return output."""
-        # Extract cluster flag and set context
-        args, cluster = self.extract_cluster_flag(args)
+        # Only sacct supports -M flag; sacctmgr uses cluster= in args
+        cluster = None
+        if command_name in ("sacct",):
+            args, cluster = self.extract_cluster_flag(args)
         saved_cluster = self.database.current_cluster
         if cluster:
             if not self.database.get_cluster(cluster):

@@ -93,12 +93,10 @@ class EmulatorServer:
                 cluster = request.cluster
 
                 # Ensure account exists
-                if not self.database.get_account(resource_id, cluster=cluster):
-                    self.database.add_account(
-                        resource_id, f"Account {resource_id}", "emulator", cluster=cluster
-                    )
+                if not self.database.get_account(resource_id):
+                    self.database.add_account(resource_id, f"Account {resource_id}", "emulator")
 
-                account_obj = self.database.get_account(resource_id, cluster=cluster)
+                account_obj = self.database.get_account(resource_id)
 
                 # Apply fairshare
                 if request.fairshare is not None:
@@ -121,7 +119,7 @@ class EmulatorServer:
 
                 # Reset raw usage if requested
                 if request.reset_raw_usage:
-                    self.database.reset_raw_usage(resource_id, cluster=cluster)
+                    self.database.reset_raw_usage(resource_id)
 
                 # Update billing weights if provided
                 if request.billing_weights:
@@ -288,7 +286,7 @@ class EmulatorServer:
         async def get_status(cluster: Optional[str] = None):
             """Get emulator status."""
             cl = cluster or self.database.current_cluster
-            accounts = self.database.list_accounts(cluster=cl)
+            accounts = self.database.list_accounts()
             account_status = {}
 
             for account in accounts:
@@ -325,7 +323,9 @@ class EmulatorServer:
                         "name": c.name,
                         "control_host": c.control_host,
                         "control_port": c.control_port,
-                        "classification": c.classification,
+                        "classification": c.classification.value,
+                        "rpc_version": c.rpc_version,
+                        "id": c.id,
                     }
                     for c in clusters
                 ]

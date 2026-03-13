@@ -27,7 +27,7 @@ class QoSManager:
 
     def get_account_qos(self, account: str, cluster: Optional[str] = None) -> str:
         """Get current QoS for account."""
-        account_obj = self.database.get_account(account, cluster=cluster)
+        account_obj = self.database.get_account(account)
         return account_obj.qos if account_obj else "normal"
 
     def set_account_qos(self, account: str, qos: str, cluster: Optional[str] = None) -> bool:
@@ -35,7 +35,7 @@ class QoSManager:
         if qos not in self.qos_levels:
             return False
 
-        account_obj = self.database.get_account(account, cluster=cluster)
+        account_obj = self.database.get_account(account)
         if account_obj:
             old_qos = account_obj.qos
             account_obj.qos = qos

@@ -1515,21 +1515,21 @@ Type 'help <command>' for detailed help on specific commands.
         return scenario_accounts.get(scenario_name, [])
 
     def _clean_account_completely(self, account_name: str) -> None:
-        """Completely clean an account and all its data in current cluster."""
+        """Completely clean an account and all its cluster-scoped data."""
         cl = self.database.current_cluster
 
-        # Remove account
+        # Remove global account
         if self.database.get_account(account_name):
             self.database.delete_account(account_name)
 
-        # Remove usage records for this account in this cluster
+        # Remove usage records for this account in current cluster
         self.database.usage_records = [
             record
             for record in self.database.usage_records
             if not (record.account == account_name and record.cluster == cl)
         ]
 
-        # Remove associations for this account in this cluster
+        # Remove associations for this account in current cluster
         keys_to_remove = [
             key
             for key, assoc in self.database.associations.items()
@@ -1538,7 +1538,7 @@ Type 'help <command>' for detailed help on specific commands.
         for key in keys_to_remove:
             del self.database.associations[key]
 
-        # Remove jobs for this account in this cluster
+        # Remove jobs for this account in current cluster
         job_ids_to_remove = [
             job_id
             for job_id, job in self.database.jobs.items()
@@ -1549,30 +1549,26 @@ Type 'help <command>' for detailed help on specific commands.
 
     def _clean_orphaned_data(self) -> None:
         """Clean up any orphaned data from deleted accounts."""
-        # Build set of (account_name, cluster) pairs that exist
-        existing = {(acc.name, acc.cluster) for acc in self.database.accounts.values()}
+        # Build set of account names that exist (accounts are global)
+        existing = {acc.name for acc in self.database.accounts.values()}
 
         # Clean usage records for non-existent accounts
         self.database.usage_records = [
-            record
-            for record in self.database.usage_records
-            if (record.account, record.cluster) in existing
+            record for record in self.database.usage_records if record.account in existing
         ]
 
         # Clean associations for non-existent accounts
         keys_to_remove = [
             key
             for key, assoc in self.database.associations.items()
-            if (assoc.account, assoc.cluster) not in existing
+            if assoc.account not in existing
         ]
         for key in keys_to_remove:
             del self.database.associations[key]
 
         # Clean jobs for non-existent accounts
         job_ids_to_remove = [
-            job_id
-            for job_id, job in self.database.jobs.items()
-            if (job.account, job.cluster) not in existing
+            job_id for job_id, job in self.database.jobs.items() if job.account not in existing
         ]
         for job_id in job_ids_to_remove:
             del self.database.jobs[job_id]

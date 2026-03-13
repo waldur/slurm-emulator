@@ -1,7 +1,7 @@
 """sacctmgr command emulator."""
 
 from emulator import __version__
-from emulator.core.database import SlurmDatabase
+from emulator.core.database import Association, ClusterClassification, SlurmDatabase
 from emulator.core.time_engine import TimeEngine
 
 
@@ -119,6 +119,7 @@ class SacctmgrEmulator:
         description = ""
         organization = "emulator"
         parent = None
+        target_cluster = None
 
         for arg in args[1:]:
             if arg.startswith("description="):
@@ -127,13 +128,36 @@ class SacctmgrEmulator:
                 organization = arg.split("=", 1)[1].strip('"')
             elif arg.startswith("parent="):
                 parent = arg.split("=", 1)[1]
+            elif arg.startswith("cluster="):
+                target_cluster = arg.split("=", 1)[1]
 
         # Check if account already exists
         if self.database.get_account(account_name):
+            # Account exists globally — but if cluster= specified, just create association
+            if target_cluster:
+                if not self.database.get_cluster(target_cluster):
+                    return f"sacctmgr: error: Cluster {target_cluster} does not exist"
+                assoc_key = self.database._association_key("", account_name, target_cluster)
+                if assoc_key not in self.database.associations:
+                    self.database.associations[assoc_key] = Association(
+                        account=account_name, user="", cluster=target_cluster
+                    )
+                self.database.save_state()
+                return f" Adding Account(s)\n  {account_name}\n Settings\n  Cluster    = {target_cluster}"
             return f"sacctmgr: error: Account {account_name} already exists"
 
-        # Add account
+        # Add global account
         self.database.add_account(account_name, description, organization, parent)
+
+        # If cluster= specified, create association on that cluster
+        if target_cluster:
+            if not self.database.get_cluster(target_cluster):
+                return f"sacctmgr: error: Cluster {target_cluster} does not exist"
+            assoc_key = self.database._association_key("", account_name, target_cluster)
+            self.database.associations[assoc_key] = Association(
+                account=account_name, user="", cluster=target_cluster
+            )
+
         self.database.save_state()
 
         return f" Adding Account(s)\n  {account_name}\n Settings\n  Parent     = {parent or 'root'}\n  Description = {description}"
@@ -146,6 +170,7 @@ class SacctmgrEmulator:
         username = args[0]
         account = ""
         default_account = ""
+        target_cluster = None
 
         # Parse parameters
         for arg in args[1:]:
@@ -153,6 +178,8 @@ class SacctmgrEmulator:
                 account = arg.split("=", 1)[1]
             elif arg.startswith("DefaultAccount="):
                 default_account = arg.split("=", 1)[1]
+            elif arg.startswith("cluster="):
+                target_cluster = arg.split("=", 1)[1]
 
         # Add user if doesn't exist
         if not self.database.get_user(username):
@@ -162,7 +189,7 @@ class SacctmgrEmulator:
         if account:
             if not self.database.get_account(account):
                 return f"sacctmgr: error: Account {account} does not exist"
-            self.database.add_association(username, account)
+            self.database.add_association(username, account, cluster=target_cluster)
 
         self.database.save_state()
         return f" Adding User(s)\n  {username}\n Settings\n  Account     = {account}\n  DefaultAccount = {default_account}"
@@ -349,6 +376,14 @@ class SacctmgrEmulator:
             elif arg.startswith("classification="):
                 classification = arg.split("=", 1)[1]
 
+        # Validate classification value
+        valid_values = [e.value for e in ClusterClassification]
+        if classification and classification not in valid_values:
+            return (
+                f"sacctmgr: error: Invalid classification '{classification}'. "
+                f"Valid values: {', '.join(v for v in valid_values if v)}"
+            )
+
         if self.database.get_cluster(cluster_name):
             return f"sacctmgr: error: Cluster {cluster_name} already exists"
 
@@ -377,7 +412,11 @@ class SacctmgrEmulator:
         if not self.database.get_cluster(cluster_name):
             return f"sacctmgr: error: Cluster {cluster_name} does not exist"
 
-        self.database.delete_cluster(cluster_name)
+        try:
+            self.database.delete_cluster(cluster_name)
+        except ValueError as e:
+            return f"sacctmgr: error: {e}"
+
         self.database.save_state()
 
         return f" Deleting cluster(s)...\n  {cluster_name}"
@@ -387,11 +426,15 @@ class SacctmgrEmulator:
         clusters = self.database.list_clusters()
 
         if not clusters:
-            return "Cluster|ControlHost|ControlPort|"
+            return "Cluster|ControlHost|ControlPort|RPC|Classification|"
 
-        lines = ["Cluster|ControlHost|ControlPort|"]
+        lines = ["Cluster|ControlHost|ControlPort|RPC|Classification|"]
         for cluster in clusters:
-            lines.append(f"{cluster.name}|{cluster.control_host}|{cluster.control_port}|")
+            cls_val = cluster.classification.value if cluster.classification else ""
+            lines.append(
+                f"{cluster.name}|{cluster.control_host}|{cluster.control_port}|"
+                f"{cluster.rpc_version}|{cls_val}|"
+            )
 
         return "\n".join(lines)
 
@@ -400,13 +443,11 @@ class SacctmgrEmulator:
         accounts = self.database.list_accounts()
 
         if not accounts:
-            return "Account|Descr|Org|Cluster|"
+            return "Account|Descr|Org|"
 
-        lines = ["Account|Descr|Org|Cluster|"]
+        lines = ["Account|Descr|Org|"]
         for account in accounts:
-            lines.append(
-                f"{account.name}|{account.description}|{account.organization}|{account.cluster}|"
-            )
+            lines.append(f"{account.name}|{account.description}|{account.organization}|")
 
         return "\n".join(lines)
 

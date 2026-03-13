@@ -116,7 +116,7 @@ class PeriodicLimitsCalculator:
                 "limit_type": "GrpTRESMins",
             }
 
-        account_obj = self.database.get_account(account, cluster=cluster)
+        account_obj = self.database.get_account(account)
         if not account_obj:
             raise ValueError(f"Account {account} not found")
 
@@ -226,7 +226,7 @@ class PeriodicLimitsCalculator:
         """Apply period transition for account."""
         settings = self.calculate_periodic_settings(account, config, cluster=cluster)
 
-        account_obj = self.database.get_account(account, cluster=cluster)
+        account_obj = self.database.get_account(account)
         if account_obj:
             # Update account with new period
             account_obj.last_period = settings["period"]

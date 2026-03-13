@@ -1,8 +1,14 @@
 """Tests for multi-cluster support."""
 
+import pytest
+
 from emulator.commands.dispatcher import SlurmEmulator
 from emulator.commands.sacctmgr import SacctmgrEmulator
-from emulator.core.database import SlurmDatabase
+from emulator.core.database import (
+    ClusterClassification,
+    Job,
+    SlurmDatabase,
+)
 from emulator.core.time_engine import TimeEngine
 from emulator.core.usage_simulator import UsageSimulator
 
@@ -63,66 +69,95 @@ class TestClusterCRUD:
         db.delete_cluster("temp")
         assert db.current_cluster == "default"
 
+    def test_cluster_id_auto_increment(self):
+        db = SlurmDatabase()
+        # default cluster gets id=1
+        assert db.get_cluster("default").id == 1
+        db.add_cluster("a")
+        db.add_cluster("b")
+        assert db.get_cluster("a").id == 2
+        assert db.get_cluster("b").id == 3
 
-class TestPerClusterAccountIsolation:
-    """Test that accounts are isolated per cluster."""
+    def test_cluster_soft_delete_filtered_from_list(self):
+        db = SlurmDatabase()
+        db.add_cluster("soft")
+        db.delete_cluster("soft")
+        # get_cluster returns None for soft-deleted
+        assert db.get_cluster("soft") is None
+        # list_clusters excludes soft-deleted
+        names = [c.name for c in db.list_clusters()]
+        assert "soft" not in names
+        # But it still exists in the dict internally
+        assert "soft" in db.clusters
 
-    def test_same_account_name_different_clusters(self):
+    def test_cluster_delete_blocked_by_running_jobs(self):
+        db = SlurmDatabase()
+        db.add_cluster("busy")
+        db.add_job(Job(job_id="j1", account="acc", user="u1", state="RUNNING", cluster="busy"))
+
+        with pytest.raises(ValueError, match="running/pending"):
+            db.delete_cluster("busy")
+
+        # Cluster still accessible
+        assert db.get_cluster("busy") is not None
+
+    def test_cluster_delete_ok_with_completed_jobs(self):
+        db = SlurmDatabase()
+        db.add_cluster("done")
+        db.add_job(Job(job_id="j1", account="acc", user="u1", state="COMPLETED", cluster="done"))
+        # Should not raise
+        db.delete_cluster("done")
+        assert db.get_cluster("done") is None
+
+
+class TestGlobalAccounts:
+    """Test that accounts are global entities, not per-cluster."""
+
+    def test_account_is_global(self):
         db = SlurmDatabase()
         db.add_cluster("cluster-a")
-        db.add_cluster("cluster-b")
 
-        db.add_account("shared-name", "Desc A", "org-a", cluster="cluster-a")
-        db.add_account("shared-name", "Desc B", "org-b", cluster="cluster-b")
+        db.add_account("myacc", "Desc", "org")
+        # Accessible regardless of cluster context
+        assert db.get_account("myacc") is not None
+        db.set_current_cluster("cluster-a")
+        assert db.get_account("myacc") is not None
 
-        acc_a = db.get_account("shared-name", cluster="cluster-a")
-        acc_b = db.get_account("shared-name", cluster="cluster-b")
+    def test_same_account_name_cannot_be_added_twice(self):
+        db = SlurmDatabase()
+        db.add_account("dup", "First", "org")
+        db.add_account("dup", "Second", "org")
+        # Second add overwrites
+        assert db.get_account("dup").description == "Second"
 
-        assert acc_a is not None
-        assert acc_b is not None
-        assert acc_a.description == "Desc A"
-        assert acc_b.description == "Desc B"
-        assert acc_a.cluster == "cluster-a"
-        assert acc_b.cluster == "cluster-b"
-
-    def test_list_accounts_filtered_by_cluster(self):
+    def test_list_accounts_returns_all(self):
         db = SlurmDatabase()
         db.add_cluster("cluster-a")
+        db.add_account("acc1", "Acc1", "org")
+        db.set_current_cluster("cluster-a")
+        db.add_account("acc2", "Acc2", "org")
 
-        db.add_account("acc1", "Acc1", "org", cluster="default")
-        db.add_account("acc2", "Acc2", "org", cluster="cluster-a")
+        all_accounts = db.list_accounts()
+        names = [a.name for a in all_accounts]
+        # Both visible regardless of current cluster
+        assert "acc1" in names
+        assert "acc2" in names
 
-        default_accounts = db.list_accounts(cluster="default")
-        cluster_a_accounts = db.list_accounts(cluster="cluster-a")
-
-        default_names = [a.name for a in default_accounts]
-        cluster_a_names = [a.name for a in cluster_a_accounts]
-
-        assert "acc1" in default_names
-        assert "acc2" not in default_names
-        assert "acc2" in cluster_a_names
-        assert "acc1" not in cluster_a_names
-
-    def test_delete_account_cluster_scoped(self):
+    def test_delete_cluster_does_not_delete_accounts(self):
         db = SlurmDatabase()
-        db.add_cluster("cluster-a")
+        db.add_cluster("temp")
+        db.add_account("survivor", "Desc", "org")
+        db.delete_cluster("temp")
+        assert db.get_account("survivor") is not None
 
-        db.add_account("myacc", "Desc", "org", cluster="default")
-        db.add_account("myacc", "Desc", "org", cluster="cluster-a")
-
-        db.delete_account("myacc", cluster="default")
-
-        assert db.get_account("myacc", cluster="default") is None
-        assert db.get_account("myacc", cluster="cluster-a") is not None
-
-    def test_current_cluster_default_used(self):
+    def test_account_creation_ignores_cluster_context(self):
         db = SlurmDatabase()
         db.add_cluster("other")
         db.set_current_cluster("other")
-
-        db.add_account("test", "Test", "org")  # No explicit cluster -> uses current
-        assert db.get_account("test", cluster="other") is not None
-        assert db.get_account("test", cluster="default") is None
+        db.add_account("test", "Test", "org")
+        # Account is global, not scoped to "other"
+        db.set_current_cluster("default")
+        assert db.get_account("test") is not None
 
 
 class TestPerClusterUsageIsolation:
@@ -135,11 +170,10 @@ class TestPerClusterUsageIsolation:
 
         sim_default = UsageSimulator(te, db)
         db.set_current_cluster("default")
-        db.add_account("acc", "Acc", "org", cluster="default")
+        db.add_account("acc", "Acc", "org")
         sim_default.inject_usage("acc", "user1", 100.0, cluster="default")
 
         db.set_current_cluster("cluster-a")
-        db.add_account("acc", "Acc", "org", cluster="cluster-a")
         sim_default.inject_usage("acc", "user1", 200.0, cluster="cluster-a")
 
         default_usage = db.get_total_usage("acc", cluster="default")
@@ -164,8 +198,6 @@ class TestPerClusterUsageIsolation:
         assert db.get_association("user1", "root", cluster="cluster-a") is not None
 
     def test_jobs_filtered_by_cluster(self):
-        from emulator.core.database import Job
-
         db = SlurmDatabase()
         db.add_cluster("cluster-a")
 
@@ -210,17 +242,27 @@ class TestClusterFlagParsing:
         assert cluster is None
         assert args == ["list", "accounts"]
 
-    def test_execute_command_with_cluster(self):
+    def test_sacct_still_supports_dash_m(self):
+        """sacct should support -M flag for cluster filtering."""
         emulator = SlurmEmulator()
         emulator.database.add_cluster("test-cluster")
-        emulator.database.add_account("myacc", "Test", "org", cluster="test-cluster")
+        # sacct with -M should work (no error about nonexistent cluster)
+        output = emulator.execute_command("sacct", ["-M", "test-cluster"])
+        assert "does not exist" not in output
 
-        output = emulator.execute_command("sacctmgr", ["-M", "test-cluster", "list", "accounts"])
-        assert "myacc" in output
-
-    def test_execute_command_nonexistent_cluster(self):
+    def test_sacctmgr_ignores_dash_m(self):
+        """sacctmgr should NOT extract -M flag — it passes through as raw args."""
         emulator = SlurmEmulator()
-        output = emulator.execute_command("sacctmgr", ["-M", "nope", "list", "accounts"])
+        emulator.database.add_cluster("test-cluster")
+        # -M is not extracted for sacctmgr, so it flows as args to sacctmgr handler
+        # sacctmgr will treat "-M" as an unknown command
+        output = emulator.execute_command("sacctmgr", ["-M", "test-cluster", "list", "accounts"])
+        # It won't be intercepted as a cluster flag
+        assert "does not exist" not in output
+
+    def test_execute_command_nonexistent_cluster_sacct(self):
+        emulator = SlurmEmulator()
+        output = emulator.execute_command("sacct", ["-M", "nope"])
         assert "does not exist" in output
 
 
@@ -270,6 +312,7 @@ class TestSacctmgrClusterCommands:
         assert "default" in output
         assert "prod" in output
         assert "dev" in output
+        assert "RPC" in output  # New column
 
     def test_remove_cluster(self):
         db = SlurmDatabase()
@@ -289,13 +332,123 @@ class TestSacctmgrClusterCommands:
         output = sacctmgr.handle_command(["remove", "cluster", "where", "name=default"])
         assert "Cannot delete" in output
 
-    def test_list_accounts_shows_cluster(self):
+    def test_list_accounts_no_cluster_column(self):
         db = SlurmDatabase()
         te = TimeEngine()
         sacctmgr = SacctmgrEmulator(db, te)
 
         output = sacctmgr.handle_command(["list", "accounts"])
-        assert "Cluster" in output
+        assert "Cluster" not in output
+        assert "Account|Descr|Org|" in output
+
+    def test_remove_cluster_blocked_by_running_jobs(self):
+        db = SlurmDatabase()
+        te = TimeEngine()
+        sacctmgr = SacctmgrEmulator(db, te)
+
+        db.add_cluster("busy")
+        db.add_job(Job(job_id="j1", account="a", user="u", state="RUNNING", cluster="busy"))
+
+        output = sacctmgr.handle_command(["remove", "cluster", "where", "name=busy"])
+        assert "error" in output
+        assert "running/pending" in output
+        # Cluster should still exist
+        assert db.get_cluster("busy") is not None
+
+
+class TestRootAssociationAutoCreated:
+    """Test that root association is auto-created when a cluster is added."""
+
+    def test_root_association_on_default_cluster(self):
+        db = SlurmDatabase()
+        assoc = db.get_association("", "root", cluster="default")
+        assert assoc is not None
+        assert assoc.account == "root"
+
+    def test_root_association_auto_created_on_cluster_add(self):
+        db = SlurmDatabase()
+        db.add_cluster("prod")
+        assoc = db.get_association("", "root", cluster="prod")
+        assert assoc is not None
+        assert assoc.account == "root"
+        assert assoc.cluster == "prod"
+
+    def test_root_account_exists_globally_after_cluster_add(self):
+        db = SlurmDatabase()
+        db.add_cluster("new-cluster")
+        assert db.get_account("root") is not None
+
+
+class TestSacctmgrAccountWithCluster:
+    """Test sacctmgr add account with cluster= parameter."""
+
+    def test_add_account_with_cluster_creates_association(self):
+        db = SlurmDatabase()
+        te = TimeEngine()
+        sacctmgr = SacctmgrEmulator(db, te)
+
+        db.add_cluster("prod")
+        output = sacctmgr.handle_command(["add", "account", "myacc", "cluster=prod"])
+        assert "Adding Account" in output
+        # Account exists globally
+        assert db.get_account("myacc") is not None
+        # Association exists on prod cluster
+        assoc = db.get_association("", "myacc", cluster="prod")
+        assert assoc is not None
+
+    def test_add_existing_account_with_cluster_creates_association(self):
+        db = SlurmDatabase()
+        te = TimeEngine()
+        sacctmgr = SacctmgrEmulator(db, te)
+
+        db.add_cluster("prod")
+        # Create account first
+        sacctmgr.handle_command(["add", "account", "myacc"])
+        # Now add to a cluster — should create association, not error
+        output = sacctmgr.handle_command(["add", "account", "myacc", "cluster=prod"])
+        assert "error" not in output.lower() or "already exists" not in output
+        assoc = db.get_association("", "myacc", cluster="prod")
+        assert assoc is not None
+
+
+class TestClassificationEnum:
+    """Test cluster classification enum validation."""
+
+    def test_classification_enum_values(self):
+        assert ClusterClassification.NONE.value == ""
+        assert ClusterClassification.CAPABILITY.value == "capability"
+        assert ClusterClassification.CAPACITY.value == "capacity"
+        assert ClusterClassification.CAPAPACITY.value == "capapacity"
+
+    def test_add_cluster_with_valid_classification(self):
+        db = SlurmDatabase()
+        db.add_cluster("gpu", classification="capability")
+        cluster = db.get_cluster("gpu")
+        assert cluster.classification == ClusterClassification.CAPABILITY
+
+    def test_add_cluster_with_invalid_classification_defaults_to_none(self):
+        db = SlurmDatabase()
+        db.add_cluster("bad", classification="invalid_value")
+        cluster = db.get_cluster("bad")
+        assert cluster.classification == ClusterClassification.NONE
+
+    def test_sacctmgr_validates_classification(self):
+        db = SlurmDatabase()
+        te = TimeEngine()
+        sacctmgr = SacctmgrEmulator(db, te)
+
+        output = sacctmgr.handle_command(["add", "cluster", "bad", "classification=invalid"])
+        assert "Invalid classification" in output
+
+    def test_sacctmgr_accepts_valid_classification(self):
+        db = SlurmDatabase()
+        te = TimeEngine()
+        sacctmgr = SacctmgrEmulator(db, te)
+
+        output = sacctmgr.handle_command(["add", "cluster", "gpu", "classification=capability"])
+        assert "Adding Cluster" in output
+        cluster = db.get_cluster("gpu")
+        assert cluster.classification == ClusterClassification.CAPABILITY
 
 
 class TestBackwardCompatibleStateLoading:
@@ -304,7 +457,7 @@ class TestBackwardCompatibleStateLoading:
     def test_load_old_format_state(self, tmp_path):
         import json
 
-        # Create old format state file
+        # Create old format state file (pre-cluster, plain name keys)
         old_state = {
             "accounts": {
                 "root": {
@@ -356,10 +509,9 @@ class TestBackwardCompatibleStateLoading:
         db.state_file = state_file
         db.load_state()
 
-        # Verify migration
+        # Verify migration — accounts are global now
         assert db.get_cluster("default") is not None
-        assert db.get_account("test", cluster="default") is not None
-        assert db.get_account("test", cluster="default").cluster == "default"
+        assert db.get_account("test") is not None
 
         # Verify associations migrated
         assert db.get_association("user1", "test", cluster="default") is not None
@@ -369,10 +521,71 @@ class TestBackwardCompatibleStateLoading:
         assert len(records) == 1
         assert records[0].cluster == "default"
 
-    def test_delete_cluster_cleans_data(self):
+    def test_load_name_at_cluster_format(self, tmp_path):
+        """Test loading state with name@cluster keys (old multi-cluster format)."""
+        import json
+
+        state = {
+            "clusters": {
+                "default": {
+                    "name": "default",
+                    "control_host": "localhost",
+                    "control_port": 6817,
+                    "classification": "",
+                },
+            },
+            "accounts": {
+                "root@default": {
+                    "name": "root",
+                    "description": "Root",
+                    "organization": "system",
+                    "parent": None,
+                    "fairshare": 1,
+                    "qos": "normal",
+                    "limits": {},
+                    "last_period": None,
+                    "allocation": 1000,
+                    "cluster": "default",
+                },
+                "test@default": {
+                    "name": "test",
+                    "description": "Test",
+                    "organization": "org",
+                    "parent": None,
+                    "fairshare": 1,
+                    "qos": "normal",
+                    "limits": {},
+                    "last_period": None,
+                    "allocation": 500,
+                    "cluster": "default",
+                },
+            },
+            "users": {},
+            "associations": {},
+            "usage_records": [],
+            "jobs": {},
+        }
+
+        state_file = tmp_path / "state.json"
+        with state_file.open("w") as f:
+            json.dump(state, f)
+
+        db = SlurmDatabase()
+        db.state_file = state_file
+        db.load_state()
+
+        # Accounts loaded by name, cluster field stripped
+        assert db.get_account("root") is not None
+        assert db.get_account("test") is not None
+        # Keys should be plain names
+        assert "root" in db.accounts
+        assert "test" in db.accounts
+
+    def test_delete_cluster_preserves_accounts(self):
+        """Deleting a cluster should NOT delete global accounts."""
         db = SlurmDatabase()
         db.add_cluster("temp")
-        db.add_account("acc", "Acc", "org", cluster="temp")
+        db.add_account("acc", "Acc", "org")
         db.add_user("user1")
         db.add_association("user1", "acc", cluster="temp")
 
@@ -382,7 +595,9 @@ class TestBackwardCompatibleStateLoading:
 
         db.delete_cluster("temp")
 
-        assert db.get_account("acc", cluster="temp") is None
+        # Account survives cluster deletion (global)
+        assert db.get_account("acc") is not None
+        # But cluster-scoped data is cleaned
         assert db.get_association("user1", "acc", cluster="temp") is None
         records = db.get_usage_records(account="acc", cluster="temp")
         assert len(records) == 0

@@ -3,8 +3,18 @@
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
+
+
+class ClusterClassification(str, Enum):
+    """SLURM cluster classification types."""
+
+    NONE = ""
+    CAPABILITY = "capability"
+    CAPACITY = "capacity"
+    CAPAPACITY = "capapacity"
 
 
 @dataclass
@@ -14,7 +24,13 @@ class Cluster:
     name: str
     control_host: str = "localhost"
     control_port: int = 6817
-    classification: str = ""
+    classification: ClusterClassification = ClusterClassification.NONE
+    deleted: bool = False
+    id: int = 0
+    rpc_version: int = 9600
+    flags: int = 0
+    nodes: str = ""
+    tres_str: str = ""
 
 
 @dataclass
@@ -30,7 +46,6 @@ class Account:
     limits: dict[str, int] = field(default_factory=dict)
     last_period: Optional[str] = None
     allocation: int = 1000  # Base allocation in node-hours
-    cluster: str = "default"
 
 
 @dataclass
@@ -84,7 +99,10 @@ class SlurmDatabase:
     """In-memory database for SLURM emulator."""
 
     def __init__(self) -> None:
-        self.clusters: dict[str, Cluster] = {"default": Cluster(name="default")}
+        self._next_cluster_id: int = 1
+        self.clusters: dict[str, Cluster] = {
+            "default": Cluster(name="default", id=self._allocate_cluster_id())
+        }
         self.current_cluster: str = "default"
         self.accounts: dict[str, Account] = {}
         self.users: dict[str, User] = {}
@@ -94,8 +112,16 @@ class SlurmDatabase:
         self.tres_types = ["CPU", "Mem", "GRES/gpu", "billing"]
         self.state_file = Path("/tmp/slurm_emulator_db.json")
 
-        # Create default account
+        # Create global root account and root association for default cluster
         self.add_account("root", "Root account", "system")
+        root_key = self._association_key("", "root", "default")
+        self.associations[root_key] = Association(account="root", user="", cluster="default")
+
+    def _allocate_cluster_id(self) -> int:
+        """Allocate the next cluster ID."""
+        cid = self._next_cluster_id
+        self._next_cluster_id += 1
+        return cid
 
     # --- Cluster CRUD ---
 
@@ -107,48 +133,73 @@ class SlurmDatabase:
         classification: str = "",
     ) -> None:
         """Add cluster to database."""
+        if isinstance(classification, str):
+            try:
+                cls_enum = ClusterClassification(classification)
+            except ValueError:
+                cls_enum = ClusterClassification.NONE
+        else:
+            cls_enum = classification
         self.clusters[name] = Cluster(
             name=name,
             control_host=control_host,
             control_port=control_port,
-            classification=classification,
+            classification=cls_enum,
+            id=self._allocate_cluster_id(),
         )
+        # Ensure root account exists globally
+        if "root" not in self.accounts:
+            self.add_account("root", "Root account", "system")
+        # Create root association for the new cluster
+        root_key = self._association_key("", "root", name)
+        self.associations[root_key] = Association(account="root", user="", cluster=name)
 
     def get_cluster(self, name: str) -> Optional[Cluster]:
-        """Get cluster by name."""
-        return self.clusters.get(name)
+        """Get cluster by name (excludes soft-deleted)."""
+        c = self.clusters.get(name)
+        return c if c and not c.deleted else None
 
     def list_clusters(self) -> list[Cluster]:
-        """List all clusters."""
-        return list(self.clusters.values())
+        """List all non-deleted clusters."""
+        return [c for c in self.clusters.values() if not c.deleted]
 
     def delete_cluster(self, name: str) -> None:
-        """Delete cluster and all its per-cluster data."""
+        """Soft-delete cluster and clean its per-cluster data.
+
+        Raises ValueError if there are running/pending jobs on the cluster.
+        Accounts are global and NOT deleted.
+        """
         if name == "default":
             return  # Never delete default cluster
-        if name in self.clusters:
-            del self.clusters[name]
-            # Clean up per-cluster data
-            self.accounts = {k: v for k, v in self.accounts.items() if v.cluster != name}
-            self.associations = {k: v for k, v in self.associations.items() if v.cluster != name}
-            self.usage_records = [r for r in self.usage_records if r.cluster != name]
-            self.jobs = {k: v for k, v in self.jobs.items() if v.cluster != name}
-            if self.current_cluster == name:
-                self.current_cluster = "default"
+        cluster = self.clusters.get(name)
+        if cluster is None or cluster.deleted:
+            return
+        # Check for running/pending jobs
+        active_jobs = [
+            j for j in self.jobs.values() if j.cluster == name and j.state in ("RUNNING", "PENDING")
+        ]
+        if active_jobs:
+            raise ValueError(
+                f"Cannot delete cluster '{name}': {len(active_jobs)} running/pending job(s) exist"
+            )
+        # Soft-delete
+        cluster.deleted = True
+        # Clean up per-cluster data (but NOT accounts — they are global)
+        self.associations = {k: v for k, v in self.associations.items() if v.cluster != name}
+        self.usage_records = [r for r in self.usage_records if r.cluster != name]
+        self.jobs = {k: v for k, v in self.jobs.items() if v.cluster != name}
+        if self.current_cluster == name:
+            self.current_cluster = "default"
 
     def set_current_cluster(self, name: str) -> bool:
         """Set the current cluster context. Returns True if successful."""
-        if name in self.clusters:
+        c = self.clusters.get(name)
+        if c and not c.deleted:
             self.current_cluster = name
             return True
         return False
 
-    # --- Account methods (cluster-aware) ---
-
-    def _account_key(self, name: str, cluster: Optional[str] = None) -> str:
-        """Generate unique key for account within a cluster."""
-        cl = cluster or self.current_cluster
-        return f"{name}@{cl}"
+    # --- Account methods (global) ---
 
     def add_account(
         self,
@@ -156,35 +207,27 @@ class SlurmDatabase:
         description: str,
         organization: str,
         parent: Optional[str] = None,
-        cluster: Optional[str] = None,
     ) -> None:
-        """Add account to database."""
-        cl = cluster or self.current_cluster
-        key = self._account_key(name, cl)
-        self.accounts[key] = Account(
+        """Add account to database (global, not per-cluster)."""
+        self.accounts[name] = Account(
             name=name,
             description=description,
             organization=organization,
             parent=parent,
-            cluster=cl,
         )
 
-    def get_account(self, name: str, cluster: Optional[str] = None) -> Optional[Account]:
-        """Get account by name in the given cluster."""
-        cl = cluster or self.current_cluster
-        return self.accounts.get(self._account_key(name, cl))
+    def get_account(self, name: str) -> Optional[Account]:
+        """Get account by name (global)."""
+        return self.accounts.get(name)
 
-    def list_accounts(self, cluster: Optional[str] = None) -> list[Account]:
-        """List all accounts, optionally filtered by cluster."""
-        cl = cluster or self.current_cluster
-        return [acc for acc in self.accounts.values() if acc.cluster == cl]
+    def list_accounts(self) -> list[Account]:
+        """List all accounts (global)."""
+        return list(self.accounts.values())
 
-    def delete_account(self, name: str, cluster: Optional[str] = None) -> None:
-        """Delete account."""
-        cl = cluster or self.current_cluster
-        key = self._account_key(name, cl)
-        if key in self.accounts:
-            del self.accounts[key]
+    def delete_account(self, name: str) -> None:
+        """Delete account (global)."""
+        if name in self.accounts:
+            del self.accounts[name]
 
     # --- User methods (global, unchanged) ---
 
@@ -278,22 +321,20 @@ class SlurmDatabase:
         """Get usage for specific period."""
         return self.get_total_usage(account, period, cluster=cluster)
 
-    def get_account_allocation(self, account: str, cluster: Optional[str] = None) -> int:
+    def get_account_allocation(self, account: str) -> int:
         """Get base allocation for account."""
-        account_obj = self.get_account(account, cluster=cluster)
+        account_obj = self.get_account(account)
         return account_obj.allocation if account_obj else 1000
 
-    def set_account_allocation(
-        self, account: str, allocation: int, cluster: Optional[str] = None
-    ) -> None:
+    def set_account_allocation(self, account: str, allocation: int) -> None:
         """Set base allocation for account."""
-        account_obj = self.get_account(account, cluster=cluster)
+        account_obj = self.get_account(account)
         if account_obj:
             account_obj.allocation = allocation
 
-    def reset_raw_usage(self, account: str, cluster: Optional[str] = None) -> None:
+    def reset_raw_usage(self, account: str) -> None:
         """Reset raw usage for account (simulates sacctmgr RawUsage=0)."""
-        account_obj = self.get_account(account, cluster=cluster)
+        account_obj = self.get_account(account)
         if account_obj:
             account_obj.limits["raw_usage_reset"] = 1
 
@@ -328,8 +369,19 @@ class SlurmDatabase:
 
     def save_state(self) -> None:
         """Save database state to file."""
+
+        def _serialize_cluster(cl: Cluster) -> dict:
+            d = asdict(cl)
+            # Serialize enum to string value
+            if isinstance(d.get("classification"), ClusterClassification):
+                d["classification"] = d["classification"].value
+            else:
+                d["classification"] = str(d.get("classification", ""))
+            return d
+
         state = {
-            "clusters": {name: asdict(cl) for name, cl in self.clusters.items()},
+            "_next_cluster_id": self._next_cluster_id,
+            "clusters": {name: _serialize_cluster(cl) for name, cl in self.clusters.items()},
             "current_cluster": self.current_cluster,
             "accounts": {key: asdict(acc) for key, acc in self.accounts.items()},
             "users": {name: asdict(user) for name, user in self.users.items()},
@@ -351,25 +403,48 @@ class SlurmDatabase:
                 with self.state_file.open() as f:
                     state = json.load(f)
 
+                self._next_cluster_id = state.get("_next_cluster_id", 1)
+
                 # Load clusters (new field, migrate if absent)
                 if "clusters" in state:
                     self.clusters = {}
                     for name, data in state["clusters"].items():
+                        data.setdefault("deleted", False)
+                        data.setdefault("id", 0)
+                        data.setdefault("rpc_version", 9600)
+                        data.setdefault("flags", 0)
+                        data.setdefault("nodes", "")
+                        data.setdefault("tres_str", "")
+                        # Convert classification string to enum
+                        cls_val = data.get("classification", "")
+                        try:
+                            data["classification"] = ClusterClassification(cls_val)
+                        except ValueError:
+                            data["classification"] = ClusterClassification.NONE
                         self.clusters[name] = Cluster(**data)
                 else:
-                    self.clusters = {"default": Cluster(name="default")}
+                    self.clusters = {
+                        "default": Cluster(name="default", id=self._allocate_cluster_id())
+                    }
 
                 self.current_cluster = state.get("current_cluster", "default")
 
-                # Load accounts (migrate old format without cluster field)
+                # Load accounts — handle 3 formats:
+                # (a) pre-cluster: plain name keys, no cluster field
+                # (b) name@cluster keys with cluster field (old multi-cluster)
+                # (c) new: plain name keys without cluster field
                 self.accounts = {}
                 for key, data in state.get("accounts", {}).items():
-                    data.setdefault("cluster", "default")
-                    acc = Account(**data)
-                    # Migrate old keys (plain name) to new format (name@cluster)
-                    if "@" not in key:
-                        key = f"{acc.name}@{acc.cluster}"
-                    self.accounts[key] = acc
+                    # Strip cluster field if present (accounts are now global)
+                    data.pop("cluster", None)
+                    # For name@cluster keys, extract the name
+                    if "@" in key:
+                        name = key.split("@", 1)[0]
+                    else:
+                        name = key
+                    # Avoid duplicates — first one wins
+                    if name not in self.accounts:
+                        self.accounts[name] = Account(**data)
 
                 # Load users
                 self.users = {}

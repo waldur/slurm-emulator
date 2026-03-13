@@ -37,8 +37,8 @@ class UsageSimulator:
         if not self.database.get_user(user):
             self.database.add_user(user, account)
 
-        if not self.database.get_account(account, cluster=cl):
-            self.database.add_account(account, f"Account {account}", "emulator", cluster=cl)
+        if not self.database.get_account(account):
+            self.database.add_account(account, f"Account {account}", "emulator")
 
         # Ensure association exists
         if not self.database.get_association(user, account, cluster=cl):
