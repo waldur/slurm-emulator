@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 - Add per-command flag validation and multi-TRES parsing
+- Add multi-cluster support matching real SLURM behavior
+- Add `ClusterClassification` enum with validation (capability, capacity, capapacity)
+- Add cluster fields: id (auto-increment), rpc_version, flags, nodes, tres_str
+- Add root account and association auto-creation on cluster add
+- Add `cluster=` parameter support in `sacctmgr add account` and `sacctmgr add user`
+- Add running/pending job check before cluster deletion
+- Add cluster soft-delete (filtered from listings but preserved internally)
+- Add backward-compatible state loading for 3 account key formats
+
+### Changed
+- Make accounts global entities instead of per-cluster (aligns with real SLURM)
+- Restrict `-M` cluster flag to `sacct` only; `sacctmgr` uses `cluster=` in args
+- Remove Cluster column from `sacctmgr list accounts` output
+- Update `sacctmgr list clusters` format to include RPC and Classification columns
 
 ### Fixed
 - Fix project URL in metadata
