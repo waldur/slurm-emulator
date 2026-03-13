@@ -1,11 +1,9 @@
 """Tests for TRES string formatting improvements."""
 
-import pytest
-from datetime import datetime
+from emulator.commands.sacct import SacctEmulator
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
 from emulator.core.usage_simulator import UsageSimulator
-from emulator.commands.sacct import SacctEmulator
 
 
 class TestTresFormatting:

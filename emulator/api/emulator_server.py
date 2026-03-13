@@ -26,6 +26,7 @@ class PeriodicSettingsRequest(BaseModel):
     qos_slowdown: Optional[str] = "slowdown"
     billing_weights: Optional[dict[str, float]] = None
     reset_raw_usage: Optional[bool] = False
+    cluster: Optional[str] = "default"
 
 
 class ResourceActionRequest(BaseModel):
@@ -33,6 +34,7 @@ class ResourceActionRequest(BaseModel):
     action: str
     qos: Optional[str] = None
     reason: Optional[str] = None
+    cluster: Optional[str] = "default"
 
 
 class UsageReportRequest(BaseModel):
@@ -42,6 +44,14 @@ class UsageReportRequest(BaseModel):
     date: str
     users: Optional[dict[str, dict[str, float]]] = None
     raw_tres_usage: Optional[dict[str, int]] = None
+    cluster: Optional[str] = "default"
+
+
+class ClusterCreateRequest(BaseModel):
+    name: str
+    control_host: str = "localhost"
+    control_port: int = 6817
+    classification: str = ""
 
 
 class EmulatorServer:
@@ -80,12 +90,15 @@ class EmulatorServer:
             """Apply periodic settings to account (from Waldur Mastermind)."""
             try:
                 resource_id = request.resource_id
+                cluster = request.cluster
 
                 # Ensure account exists
-                if not self.database.get_account(resource_id):
-                    self.database.add_account(resource_id, f"Account {resource_id}", "emulator")
+                if not self.database.get_account(resource_id, cluster=cluster):
+                    self.database.add_account(
+                        resource_id, f"Account {resource_id}", "emulator", cluster=cluster
+                    )
 
-                account_obj = self.database.get_account(resource_id)
+                account_obj = self.database.get_account(resource_id, cluster=cluster)
 
                 # Apply fairshare
                 if request.fairshare is not None:
@@ -108,7 +121,7 @@ class EmulatorServer:
 
                 # Reset raw usage if requested
                 if request.reset_raw_usage:
-                    self.database.reset_raw_usage(resource_id)
+                    self.database.reset_raw_usage(resource_id, cluster=cluster)
 
                 # Update billing weights if provided
                 if request.billing_weights:
@@ -144,9 +157,12 @@ class EmulatorServer:
             """Downscale resource (QoS slowdown)."""
             try:
                 resource_id = request.resource_id
+                cluster = request.cluster
 
                 if request.action == "set_qos" and request.qos:
-                    success = self.qos_manager.set_account_qos(resource_id, request.qos)
+                    success = self.qos_manager.set_account_qos(
+                        resource_id, request.qos, cluster=cluster
+                    )
 
                     if success:
                         print(f"🔴 Downscaled {resource_id}: QoS → {request.qos}")
@@ -173,8 +189,9 @@ class EmulatorServer:
             """Restore resource (QoS normal)."""
             try:
                 resource_id = request.resource_id
+                cluster = request.cluster
 
-                success = self.qos_manager.restore_qos_for_new_period(resource_id)
+                success = self.qos_manager.restore_qos_for_new_period(resource_id, cluster=cluster)
 
                 if success:
                     print(f"✅ Restored {resource_id}: QoS → normal")
@@ -198,6 +215,7 @@ class EmulatorServer:
             """Submit usage report (from site agent to Waldur)."""
             try:
                 resource_id = request.resource_id
+                cluster = request.cluster
 
                 # Parse billing period
                 billing_period = request.billing_period
@@ -220,6 +238,7 @@ class EmulatorServer:
                                 user,
                                 node_hours,
                                 datetime.fromisoformat(request.date.replace("Z", "+00:00")),
+                                cluster=cluster,
                             )
                 else:
                     # Use aggregate usage data
@@ -235,6 +254,7 @@ class EmulatorServer:
                             "aggregate_user",
                             node_hours,
                             datetime.fromisoformat(request.date.replace("Z", "+00:00")),
+                            cluster=cluster,
                         )
 
                 print(f"📊 Received usage report for {resource_id}")
@@ -242,7 +262,9 @@ class EmulatorServer:
                 print(f"   Usage: {request.usage}")
 
                 # Check thresholds after usage update
-                threshold_status = self.limits_calculator.check_usage_thresholds(resource_id)
+                threshold_status = self.limits_calculator.check_usage_thresholds(
+                    resource_id, cluster=cluster
+                )
 
                 if (
                     threshold_status["recommended_action"]
@@ -263,9 +285,10 @@ class EmulatorServer:
                 raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/status")
-        async def get_status():
+        async def get_status(cluster: Optional[str] = None):
             """Get emulator status."""
-            accounts = self.database.list_accounts()
+            cl = cluster or self.database.current_cluster
+            accounts = self.database.list_accounts(cluster=cl)
             account_status = {}
 
             for account in accounts:
@@ -273,7 +296,7 @@ class EmulatorServer:
                     continue
 
                 usage = self.database.get_total_usage(
-                    account.name, self.time_engine.get_current_quarter()
+                    account.name, self.time_engine.get_current_quarter(), cluster=cl
                 )
 
                 account_status[account.name] = {
@@ -286,10 +309,40 @@ class EmulatorServer:
 
             return {
                 "status": "running",
+                "cluster": cl,
                 "current_time": self.time_engine.get_current_time(),
                 "current_period": self.time_engine.get_current_quarter(),
                 "accounts": account_status,
             }
+
+        @self.app.get("/api/clusters")
+        async def list_clusters():
+            """List all clusters."""
+            clusters = self.database.list_clusters()
+            return {
+                "clusters": [
+                    {
+                        "name": c.name,
+                        "control_host": c.control_host,
+                        "control_port": c.control_port,
+                        "classification": c.classification,
+                    }
+                    for c in clusters
+                ]
+            }
+
+        @self.app.post("/api/clusters")
+        async def create_cluster(request: ClusterCreateRequest):
+            """Create a new cluster."""
+            if self.database.get_cluster(request.name):
+                raise HTTPException(
+                    status_code=400, detail=f"Cluster '{request.name}' already exists"
+                )
+            self.database.add_cluster(
+                request.name, request.control_host, request.control_port, request.classification
+            )
+            self.database.save_state()
+            return {"status": "success", "cluster": request.name}
 
         @self.app.post("/api/time/advance")
         async def advance_time(days: int = 0, months: int = 0, quarters: int = 0):

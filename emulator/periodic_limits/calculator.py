@@ -1,5 +1,7 @@
 """Periodic limits calculations including decay and carryover logic."""
 
+from __future__ import annotations
+
 from typing import Any, Optional
 
 from emulator.core.database import SlurmDatabase
@@ -60,11 +62,11 @@ class PeriodicLimitsCalculator:
         return billing_units
 
     def calculate_carryover(
-        self, account: str, from_period: str, to_period: str
+        self, account: str, from_period: str, to_period: str, cluster: Optional[str] = None
     ) -> tuple[float, dict]:
         """Calculate carryover allocation with decay for period transition."""
         # Get previous period usage
-        previous_usage = self.database.get_period_usage(account, from_period)
+        previous_usage = self.database.get_period_usage(account, from_period, cluster=cluster)
         base_allocation = self.database.get_account_allocation(account)
 
         # Calculate days elapsed between periods (use 90 days for quarterly transitions)
@@ -103,7 +105,7 @@ class PeriodicLimitsCalculator:
         return allocation  # Slowdown at 100% of allocation
 
     def calculate_periodic_settings(
-        self, account: str, config: Optional[dict[Any, Any]] = None
+        self, account: str, config: Optional[dict[Any, Any]] = None, cluster: Optional[str] = None
     ) -> dict:
         """Calculate all periodic settings for an account."""
         if config is None:
@@ -114,7 +116,7 @@ class PeriodicLimitsCalculator:
                 "limit_type": "GrpTRESMins",
             }
 
-        account_obj = self.database.get_account(account)
+        account_obj = self.database.get_account(account, cluster=cluster)
         if not account_obj:
             raise ValueError(f"Account {account} not found")
 
@@ -131,7 +133,7 @@ class PeriodicLimitsCalculator:
             # Calculate carryover - use previous quarter if no last_period set
             from_period = last_period or self._get_previous_quarter(current_period)
             total_allocation, carryover_details = self.calculate_carryover(
-                account, from_period, current_period
+                account, from_period, current_period, cluster=cluster
             )
         else:
             # No carryover, use base allocation
@@ -184,14 +186,14 @@ class PeriodicLimitsCalculator:
         }
 
     def check_usage_thresholds(
-        self, account: str, settings: Optional[dict[Any, Any]] = None
+        self, account: str, settings: Optional[dict[Any, Any]] = None, cluster: Optional[str] = None
     ) -> dict:
         """Check current usage against thresholds and return status."""
         if settings is None:
-            settings = self.calculate_periodic_settings(account)
+            settings = self.calculate_periodic_settings(account, cluster=cluster)
 
         current_period = self.time_engine.get_current_quarter()
-        current_usage = self.database.get_total_usage(account, current_period)
+        current_usage = self.database.get_total_usage(account, current_period, cluster=cluster)
 
         qos_threshold = settings["qos_threshold"]
         grace_limit = settings["grace_limit"]
@@ -219,12 +221,12 @@ class PeriodicLimitsCalculator:
         return status
 
     def apply_period_transition(
-        self, account: str, config: Optional[dict[Any, Any]] = None
+        self, account: str, config: Optional[dict[Any, Any]] = None, cluster: Optional[str] = None
     ) -> dict:
         """Apply period transition for account."""
-        settings = self.calculate_periodic_settings(account, config)
+        settings = self.calculate_periodic_settings(account, config, cluster=cluster)
 
-        account_obj = self.database.get_account(account)
+        account_obj = self.database.get_account(account, cluster=cluster)
         if account_obj:
             # Update account with new period
             account_obj.last_period = settings["period"]

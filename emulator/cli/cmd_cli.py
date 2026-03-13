@@ -31,7 +31,7 @@ Type 'help' or '?' for commands. TAB for auto-completion.
 Type 'help <command>' for detailed help on specific commands.
 """
 
-    prompt = "slurm-emulator> "
+    prompt = "[default] slurm-emulator> "
 
     def __init__(self, slurm_config_path: Optional[str] = None):
         super().__init__()
@@ -883,6 +883,70 @@ Type 'help <command>' for detailed help on specific commands.
             print(f"❌ Failed to reload configuration: {e}")
 
     # ============================================================================
+    # Cluster Management Commands
+    # ============================================================================
+
+    def do_cluster_list(self, arg):
+        """List all clusters (* marks the active cluster).
+
+        Usage: cluster_list
+        """
+        clusters = self.database.list_clusters()
+        print("📋 Clusters:")
+        for cluster in clusters:
+            marker = " *" if cluster.name == self.database.current_cluster else ""
+            print(f"  - {cluster.name}{marker} ({cluster.control_host}:{cluster.control_port})")
+
+    def do_cluster_add(self, arg):
+        """Add a new cluster.
+
+        Usage: cluster_add <name>
+        """
+        args = shlex.split(arg)
+        if not args:
+            print("Usage: cluster_add <name>")
+            return
+        name = args[0]
+        if self.database.get_cluster(name):
+            print(f"❌ Cluster {name} already exists")
+            return
+        self.database.add_cluster(name)
+        self.database.save_state()
+        print(f"✅ Created cluster {name}")
+
+    def do_cluster_use(self, arg):
+        """Switch active cluster context.
+
+        Usage: cluster_use <name>
+        """
+        args = shlex.split(arg)
+        if not args:
+            print("Usage: cluster_use <name>")
+            return
+        name = args[0]
+        if self.database.set_current_cluster(name):
+            self.prompt = f"[{name}] slurm-emulator> "
+            print(f"✅ Switched to cluster {name}")
+        else:
+            print(f"❌ Cluster {name} does not exist")
+
+    def do_cluster_show(self, arg):
+        """Show current cluster details.
+
+        Usage: cluster_show
+        """
+        cluster = self.database.get_cluster(self.database.current_cluster)
+        if cluster:
+            print(f"📊 Current cluster: {cluster.name}")
+            print(f"   Control host: {cluster.control_host}")
+            print(f"   Control port: {cluster.control_port}")
+
+    def complete_cluster_use(self, text, line, begidx, endidx):
+        """Complete cluster names for cluster_use."""
+        clusters = [c.name for c in self.database.list_clusters()]
+        return [c for c in clusters if c.startswith(text)]
+
+    # ============================================================================
     # SLURM Commands (Pass-through)
     # ============================================================================
 
@@ -1451,41 +1515,55 @@ Type 'help <command>' for detailed help on specific commands.
         return scenario_accounts.get(scenario_name, [])
 
     def _clean_account_completely(self, account_name: str) -> None:
-        """Completely clean an account and all its data."""
+        """Completely clean an account and all its data in current cluster."""
+        cl = self.database.current_cluster
+
         # Remove account
         if self.database.get_account(account_name):
             self.database.delete_account(account_name)
 
-        # Remove all usage records for this account
+        # Remove usage records for this account in this cluster
         self.database.usage_records = [
-            record for record in self.database.usage_records if record.account != account_name
+            record
+            for record in self.database.usage_records
+            if not (record.account == account_name and record.cluster == cl)
         ]
 
-        # Remove all associations for this account
-        keys_to_remove = [key for key in self.database.associations if f":{account_name}" in key]
+        # Remove associations for this account in this cluster
+        keys_to_remove = [
+            key
+            for key, assoc in self.database.associations.items()
+            if assoc.account == account_name and assoc.cluster == cl
+        ]
         for key in keys_to_remove:
             del self.database.associations[key]
 
-        # Remove any jobs for this account
+        # Remove jobs for this account in this cluster
         job_ids_to_remove = [
-            job_id for job_id, job in self.database.jobs.items() if job.account == account_name
+            job_id
+            for job_id, job in self.database.jobs.items()
+            if job.account == account_name and job.cluster == cl
         ]
         for job_id in job_ids_to_remove:
             del self.database.jobs[job_id]
 
     def _clean_orphaned_data(self) -> None:
         """Clean up any orphaned data from deleted accounts."""
-        # Get existing account names
-        existing_accounts = set(self.database.accounts.keys())
+        # Build set of (account_name, cluster) pairs that exist
+        existing = {(acc.name, acc.cluster) for acc in self.database.accounts.values()}
 
         # Clean usage records for non-existent accounts
         self.database.usage_records = [
-            record for record in self.database.usage_records if record.account in existing_accounts
+            record
+            for record in self.database.usage_records
+            if (record.account, record.cluster) in existing
         ]
 
         # Clean associations for non-existent accounts
         keys_to_remove = [
-            key for key in self.database.associations if key.split(":")[1] not in existing_accounts
+            key
+            for key, assoc in self.database.associations.items()
+            if (assoc.account, assoc.cluster) not in existing
         ]
         for key in keys_to_remove:
             del self.database.associations[key]
@@ -1494,7 +1572,7 @@ Type 'help <command>' for detailed help on specific commands.
         job_ids_to_remove = [
             job_id
             for job_id, job in self.database.jobs.items()
-            if job.account not in existing_accounts
+            if (job.account, job.cluster) not in existing
         ]
         for job_id in job_ids_to_remove:
             del self.database.jobs[job_id]

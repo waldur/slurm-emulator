@@ -44,6 +44,8 @@ class SacctmgrEmulator:
             return self._add_account(args[1:])
         if entity == "user":
             return self._add_user(args[1:])
+        if entity == "cluster":
+            return self._add_cluster(args[1:])
         return f"sacctmgr: error: Unknown entity for add: {entity}"
 
     def _handle_modify(self, args: list[str]) -> str:
@@ -70,6 +72,8 @@ class SacctmgrEmulator:
             return self._remove_account(args[1:])
         if entity == "user":
             return self._remove_user(args[1:])
+        if entity == "cluster":
+            return self._remove_cluster(args[1:])
         return f"sacctmgr: error: Unknown entity for remove: {entity}"
 
     def _handle_list(self, args: list[str]) -> str:
@@ -87,6 +91,8 @@ class SacctmgrEmulator:
             return self._list_associations(args[1:])
         if entity == "tres":
             return self._list_tres()
+        if entity in {"cluster", "clusters"}:
+            return self._list_clusters(args[1:])
         return f"sacctmgr: error: Unknown entity for list: {entity}"
 
     def _handle_show(self, args: list[str]) -> str:
@@ -323,16 +329,84 @@ class SacctmgrEmulator:
         self.database.save_state()
         return result
 
+    def _add_cluster(self, args: list[str]) -> str:
+        """Add cluster command."""
+        if not args:
+            return "sacctmgr: error: No cluster name specified"
+
+        cluster_name = args[0]
+
+        # Parse optional parameters
+        control_host = "localhost"
+        control_port = 6817
+        classification = ""
+
+        for arg in args[1:]:
+            if arg.startswith("control_host="):
+                control_host = arg.split("=", 1)[1]
+            elif arg.startswith("control_port="):
+                control_port = int(arg.split("=", 1)[1])
+            elif arg.startswith("classification="):
+                classification = arg.split("=", 1)[1]
+
+        if self.database.get_cluster(cluster_name):
+            return f"sacctmgr: error: Cluster {cluster_name} already exists"
+
+        self.database.add_cluster(cluster_name, control_host, control_port, classification)
+        self.database.save_state()
+
+        return f" Adding Cluster(s)\n  Name          = {cluster_name}\n  Control Host  = {control_host}\n  Control Port  = {control_port}"
+
+    def _remove_cluster(self, args: list[str]) -> str:
+        """Remove cluster command."""
+        if "where" not in args:
+            return "sacctmgr: error: No where clause found"
+
+        where_index = args.index("where")
+        cluster_name = ""
+        for arg in args[where_index + 1 :]:
+            if arg.startswith("name="):
+                cluster_name = arg.split("=", 1)[1]
+
+        if not cluster_name:
+            return "sacctmgr: error: No cluster name specified in where clause"
+
+        if cluster_name == "default":
+            return "sacctmgr: error: Cannot delete the default cluster"
+
+        if not self.database.get_cluster(cluster_name):
+            return f"sacctmgr: error: Cluster {cluster_name} does not exist"
+
+        self.database.delete_cluster(cluster_name)
+        self.database.save_state()
+
+        return f" Deleting cluster(s)...\n  {cluster_name}"
+
+    def _list_clusters(self, args: list[str]) -> str:
+        """List clusters command."""
+        clusters = self.database.list_clusters()
+
+        if not clusters:
+            return "Cluster|ControlHost|ControlPort|"
+
+        lines = ["Cluster|ControlHost|ControlPort|"]
+        for cluster in clusters:
+            lines.append(f"{cluster.name}|{cluster.control_host}|{cluster.control_port}|")
+
+        return "\n".join(lines)
+
     def _list_accounts(self, args: list[str]) -> str:
         """List accounts command."""
         accounts = self.database.list_accounts()
 
         if not accounts:
-            return "Account|Descr|Org|"
+            return "Account|Descr|Org|Cluster|"
 
-        lines = ["Account|Descr|Org|"]
+        lines = ["Account|Descr|Org|Cluster|"]
         for account in accounts:
-            lines.append(f"{account.name}|{account.description}|{account.organization}|")
+            lines.append(
+                f"{account.name}|{account.description}|{account.organization}|{account.cluster}|"
+            )
 
         return "\n".join(lines)
 

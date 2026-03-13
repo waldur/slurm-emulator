@@ -1,6 +1,6 @@
 """QoS management for threshold-based switching."""
 
-from typing import Any
+from typing import Any, Optional
 
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
@@ -25,17 +25,17 @@ class QoSManager:
             },
         }
 
-    def get_account_qos(self, account: str) -> str:
+    def get_account_qos(self, account: str, cluster: Optional[str] = None) -> str:
         """Get current QoS for account."""
-        account_obj = self.database.get_account(account)
+        account_obj = self.database.get_account(account, cluster=cluster)
         return account_obj.qos if account_obj else "normal"
 
-    def set_account_qos(self, account: str, qos: str) -> bool:
+    def set_account_qos(self, account: str, qos: str, cluster: Optional[str] = None) -> bool:
         """Set QoS for account."""
         if qos not in self.qos_levels:
             return False
 
-        account_obj = self.database.get_account(account)
+        account_obj = self.database.get_account(account, cluster=cluster)
         if account_obj:
             old_qos = account_obj.qos
             account_obj.qos = qos
@@ -98,14 +98,19 @@ class QoSManager:
         return list(self.qos_levels.keys())
 
     def simulate_qos_impact(
-        self, account: str, projected_usage: float, qos_threshold: float, grace_limit: float
+        self,
+        account: str,
+        projected_usage: float,
+        qos_threshold: float,
+        grace_limit: float,
+        cluster: Optional[str] = None,
     ) -> dict:
         """Simulate QoS impact for projected usage without applying changes."""
-        current_qos = self.get_account_qos(account)
+        current_qos = self.get_account_qos(account, cluster=cluster)
         projected_qos = self._determine_qos_level(projected_usage, qos_threshold, grace_limit)
 
         # Get account users for affected_users list
-        affected_users = self.database.list_account_users(account)
+        affected_users = self.database.list_account_users(account, cluster=cluster)
 
         # Determine impact description and type
         if current_qos == projected_qos:
@@ -150,6 +155,10 @@ class QoSManager:
 
         return "none"
 
+    def restore_qos_for_new_period(self, account: str, cluster: Optional[str] = None) -> bool:
+        """Restore QoS to normal for new period."""
+        return self.set_account_qos(account, "normal", cluster=cluster)
+
     def generate_qos_report(self, accounts: list[str]) -> dict[str, Any]:
         """Generate QoS status report for multiple accounts."""
         report = {
@@ -175,7 +184,3 @@ class QoSManager:
                 summary_dict[qos] = summary_dict.get(qos, 0) + 1
 
         return report
-
-    def restore_qos_for_new_period(self, account: str) -> bool:
-        """Restore QoS to normal for new period."""
-        return self.set_account_qos(account, "normal")

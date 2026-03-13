@@ -99,7 +99,8 @@ class EmulatorCLI:
 
         while True:
             try:
-                command = input("\nslurm-emulator> ").strip()
+                cluster_tag = f"[{self.database.current_cluster}] "
+                command = input(f"\n{cluster_tag}slurm-emulator> ").strip()
                 if not command:
                     continue
 
@@ -218,6 +219,7 @@ class EmulatorCLI:
             "limits",
             "qos",
             "account",
+            "cluster",
             "config",
             "cleanup",
             "complete",
@@ -238,6 +240,7 @@ class EmulatorCLI:
             "limits": ["calculate", "show", "apply"],
             "qos": ["show", "set", "check"],
             "account": ["create", "list", "show", "delete"],
+            "cluster": ["list", "add", "use", "show"],
             "config": ["show", "validate", "reload"],
             "cleanup": ["all", "scenario", "account"],
             "sacctmgr": ["add", "modify", "remove", "list", "show"],
@@ -551,6 +554,8 @@ class EmulatorCLI:
             self._handle_qos_commands(args)
         elif cmd == "account":
             self._handle_account_commands(args)
+        elif cmd == "cluster":
+            self._handle_cluster_commands(args)
         elif cmd == "config":
             self._handle_config_commands(args)
         elif cmd == "complete":
@@ -566,6 +571,54 @@ class EmulatorCLI:
             print(
                 "Type 'help' for available commands or 'complete <partial_command>' for completion"
             )
+
+    def _handle_cluster_commands(self, args: list[str]) -> None:
+        """Handle cluster management commands."""
+        if not args:
+            print("Cluster commands: list, add, use, show")
+            return
+
+        subcommand = args[0].lower()
+
+        if subcommand == "list":
+            clusters = self.database.list_clusters()
+            print("📋 Clusters:")
+            for cluster in clusters:
+                marker = " *" if cluster.name == self.database.current_cluster else ""
+                print(f"  - {cluster.name}{marker} ({cluster.control_host}:{cluster.control_port})")
+
+        elif subcommand == "add":
+            if len(args) < 2:
+                print("Usage: cluster add <name>")
+                return
+            name = args[1]
+            if self.database.get_cluster(name):
+                print(f"❌ Cluster {name} already exists")
+                return
+            self.database.add_cluster(name)
+            self.database.save_state()
+            print(f"✅ Created cluster {name}")
+
+        elif subcommand == "use":
+            if len(args) < 2:
+                print("Usage: cluster use <name>")
+                return
+            name = args[1]
+            if self.database.set_current_cluster(name):
+                print(f"✅ Switched to cluster {name}")
+            else:
+                print(f"❌ Cluster {name} does not exist")
+
+        elif subcommand == "show":
+            cluster_obj = self.database.get_cluster(self.database.current_cluster)
+            if cluster_obj:
+                print(f"📊 Current cluster: {cluster_obj.name}")
+                print(f"   Control host: {cluster_obj.control_host}")
+                print(f"   Control port: {cluster_obj.control_port}")
+
+        else:
+            print("❌ Unknown cluster subcommand")
+            print("Available: list, add, use, show")
 
     def _handle_time_commands(self, args: list[str]) -> None:
         """Handle time manipulation commands."""
@@ -1509,41 +1562,55 @@ class EmulatorCLI:
         return scenario_accounts.get(scenario_name, [])
 
     def _clean_account_completely(self, account_name: str) -> None:
-        """Completely clean an account and all its data."""
+        """Completely clean an account and all its data in current cluster."""
+        cl = self.database.current_cluster
+
         # Remove account
         if self.database.get_account(account_name):
             self.database.delete_account(account_name)
 
-        # Remove all usage records for this account
+        # Remove usage records for this account in this cluster
         self.database.usage_records = [
-            record for record in self.database.usage_records if record.account != account_name
+            record
+            for record in self.database.usage_records
+            if not (record.account == account_name and record.cluster == cl)
         ]
 
-        # Remove all associations for this account
-        keys_to_remove = [key for key in self.database.associations if f":{account_name}" in key]
+        # Remove associations for this account in this cluster
+        keys_to_remove = [
+            key
+            for key, assoc in self.database.associations.items()
+            if assoc.account == account_name and assoc.cluster == cl
+        ]
         for key in keys_to_remove:
             del self.database.associations[key]
 
-        # Remove any jobs for this account
+        # Remove jobs for this account in this cluster
         job_ids_to_remove = [
-            job_id for job_id, job in self.database.jobs.items() if job.account == account_name
+            job_id
+            for job_id, job in self.database.jobs.items()
+            if job.account == account_name and job.cluster == cl
         ]
         for job_id in job_ids_to_remove:
             del self.database.jobs[job_id]
 
     def _clean_orphaned_data(self) -> None:
         """Clean up any orphaned data from deleted accounts."""
-        # Get existing account names
-        existing_accounts = set(self.database.accounts.keys())
+        # Build set of (account_name, cluster) pairs that exist
+        existing = {(acc.name, acc.cluster) for acc in self.database.accounts.values()}
 
         # Clean usage records for non-existent accounts
         self.database.usage_records = [
-            record for record in self.database.usage_records if record.account in existing_accounts
+            record
+            for record in self.database.usage_records
+            if (record.account, record.cluster) in existing
         ]
 
         # Clean associations for non-existent accounts
         keys_to_remove = [
-            key for key in self.database.associations if key.split(":")[1] not in existing_accounts
+            key
+            for key, assoc in self.database.associations.items()
+            if (assoc.account, assoc.cluster) not in existing
         ]
         for key in keys_to_remove:
             del self.database.associations[key]
@@ -1552,7 +1619,7 @@ class EmulatorCLI:
         job_ids_to_remove = [
             job_id
             for job_id, job in self.database.jobs.items()
-            if job.account not in existing_accounts
+            if (job.account, job.cluster) not in existing
         ]
         for job_id in job_ids_to_remove:
             del self.database.jobs[job_id]
@@ -1718,6 +1785,12 @@ class EmulatorCLI:
   account list                          - List all accounts
   account show <name>                   - Show account details
   account delete <name>                 - Delete account
+
+🌐 Cluster Management:
+  cluster list                          - List all clusters (* = active)
+  cluster add <name>                    - Add a new cluster
+  cluster use <name>                    - Switch active cluster context
+  cluster show                          - Show current cluster details
 
 ⚙️  Configuration:
   config show                           - Show current configuration
