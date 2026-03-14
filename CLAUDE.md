@@ -92,12 +92,13 @@ Use these commands:
 2. Update version in `pyproject.toml`
 3. Generate changelog entry via `scripts/changelog.sh` — skip with `--skip-changelog`
 4. Create git tag, commit (`pyproject.toml` + `CHANGELOG.md`), optionally push — skip with `--skip-tag`
-5. GitHub Actions handles testing, building, and PyPI publishing
+5. GitLab CI/CD handles testing, building, and PyPI publishing
 
-**Automated CI/CD (GitHub Actions):**
-- **Testing**: Runs automatically on every push/PR (multiple Python versions)
-- **Publishing**: Triggered by pushing version tags (e.g., `0.1.1`)
-- **PyPI Release**: Automatically builds and publishes when version tag is pushed
+**Automated CI/CD (GitLab CI/CD):**
+- **Testing**: Runs automatically on every push/MR (Python 3.9–3.13)
+- **Publishing**: Triggered by pushing version tags matching `X.Y.Z` pattern
+- **PyPI Release**: Automatically builds with `uv build` and publishes with `uv publish` when version tag is pushed
+- **Docker Image**: Publishes `opennode/slurm-emulator:latest` to Docker Hub on every commit to `main`
 
 The release script handles local version management and creates git tags that trigger automated CI/CD for testing and publishing.
 
