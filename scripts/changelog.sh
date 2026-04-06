@@ -85,19 +85,23 @@ generate_entry() {
     local commit_data
     commit_data=$(cat "$COMMIT_DATA_FILE")
 
-    claude --print -p "$(cat <<EOF
-$prompt
+    # Build prompt in a temp file to avoid bash 3.2 heredoc parsing issues
+    local prompt_file="$TMPDIR/slurm-emulator-changelog-prompt.txt"
+    {
+        printf '%s\n' "$prompt"
+        echo ""
+        echo "## Version being released: $version"
+        echo ""
+        echo "## Commit data (JSON):"
+        echo '```json'
+        printf '%s\n' "$commit_data"
+        echo '```'
+        echo ""
+        echo "Generate the changelog entry now. Output ONLY the markdown content for this version entry (starting with ## heading), nothing else."
+    } > "$prompt_file"
 
-## Version being released: $version
-
-## Commit data (JSON):
-\`\`\`json
-$commit_data
-\`\`\`
-
-Generate the changelog entry now. Output ONLY the markdown content for this version's entry (starting with ## heading), nothing else.
-EOF
-)" > "$CHANGELOG_ENTRY_FILE"
+    claude --print -p "$(cat "$prompt_file")" > "$CHANGELOG_ENTRY_FILE"
+    rm -f "$prompt_file"
 
     echo ""
     echo "--- Generated entry ---"
