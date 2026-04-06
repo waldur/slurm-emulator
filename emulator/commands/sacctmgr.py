@@ -1,5 +1,7 @@
 """sacctmgr command emulator."""
 
+from typing import Optional
+
 from emulator import __version__
 from emulator.core.database import QOS, Association, ClusterClassification, SlurmDatabase
 from emulator.core.time_engine import TimeEngine
@@ -496,10 +498,10 @@ class SacctmgrEmulator:
             return "\n".join(lines)
 
         qos_name = args[0]
-        qos = self.database.qos_list.get(qos_name)
-        if qos is None:
+        found_qos: Optional[QOS] = self.database.qos_list.get(qos_name)
+        if found_qos is None:
             return ""
-        return f"{qos.name}|{qos.flags}"
+        return f"{found_qos.name}|{found_qos.flags}"
 
     def _remove_cluster(self, args: list[str]) -> str:
         """Remove cluster command."""
