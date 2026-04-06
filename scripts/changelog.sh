@@ -150,12 +150,14 @@ EOF
                 local before after
                 before=$(head -n $((first_entry_line - 1)) "$CHANGELOG_FILE")
                 after=$(tail -n +"$first_entry_line" "$CHANGELOG_FILE")
-                cat > "$CHANGELOG_FILE" <<EOF
-$before
-$entry
-
-$after
-EOF
+                # Ensure blank line between header and new entry, and between entries
+                {
+                    printf '%s\n' "$before"
+                    echo ""
+                    printf '%s\n' "$entry"
+                    echo ""
+                    printf '%s\n' "$after"
+                } > "$CHANGELOG_FILE"
             fi
         fi
         echo "Updated $CHANGELOG_FILE"

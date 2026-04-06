@@ -3,6 +3,7 @@
 All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
+
 ## [0.3.0] - 2026-04-06
 
 ### Added
@@ -12,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Fix bash 3.2 heredoc parsing error in changelog generation
 - Fix mypy type error in sacctmgr _show_qos method
 
-## [Unreleased]
+## [0.2.0] - 2026-03-14
 
 ### Added
 - Add per-command flag validation and multi-TRES parsing
