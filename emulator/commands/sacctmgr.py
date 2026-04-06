@@ -1,7 +1,7 @@
 """sacctmgr command emulator."""
 
 from emulator import __version__
-from emulator.core.database import Association, ClusterClassification, SlurmDatabase
+from emulator.core.database import QOS, Association, ClusterClassification, SlurmDatabase
 from emulator.core.time_engine import TimeEngine
 
 
@@ -46,6 +46,8 @@ class SacctmgrEmulator:
             return self._add_user(args[1:])
         if entity == "cluster":
             return self._add_cluster(args[1:])
+        if entity == "qos":
+            return self._add_qos(args[1:])
         return f"sacctmgr: error: Unknown entity for add: {entity}"
 
     def _handle_modify(self, args: list[str]) -> str:
@@ -59,6 +61,8 @@ class SacctmgrEmulator:
             return self._modify_account(args[1:])
         if entity == "user":
             return self._modify_user(args[1:])
+        if entity == "qos":
+            return self._modify_qos(args[1:])
         return f"sacctmgr: error: Unknown entity for modify: {entity}"
 
     def _handle_remove(self, args: list[str]) -> str:
@@ -106,6 +110,8 @@ class SacctmgrEmulator:
             return self._show_account(args[1:])
         if entity == "association":
             return self._show_association(args[1:])
+        if entity == "qos":
+            return self._show_qos(args[1:])
         return f"sacctmgr: error: Unknown entity for show: {entity}"
 
     def _add_account(self, args: list[str]) -> str:
@@ -391,6 +397,109 @@ class SacctmgrEmulator:
         self.database.save_state()
 
         return f" Adding Cluster(s)\n  Name          = {cluster_name}\n  Control Host  = {control_host}\n  Control Port  = {control_port}"
+
+    # --- QOS operations ---
+
+    def _add_qos(self, args: list[str]) -> str:
+        """Add QOS command.
+
+        Parses: add qos <name> [set] [flags=X] [key=value ...]
+        The ``set`` keyword is optional and simply skipped, matching real
+        sacctmgr behaviour.  Each key=value pair must be a **separate**
+        argv element (just like real sacctmgr).
+        """
+        if not args:
+            return "sacctmgr: error: No qos name specified"
+
+        qos_name = args[0]
+
+        if qos_name in self.database.qos_list:
+            return f"sacctmgr: error: QOS {qos_name} already exists"
+
+        qos = QOS(name=qos_name)
+
+        for arg in args[1:]:
+            lower = arg.lower()
+            if lower == "set":
+                continue
+            if "=" not in arg:
+                return f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
+            key, value = arg.split("=", 1)
+            key = key.lower()
+            if key == "flags":
+                qos.flags = value
+            elif key == "grptres":
+                qos.grp_tres = value
+            elif key == "maxjobs":
+                qos.max_jobs = int(value)
+            elif key == "maxsubmit":
+                qos.max_submit = int(value)
+            elif key == "maxwall":
+                qos.max_wall = value
+            elif key == "mintresperjob":
+                qos.min_tres_per_job = value
+            else:
+                return f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
+
+        self.database.qos_list[qos_name] = qos
+        return f" Adding QOS(s)\n  Name          = {qos_name}"
+
+    def _modify_qos(self, args: list[str]) -> str:
+        """Modify QOS command.
+
+        Parses: modify qos <name> set key=value [key=value ...]
+        """
+        if not args:
+            return "sacctmgr: error: No qos name specified"
+
+        qos_name = args[0]
+        qos = self.database.qos_list.get(qos_name)
+        if qos is None:
+            return " Nothing modified"
+
+        set_index = -1
+        for i, arg in enumerate(args):
+            if arg.lower() == "set":
+                set_index = i
+                break
+
+        if set_index == -1:
+            return "sacctmgr: error: No 'set' clause found"
+
+        for arg in args[set_index + 1 :]:
+            if "=" not in arg:
+                return f" Unknown option: {arg}"
+            key, value = arg.split("=", 1)
+            key = key.lower()
+            if key == "flags":
+                qos.flags = value
+            elif key == "grptres":
+                qos.grp_tres = value
+            elif key == "maxjobs":
+                qos.max_jobs = int(value)
+            elif key == "maxsubmit":
+                qos.max_submit = int(value)
+            elif key == "maxwall":
+                qos.max_wall = value
+            elif key == "mintresperjob":
+                qos.min_tres_per_job = value
+
+        return f" Modified qos...\n  {qos_name}"
+
+    def _show_qos(self, args: list[str]) -> str:
+        """Show QOS details (parsable format with | separator)."""
+        if not args:
+            # Show all
+            lines = []
+            for qos in self.database.qos_list.values():
+                lines.append(f"{qos.name}|{qos.flags}")
+            return "\n".join(lines)
+
+        qos_name = args[0]
+        qos = self.database.qos_list.get(qos_name)
+        if qos is None:
+            return ""
+        return f"{qos.name}|{qos.flags}"
 
     def _remove_cluster(self, args: list[str]) -> str:
         """Remove cluster command."""

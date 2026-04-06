@@ -57,6 +57,19 @@ class User:
 
 
 @dataclass
+class QOS:
+    """SLURM Quality of Service."""
+
+    name: str
+    flags: str = ""
+    grp_tres: str = ""
+    max_jobs: int = -1
+    max_submit: int = -1
+    max_wall: str = ""
+    min_tres_per_job: str = ""
+
+
+@dataclass
 class Association:
     """SLURM association between user and account."""
 
@@ -109,6 +122,7 @@ class SlurmDatabase:
         self.associations: dict[str, Association] = {}  # key: "user:account:cluster"
         self.usage_records: list[UsageRecord] = []
         self.jobs: dict[str, Job] = {}
+        self.qos_list: dict[str, QOS] = {}
         self.tres_types = ["CPU", "Mem", "GRES/gpu", "billing"]
         self.state_file = Path("/tmp/slurm_emulator_db.json")
 
