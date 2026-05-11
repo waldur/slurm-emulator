@@ -71,18 +71,20 @@ class QOS:
 
 @dataclass
 class Association:
-    """SLURM association between user and account."""
+    """SLURM association between user and account.
+
+    Mirrors slurmdb_assoc_rec_t: an association is keyed by
+    (cluster, account, user, partition). ``Partitions=p1,p2`` on
+    ``sacctmgr add user`` produces one Association per partition,
+    each with a single ``partition`` string. ``partition=None`` is
+    the "non-partition" association.
+    """
 
     account: str
     user: str
     limits: dict[str, int] = field(default_factory=dict)
     cluster: str = "default"
-    # User-level partition restriction (sacctmgr add user … Partitions=p1,p2).
-    # Empty list means the association is unrestricted at partition scope.
-    partitions: list[str] = field(default_factory=list)
-    # Optional DefaultPartition= per association — selects the partition used
-    # when a user submits a job without `-p`.
-    default_partition: Optional[str] = None
+    partition: Optional[str] = None
 
 
 @dataclass
@@ -261,10 +263,16 @@ class SlurmDatabase:
 
     # --- Association methods (cluster-aware) ---
 
-    def _association_key(self, user: str, account: str, cluster: Optional[str] = None) -> str:
+    def _association_key(
+        self,
+        user: str,
+        account: str,
+        cluster: Optional[str] = None,
+        partition: Optional[str] = None,
+    ) -> str:
         """Generate unique key for association."""
         cl = cluster or self.current_cluster
-        return f"{user}:{account}:{cl}"
+        return f"{user}:{account}:{cl}:{partition or ''}"
 
     def add_association(
         self,
@@ -272,44 +280,105 @@ class SlurmDatabase:
         account: str,
         limits: Optional[dict[str, int]] = None,
         cluster: Optional[str] = None,
-        partitions: Optional[list[str]] = None,
-        default_partition: Optional[str] = None,
+        partition: Optional[str] = None,
     ) -> None:
-        """Add user-account association."""
+        """Add user-account association.
+
+        ``Partitions=p1,p2`` on ``sacctmgr add user`` is represented by
+        calling this method once per partition. Callers that want
+        multiple partition-scoped rows must iterate themselves —
+        matches real Slurm where each (user, account, cluster, partition)
+        tuple is a distinct slurmdb_assoc_rec_t.
+        """
         cl = cluster or self.current_cluster
-        key = self._association_key(user, account, cl)
+        key = self._association_key(user, account, cl, partition)
         self.associations[key] = Association(
             account=account,
             user=user,
             limits=limits or {},
             cluster=cl,
-            partitions=list(partitions or []),
-            default_partition=default_partition,
+            partition=partition,
         )
 
     def get_association(
-        self, user: str, account: str, cluster: Optional[str] = None
+        self,
+        user: str,
+        account: str,
+        cluster: Optional[str] = None,
+        partition: Optional[str] = None,
     ) -> Optional[Association]:
-        """Get association between user and account."""
+        """Get association between user and account.
+
+        ``partition=None`` returns the non-partition association
+        (matching real Slurm semantics where unbound rows have a NULL
+        partition). To find partition-scoped rows, pass ``partition=``
+        explicitly or use ``list_user_associations``.
+        """
         cl = cluster or self.current_cluster
-        key = self._association_key(user, account, cl)
+        key = self._association_key(user, account, cl, partition)
         return self.associations.get(key)
 
-    def list_account_users(self, account: str, cluster: Optional[str] = None) -> list[str]:
-        """List users associated with account."""
+    def list_user_associations(
+        self, user: str, account: str, cluster: Optional[str] = None
+    ) -> list[Association]:
+        """Return every Association row matching (user, account, cluster).
+
+        With multiple ``Partitions=`` this returns one entry per partition.
+        """
         cl = cluster or self.current_cluster
-        users = []
+        return [
+            a
+            for a in self.associations.values()
+            if a.user == user and a.account == account and a.cluster == cl
+        ]
+
+    def list_account_users(self, account: str, cluster: Optional[str] = None) -> list[str]:
+        """List users associated with account (deduplicated across partitions)."""
+        cl = cluster or self.current_cluster
+        users: list[str] = []
+        seen: set[str] = set()
         for assoc in self.associations.values():
-            if assoc.account == account and assoc.user and assoc.cluster == cl:
+            if (
+                assoc.account == account
+                and assoc.user
+                and assoc.cluster == cl
+                and assoc.user not in seen
+            ):
+                seen.add(assoc.user)
                 users.append(assoc.user)
         return users
 
-    def delete_association(self, user: str, account: str, cluster: Optional[str] = None) -> None:
-        """Delete user-account association."""
+    def delete_association(
+        self,
+        user: str,
+        account: str,
+        cluster: Optional[str] = None,
+        partition: Optional[str] = None,
+    ) -> None:
+        """Delete a single user-account-partition association row."""
         cl = cluster or self.current_cluster
-        key = self._association_key(user, account, cl)
+        key = self._association_key(user, account, cl, partition)
         if key in self.associations:
             del self.associations[key]
+
+    def delete_user_associations(
+        self, user: str, account: str, cluster: Optional[str] = None
+    ) -> int:
+        """Delete every row matching (user, account, cluster), all partitions.
+
+        Returns the number of rows removed. Mirrors
+        ``sacctmgr remove user where name=X and account=Y`` which wipes
+        all partition-scoped associations for that pair.
+        """
+        cl = cluster or self.current_cluster
+        keys = [
+            k
+            for k, a in self.associations.items()
+            if a.user == user and a.account == account and a.cluster == cl
+        ]
+        for k in keys:
+            del self.associations[k]
+        return len(keys)
 
     # --- Usage record methods (cluster-aware) ---
 
@@ -482,13 +551,36 @@ class SlurmDatabase:
                 self.associations = {}
                 for key, data in state.get("associations", {}).items():
                     data.setdefault("cluster", "default")
-                    data.setdefault("partitions", [])
-                    data.setdefault("default_partition", None)
+                    # Strip legacy fields from the prior shape of this branch
+                    # (partitions: list + default_partition) and any older
+                    # files that never had partition support. Expand
+                    # non-empty partition lists into one row per partition.
+                    legacy_partitions = data.pop("partitions", None)
+                    data.pop("default_partition", None)
+                    data.setdefault("partition", None)
+
+                    cluster = data["cluster"]
+                    if legacy_partitions:
+                        for part in legacy_partitions:
+                            row = dict(data)
+                            row["partition"] = part
+                            assoc = Association(**row)
+                            new_key = self._association_key(
+                                assoc.user, assoc.account, cluster, part
+                            )
+                            self.associations[new_key] = assoc
+                        continue
+
                     assoc = Association(**data)
-                    # Migrate old keys ("user:account") to new format ("user:account:cluster")
+                    # Migrate older keys ("user:account" or "user:account:cluster")
+                    # to the new "user:account:cluster:partition" form.
                     parts = key.split(":")
                     if len(parts) == 2:
-                        key = f"{parts[0]}:{parts[1]}:{assoc.cluster}"
+                        key = self._association_key(
+                            parts[0], parts[1], assoc.cluster, assoc.partition
+                        )
+                    elif len(parts) == 3:
+                        key = self._association_key(parts[0], parts[1], parts[2], assoc.partition)
                     self.associations[key] = assoc
 
                 # Load usage records
