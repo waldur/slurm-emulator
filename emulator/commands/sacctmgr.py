@@ -204,8 +204,7 @@ class SacctmgrEmulator:
                 default_partition = arg.split("=", 1)[1] or None
             # Share=parent and other fairshare/limit attributes are silently
             # accepted — real sacctmgr supports them, the emulator does not
-            # model fairshare beyond a flat field, and the WAL-9925 flow only
-            # cares about partition handling.
+            # model fairshare beyond a flat field.
 
         # Add user if doesn't exist
         if not self.database.get_user(username):

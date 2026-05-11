@@ -1,6 +1,6 @@
 """Tests for partition-aware user associations in sacctmgr.
 
-Validates the emulator's support for the WAL-9925 flow:
+Covers:
 - ``sacctmgr add user … Partitions=p1,p2 DefaultPartition=p1``
 - ``sacctmgr list associations format=…,partition,defaultpartition``
 - ``sacctmgr show association where account=X format=account,user,partition``
@@ -55,7 +55,7 @@ class TestAddUserPartitionParsing:
         assert assoc.default_partition == "zen3"
 
     def test_legacy_singular_partition_flag(self, tmp_path):
-        """Pre-WAL-9925 site-agent still emits Partition=<single>; accept it."""
+        """Older site-agent versions emit the singular Partition=<name>; accept it."""
         em = _emulator(tmp_path)
         em.handle_command(["add", "user", "alice", "account=acct1", "Partition=zen3"])
         assoc = em.database.get_association("alice", "acct1")
