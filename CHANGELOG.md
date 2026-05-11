@@ -4,6 +4,16 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- Parse `Partitions=p1,p2`, single-form `Partition=p1`, and `DefaultPartition=p1` in `sacctmgr add user`; store on the `Association` record.
+- Silently accept `Share=parent` (and other fairshare attributes) on `sacctmgr add user`, matching real sacctmgr.
+- Support `partition` / `partitions` / `defaultpartition` format fields in `sacctmgr list associations` and `sacctmgr show association format=…`.
+
+### Changed
+- `Association` dataclass gains `partitions: list[str]` and `default_partition: Optional[str]` fields. State loader migrates older state files transparently.
+
 ## [0.3.0] - 2026-04-06
 
 ### Added

@@ -179,6 +179,8 @@ class SacctmgrEmulator:
         account = ""
         default_account = ""
         target_cluster = None
+        partitions: list[str] = []
+        default_partition: Optional[str] = None
 
         # Parse parameters
         for arg in args[1:]:
@@ -188,6 +190,22 @@ class SacctmgrEmulator:
                 default_account = arg.split("=", 1)[1]
             elif arg.startswith("cluster="):
                 target_cluster = arg.split("=", 1)[1]
+            elif arg.startswith(("Partitions=", "partitions=")):
+                # Comma-joined list of partition names (sacctmgr add user
+                # syntax). Single-partition Partition=name is accepted too,
+                # below, for back-compat with older Slurm syntax.
+                value = arg.split("=", 1)[1]
+                partitions = [p for p in value.split(",") if p]
+            elif arg.startswith(("Partition=", "partition=")):
+                value = arg.split("=", 1)[1]
+                if value:
+                    partitions = [value]
+            elif arg.startswith(("DefaultPartition=", "defaultpartition=")):
+                default_partition = arg.split("=", 1)[1] or None
+            # Share=parent and other fairshare/limit attributes are silently
+            # accepted — real sacctmgr supports them, the emulator does not
+            # model fairshare beyond a flat field, and the WAL-9925 flow only
+            # cares about partition handling.
 
         # Add user if doesn't exist
         if not self.database.get_user(username):
@@ -197,7 +215,13 @@ class SacctmgrEmulator:
         if account:
             if not self.database.get_account(account):
                 return f"sacctmgr: error: Account {account} does not exist"
-            self.database.add_association(username, account, cluster=target_cluster)
+            self.database.add_association(
+                username,
+                account,
+                cluster=target_cluster,
+                partitions=partitions,
+                default_partition=default_partition,
+            )
 
         self.database.save_state()
         return f" Adding User(s)\n  {username}\n Settings\n  Account     = {account}\n  DefaultAccount = {default_account}"
@@ -615,6 +639,10 @@ class SacctmgrEmulator:
                     # Format user limits
                     limits_str = ",".join([f"{k}={v}" for k, v in assoc.limits.items()])
                     row_data.append(limits_str)
+                elif field in {"partition", "partitions"}:
+                    row_data.append(",".join(assoc.partitions))
+                elif field in {"defaultpartition", "def_partition"}:
+                    row_data.append(assoc.default_partition or "")
                 else:
                     row_data.append("")
 
@@ -649,33 +677,55 @@ class SacctmgrEmulator:
 
     def _show_association(self, args: list[str]) -> str:
         """Show association command."""
-        # Parse where clause
+        # Parse where clause and optional format=
         user = ""
         account = ""
+        format_fields: Optional[list[str]] = None
 
-        if "where" in args:
-            where_index = args.index("where")
-            for arg in args[where_index + 1 :]:
-                if arg.startswith("user="):
-                    user = arg.split("=", 1)[1]
-                elif arg.startswith("account="):
-                    account = arg.split("=", 1)[1]
+        for i, arg in enumerate(args):
+            if arg.startswith("format="):
+                format_fields = [f.strip().lower() for f in arg.split("=", 1)[1].split(",")]
+            elif arg == "where":
+                for next_arg in args[i + 1 :]:
+                    if next_arg.startswith("user="):
+                        user = next_arg.split("=", 1)[1]
+                    elif next_arg.startswith("account="):
+                        account = next_arg.split("=", 1)[1]
+
+        # Default (no format= given) keeps the legacy fixed shape so existing
+        # parsers continue to read account|user| at columns 0..1.
+        def _render_default(a: Association) -> str:
+            return f"{a.account}|{a.user}||||||||| |"
+
+        def _render_format(a: Association) -> str:
+            cells = []
+            for f in format_fields or []:
+                if f == "account":
+                    cells.append(a.account)
+                elif f == "user":
+                    cells.append(a.user)
+                elif f in {"partition", "partitions"}:
+                    cells.append(",".join(a.partitions))
+                elif f in {"defaultpartition", "def_partition"}:
+                    cells.append(a.default_partition or "")
+                elif f == "cluster":
+                    cells.append(a.cluster)
+                else:
+                    cells.append("")
+            return "|".join(cells) + "|"
+
+        render = _render_format if format_fields else _render_default
 
         if user and account:
             assoc = self.database.get_association(user, account)
             if assoc:
-                return f"{assoc.account}|{assoc.user}||||||||| |"
+                return render(assoc)
             return ""
-        # List all associations for account
+
         associations = [
             a for a in self.database.associations.values() if not account or a.account == account
         ]
-
-        lines = []
-        for assoc in associations:
-            lines.append(f"{assoc.account}|{assoc.user}||||||||| |")
-
-        return "\n".join(lines)
+        return "\n".join(render(a) for a in associations)
 
     def _show_help(self) -> str:
         """Show help message."""

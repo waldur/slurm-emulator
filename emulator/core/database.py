@@ -77,6 +77,12 @@ class Association:
     user: str
     limits: dict[str, int] = field(default_factory=dict)
     cluster: str = "default"
+    # User-level partition restriction (sacctmgr add user … Partitions=p1,p2).
+    # Empty list means the association is unrestricted at partition scope.
+    partitions: list[str] = field(default_factory=list)
+    # Optional DefaultPartition= per association — selects the partition used
+    # when a user submits a job without `-p`.
+    default_partition: Optional[str] = None
 
 
 @dataclass
@@ -266,12 +272,19 @@ class SlurmDatabase:
         account: str,
         limits: Optional[dict[str, int]] = None,
         cluster: Optional[str] = None,
+        partitions: Optional[list[str]] = None,
+        default_partition: Optional[str] = None,
     ) -> None:
         """Add user-account association."""
         cl = cluster or self.current_cluster
         key = self._association_key(user, account, cl)
         self.associations[key] = Association(
-            account=account, user=user, limits=limits or {}, cluster=cl
+            account=account,
+            user=user,
+            limits=limits or {},
+            cluster=cl,
+            partitions=list(partitions or []),
+            default_partition=default_partition,
         )
 
     def get_association(
@@ -469,6 +482,8 @@ class SlurmDatabase:
                 self.associations = {}
                 for key, data in state.get("associations", {}).items():
                     data.setdefault("cluster", "default")
+                    data.setdefault("partitions", [])
+                    data.setdefault("default_partition", None)
                     assoc = Association(**data)
                     # Migrate old keys ("user:account") to new format ("user:account:cluster")
                     parts = key.split(":")
