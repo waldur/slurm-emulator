@@ -179,15 +179,38 @@ class SacctmgrEmulator:
         account = ""
         default_account = ""
         target_cluster = None
+        partitions: list[str] = []
 
         # Parse parameters
         for arg in args[1:]:
+            lowered = arg.lower()
             if arg.startswith("account="):
                 account = arg.split("=", 1)[1]
             elif arg.startswith("DefaultAccount="):
                 default_account = arg.split("=", 1)[1]
             elif arg.startswith("cluster="):
                 target_cluster = arg.split("=", 1)[1]
+            elif lowered.startswith("partitions="):
+                # Comma-joined list of partition names. Real Slurm's
+                # prefix-match also lets ``Partition=`` (singular) reach
+                # the same handler — covered below.
+                value = arg.split("=", 1)[1]
+                partitions = [p for p in value.split(",") if p]
+            elif lowered.startswith("partition="):
+                value = arg.split("=", 1)[1]
+                if value:
+                    partitions = [value]
+            elif lowered.startswith("defaultpartition="):
+                # Real sacctmgr does NOT recognise DefaultPartition on
+                # add user — neither user_functions.c nor
+                # sacctmgr_set_assoc_rec accepts it, so it falls through
+                # to the "Unknown option" branch with exit_code=1. The
+                # emulator must do the same so callers that rely on the
+                # rejection see it here too.
+                return f" Unknown option: {arg}"
+            # Other association attributes (Share, FairShare, Priority,
+            # GrpJobs, MaxTRES, …) are silently accepted: real sacctmgr
+            # supports them and the emulator does not model them yet.
 
         # Add user if doesn't exist
         if not self.database.get_user(username):
@@ -197,7 +220,23 @@ class SacctmgrEmulator:
         if account:
             if not self.database.get_account(account):
                 return f"sacctmgr: error: Account {account} does not exist"
-            self.database.add_association(username, account, cluster=target_cluster)
+            # One association row per partition (matches
+            # _add_assoc_cond_partition in as_mysql_assoc.c — no base
+            # row is created when partitions are given).
+            if partitions:
+                for part in partitions:
+                    self.database.add_association(
+                        username,
+                        account,
+                        cluster=target_cluster,
+                        partition=part,
+                    )
+            else:
+                self.database.add_association(
+                    username,
+                    account,
+                    cluster=target_cluster,
+                )
 
         self.database.save_state()
         return f" Adding User(s)\n  {username}\n Settings\n  Account     = {account}\n  DefaultAccount = {default_account}"
@@ -349,14 +388,16 @@ class SacctmgrEmulator:
                 username = arg.split("=", 1)[1]
 
         if account and username:
-            # Remove specific association
-            self.database.delete_association(username, account)
+            # Remove every association row for this (user, account),
+            # including every partition-scoped row — mirrors real
+            # sacctmgr remove user where name=… and account=… .
+            self.database.delete_user_associations(username, account)
             result = f" Deleting user association...\n  User: {username}\n  Account: {account}"
         elif account:
             # Remove all users from account
             users = self.database.list_account_users(account)
             for user in users:
-                self.database.delete_association(user, account)
+                self.database.delete_user_associations(user, account)
             result = f" Deleting {len(users)} user association(s) from account {account}"
         else:
             return "sacctmgr: error: Insufficient parameters in where clause"
@@ -615,6 +656,14 @@ class SacctmgrEmulator:
                     # Format user limits
                     limits_str = ",".join([f"{k}={v}" for k, v in assoc.limits.items()])
                     row_data.append(limits_str)
+                elif field == "partition":
+                    row_data.append(assoc.partition or "")
+                elif field in {"partitions", "defaultpartition", "def_partition"}:
+                    # Real sacctmgr's only association format token in
+                    # this space is "Partition" (Part minimum prefix).
+                    # The plural/Default* variants don't exist and
+                    # `common.c:fprintf("Unknown field '%s'")` exits.
+                    return f"sacctmgr: Unknown field '{field}'"
                 else:
                     row_data.append("")
 
@@ -649,33 +698,58 @@ class SacctmgrEmulator:
 
     def _show_association(self, args: list[str]) -> str:
         """Show association command."""
-        # Parse where clause
+        # Parse where clause and optional format=
         user = ""
         account = ""
+        format_fields: Optional[list[str]] = None
 
-        if "where" in args:
-            where_index = args.index("where")
-            for arg in args[where_index + 1 :]:
-                if arg.startswith("user="):
-                    user = arg.split("=", 1)[1]
-                elif arg.startswith("account="):
-                    account = arg.split("=", 1)[1]
+        for i, arg in enumerate(args):
+            if arg.startswith("format="):
+                format_fields = [f.strip().lower() for f in arg.split("=", 1)[1].split(",")]
+            elif arg == "where":
+                for next_arg in args[i + 1 :]:
+                    if next_arg.startswith("user="):
+                        user = next_arg.split("=", 1)[1]
+                    elif next_arg.startswith("account="):
+                        account = next_arg.split("=", 1)[1]
+
+        # Default (no format= given) keeps the legacy fixed shape so existing
+        # parsers continue to read account|user| at columns 0..1.
+        def _render_default(a: Association) -> str:
+            return f"{a.account}|{a.user}||||||||| |"
+
+        def _render_format(a: Association) -> str:
+            cells = []
+            for f in format_fields or []:
+                if f == "account":
+                    cells.append(a.account)
+                elif f == "user":
+                    cells.append(a.user)
+                elif f == "partition":
+                    cells.append(a.partition or "")
+                elif f == "cluster":
+                    cells.append(a.cluster)
+                else:
+                    cells.append("")
+            return "|".join(cells) + "|"
+
+        # Validate format fields up front so the emulator crashes on
+        # the same bogus tokens real sacctmgr rejects (common.c).
+        if format_fields:
+            for f in format_fields:
+                if f in {"partitions", "defaultpartition", "def_partition"}:
+                    return f"sacctmgr: Unknown field '{f}'"
+
+        render = _render_format if format_fields else _render_default
 
         if user and account:
-            assoc = self.database.get_association(user, account)
-            if assoc:
-                return f"{assoc.account}|{assoc.user}||||||||| |"
-            return ""
-        # List all associations for account
+            rows = self.database.list_user_associations(user, account)
+            return "\n".join(render(a) for a in rows)
+
         associations = [
             a for a in self.database.associations.values() if not account or a.account == account
         ]
-
-        lines = []
-        for assoc in associations:
-            lines.append(f"{assoc.account}|{assoc.user}||||||||| |")
-
-        return "\n".join(lines)
+        return "\n".join(render(a) for a in associations)
 
     def _show_help(self) -> str:
         """Show help message."""
