@@ -4,6 +4,14 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.0] - 2026-05-11
+
+### Added
+- Support partition restrictions on user associations
+
+### Fixed
+- Fix changelog insertion formatting and set 0.2.0 release date
+
 ## [Unreleased]
 
 ### Added
