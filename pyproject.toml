@@ -51,6 +51,7 @@ dev = [
 slurm-emulator = "emulator.cli.main:main"
 sacctmgr = "emulator.commands.dispatcher:sacctmgr_main"
 sacct = "emulator.commands.dispatcher:sacct_main"
+sshare = "emulator.commands.dispatcher:sshare_main"
 sinfo = "emulator.commands.dispatcher:sinfo_main"
 scancel = "emulator.commands.dispatcher:scancel_main"
 
