@@ -4,6 +4,11 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] - 2026-05-20
+
+### Added
+- Add sshare command emulation
+
 ## [0.4.0] - 2026-05-11
 
 ### Added
