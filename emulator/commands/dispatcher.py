@@ -7,6 +7,7 @@ from typing import ClassVar, Optional
 from emulator import __version__
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacctmgr import SacctmgrEmulator
+from emulator.commands.sshare import SshareEmulator
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
 
@@ -19,6 +20,7 @@ class SlurmEmulator:
         self.database = SlurmDatabase()
         self.sacctmgr = SacctmgrEmulator(self.database, self.time_engine)
         self.sacct = SacctEmulator(self.database, self.time_engine)
+        self.sshare = SshareEmulator(self.database, self.time_engine)
 
         # Load existing state
         self.database.load_state()
@@ -27,6 +29,7 @@ class SlurmEmulator:
     _VALID_FLAGS: ClassVar[dict[str, set[str]]] = {
         "sacctmgr": {"--parsable2", "--noheader", "--immediate"},
         "sacct": {"--parsable2", "--noheader"},
+        "sshare": {"--parsable2", "--noheader"},
         "scancel": set(),
         "id": set(),
         "sinfo": {"-V"},
@@ -47,7 +50,7 @@ class SlurmEmulator:
             raise SystemExit(f"{command_name}: error: unrecognized arguments: {' '.join(invalid)}")
 
     def extract_cluster_flag(self, args: list[str]) -> tuple[list[str], Optional[str]]:
-        """Extract -M <cluster> or --clusters=<cluster> from args.
+        """Extract -M <cluster>, --cluster=<cluster>, or --clusters=<cluster> from args.
 
         Returns (filtered_args, cluster_name_or_None).
         """
@@ -68,15 +71,21 @@ class SlurmEmulator:
                 cluster = arg.split("=", 1)[1]
                 i += 1
                 continue
+            if arg.startswith("--cluster="):
+                cluster = arg.split("=", 1)[1]
+                i += 1
+                continue
             filtered.append(arg)
             i += 1
         return filtered, cluster
 
     def execute_command(self, command_name: str, args: list[str]) -> str:
         """Execute a SLURM command and return output."""
-        # Only sacct supports -M flag; sacctmgr uses cluster= in args
+        # sacct supports the legacy single -M extraction; sshare parses
+        # its own (multi-cluster) -M / --cluster(s)= internally so the
+        # CLUSTER: banner can be emitted per cluster.
         cluster = None
-        if command_name in ("sacct",):
+        if command_name == "sacct":
             args, cluster = self.extract_cluster_flag(args)
         saved_cluster = self.database.current_cluster
         if cluster:
@@ -89,6 +98,8 @@ class SlurmEmulator:
                 return self.sacctmgr.handle_command(args)
             if command_name == "sacct":
                 return self.sacct.handle_command(args)
+            if command_name == "sshare":
+                return self.sshare.handle_command(args)
             if command_name == "sinfo":
                 return self._handle_sinfo(args)
             if command_name == "scancel":
@@ -211,6 +222,29 @@ def sacct_main():
         sys.exit(1)
 
 
+def sshare_main():
+    """Entry point for sshare command."""
+    emulator = get_emulator()
+    args = sys.argv[1:]
+
+    try:
+        emulator.validate_flags("sshare", args)
+    except SystemExit as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+    # sshare honours --parsable2/--noheader internally (real-sshare
+    # parity), so we do NOT strip them before dispatch.
+    try:
+        output = emulator.execute_command("sshare", args)
+        print(output)
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"sshare: error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def sinfo_main():
     """Entry point for sinfo command."""
     emulator = get_emulator()
@@ -252,6 +286,8 @@ if __name__ == "__main__":
         sacctmgr_main()
     elif command_name == "sacct":
         sacct_main()
+    elif command_name == "sshare":
+        sshare_main()
     elif command_name == "sinfo":
         sinfo_main()
     elif command_name == "scancel":

@@ -43,6 +43,18 @@ class TestValidateFlags:
         with pytest.raises(SystemExit, match="--immediate"):
             self.emulator.validate_flags("sacct", ["--parsable2", "--immediate"])
 
+    # --- sshare accepts --parsable2 and --noheader, rejects --immediate ---
+
+    def test_sshare_accepts_parsable2(self):
+        self.emulator.validate_flags("sshare", ["--parsable2"])
+
+    def test_sshare_accepts_noheader(self):
+        self.emulator.validate_flags("sshare", ["--noheader"])
+
+    def test_sshare_rejects_immediate(self):
+        with pytest.raises(SystemExit, match="unrecognized arguments: --immediate"):
+            self.emulator.validate_flags("sshare", ["--immediate"])
+
     # --- scancel rejects all formatting flags ---
 
     def test_scancel_rejects_parsable2(self):
