@@ -277,6 +277,16 @@ class TestClusterFlagParsing:
         output = emulator.execute_command("sshare", ["--cluster=nope"])
         assert "does not exist" in output
 
+    def test_sshare_multi_cluster_emits_banner_per_cluster(self):
+        """Real sshare (sshare.c:296-316) prints `CLUSTER: <name>`
+        before each cluster block in multi-cluster mode."""
+        emulator = SlurmEmulator()
+        emulator.database.add_cluster("c1")
+        emulator.database.add_cluster("c2")
+        output = emulator.execute_command("sshare", ["-M", "c1,c2", "--parsable2", "--noheader"])
+        assert "CLUSTER: c1" in output
+        assert "CLUSTER: c2" in output
+
 
 class TestSacctmgrClusterCommands:
     """Test sacctmgr add/list/remove cluster commands."""

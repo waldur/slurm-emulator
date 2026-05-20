@@ -81,9 +81,11 @@ class SlurmEmulator:
 
     def execute_command(self, command_name: str, args: list[str]) -> str:
         """Execute a SLURM command and return output."""
-        # sacct and sshare support cluster flags; sacctmgr uses cluster= in args.
+        # sacct supports the legacy single -M extraction; sshare parses
+        # its own (multi-cluster) -M / --cluster(s)= internally so the
+        # CLUSTER: banner can be emitted per cluster.
         cluster = None
-        if command_name in ("sacct", "sshare"):
+        if command_name == "sacct":
             args, cluster = self.extract_cluster_flag(args)
         saved_cluster = self.database.current_cluster
         if cluster:
@@ -231,11 +233,13 @@ def sshare_main():
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-    filtered_args = [a for a in args if a not in ("--parsable2", "--noheader")]
-
+    # sshare honours --parsable2/--noheader internally (real-sshare
+    # parity), so we do NOT strip them before dispatch.
     try:
-        output = emulator.execute_command("sshare", filtered_args)
+        output = emulator.execute_command("sshare", args)
         print(output)
+    except SystemExit:
+        raise
     except Exception as e:
         print(f"sshare: error: {e}", file=sys.stderr)
         sys.exit(1)
