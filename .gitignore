@@ -11,20 +11,19 @@
 /.idea
 /.project
 /.pydevproject
+.vscode/
 
 # llm
 .claude/settings.local.json
 
 # Testing artifacts
-
 TEST-*.xml
 coverage.xml
 test_report.xml
+.coverage
 .cache/
 .pytest_cache/
 pytest.ini
 
 /static
 __pycache__/
-
-.vscode/
