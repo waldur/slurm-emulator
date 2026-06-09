@@ -4,6 +4,11 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.1] - 2026-06-09
+
+### Fixed
+- `sacctmgr list cluster`: honor `format=` and match real SLURM output
+
 ## [Unreleased]
 
 ### Fixed
