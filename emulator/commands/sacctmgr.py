@@ -574,8 +574,42 @@ class SacctmgrEmulator:
         return f" Deleting cluster(s)...\n  {cluster_name}"
 
     def _list_clusters(self, args: list[str]) -> str:
-        """List clusters command."""
+        """List clusters command.
+
+        When ``format=`` is supplied, render only the requested columns and
+        use ``--parsable2`` semantics — fields joined by ``|`` with no
+        trailing separator, and no header line. This matches real SLURM
+        ``sacctmgr --parsable2 --noheader list cluster format=cluster``:
+        with a single field, every line is just the bare cluster name.
+        """
         clusters = self.database.list_clusters()
+
+        format_spec = None
+        for arg in args:
+            if arg.startswith("format="):
+                format_spec = arg.split("=", 1)[1]
+                break
+
+        if format_spec is not None:
+            fields = [f.strip().lower() for f in format_spec.split(",") if f.strip()]
+
+            def _field_value(cluster, field: str) -> str:
+                if field == "cluster":
+                    return cluster.name
+                if field in ("controlhost", "control_host"):
+                    return cluster.control_host
+                if field in ("controlport", "control_port"):
+                    return str(cluster.control_port)
+                if field == "rpc":
+                    return str(cluster.rpc_version)
+                if field == "classification":
+                    return cluster.classification.value if cluster.classification else ""
+                return ""
+
+            lines = []
+            for cluster in clusters:
+                lines.append("|".join(_field_value(cluster, f) for f in fields))
+            return "\n".join(lines)
 
         if not clusters:
             return "Cluster|ControlHost|ControlPort|RPC|Classification|"

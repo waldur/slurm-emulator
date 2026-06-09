@@ -336,6 +336,24 @@ class TestSacctmgrClusterCommands:
         assert "dev" in output
         assert "RPC" in output  # New column
 
+    def test_list_clusters_format_cluster_returns_bare_names(self):
+        # Mirrors real sacctmgr: `--parsable2 --noheader format=cluster`
+        # prints one bare cluster name per line with no `|` (the single
+        # requested column is also the last, hitting SLURM's
+        # PARSABLE_NO_ENDING path). Locks in the output shape consumers
+        # like waldur-site-agent rely on.
+        db = SlurmDatabase()
+        te = TimeEngine()
+        sacctmgr = SacctmgrEmulator(db, te)
+        db.add_cluster("prod")
+        db.add_cluster("dev")
+
+        output = sacctmgr.handle_command(["list", "cluster", "format=cluster"])
+        assert "|" not in output
+        assert "Cluster" not in output  # no header
+        lines = [ln for ln in output.splitlines() if ln.strip()]
+        assert set(lines) == {"default", "prod", "dev"}
+
     def test_remove_cluster(self):
         db = SlurmDatabase()
         te = TimeEngine()
