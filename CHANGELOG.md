@@ -4,20 +4,17 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+- `sacctmgr list cluster` (and `show cluster`) now honor `format=` and match real SLURM output.
+
 ## [0.5.0] - 2026-05-20
 
 ### Added
 - Add sshare command emulation
 
 ## [0.4.0] - 2026-05-11
-
-### Added
-- Support partition restrictions on user associations
-
-### Fixed
-- Fix changelog insertion formatting and set 0.2.0 release date
-
-## [Unreleased]
 
 ### Added
 - Parse `Partitions=p1,p2` (and single-form `Partition=p1`) on `sacctmgr add user`. One `Association` row is created per partition, matching real Slurm's `_add_assoc_cond_partition` in `as_mysql_assoc.c`.
@@ -32,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Fixed
 - Real-Slurm parity: `sacctmgr add user … DefaultPartition=X` now returns `Unknown option: DefaultPartition=X` and does not persist the association — `DefaultPartition` is not a real `sacctmgr add user` attribute (neither `user_functions.c` nor `sacctmgr_set_assoc_rec` accepts it).
 - Real-Slurm parity: `format=partitions`, `format=defaultpartition`, and `format=def_partition` now return `Unknown field 'X'` from `list associations` and `show association` — real Slurm only recognises `Partition` (`common.c` minimum prefix `Part`).
+- Fix changelog insertion formatting and set 0.2.0 release date.
 
 ## [0.3.0] - 2026-04-06
 
