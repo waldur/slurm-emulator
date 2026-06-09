@@ -110,10 +110,31 @@ generate_entry() {
     echo ""
 }
 
+# Remove an existing "## [Unreleased]" section, if any.
+# The new release entry supersedes it, so it should not linger above the new entry.
+strip_unreleased() {
+    if [ ! -f "$CHANGELOG_FILE" ]; then
+        return
+    fi
+    if ! grep -q "^## \[Unreleased\]" "$CHANGELOG_FILE"; then
+        return
+    fi
+    local tmp="$CHANGELOG_FILE.tmp"
+    awk '
+        /^## \[Unreleased\]/ { skip = 1; next }
+        skip && /^## / { skip = 0 }
+        !skip { print }
+    ' "$CHANGELOG_FILE" > "$tmp"
+    mv "$tmp" "$CHANGELOG_FILE"
+    echo "Removed existing [Unreleased] section from $CHANGELOG_FILE"
+}
+
 # Step 3: Insert entry into CHANGELOG.md
 insert_entry() {
     local entry
     entry=$(cat "$CHANGELOG_ENTRY_FILE")
+
+    strip_unreleased
 
     if [ ! -f "$CHANGELOG_FILE" ]; then
         # Create new changelog

@@ -9,11 +9,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Fixed
 - `sacctmgr list cluster`: honor `format=` and match real SLURM output
 
-## [Unreleased]
-
-### Fixed
-- `sacctmgr list cluster` (and `show cluster`) now honor `format=` and match real SLURM output.
-
 ## [0.5.0] - 2026-05-20
 
 ### Added
