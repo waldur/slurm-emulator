@@ -197,6 +197,9 @@ def sacctmgr_main():
     except Exception as e:
         print(f"sacctmgr: error: {e}", file=sys.stderr)
         sys.exit(1)
+    # Propagate the command's exit status (sacctmgr.c sets exit_code=1 on any
+    # error, e.g. "Nothing modified" or a missing parent account).
+    sys.exit(emulator.sacctmgr.exit_code)
 
 
 def sacct_main():
