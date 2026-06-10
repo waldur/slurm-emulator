@@ -157,3 +157,25 @@ class TestAddAccountCreatesParentAssociation:
         assert assoc is not None
         assert assoc.user == ""
         assert assoc.parent == "c-org"
+
+
+class TestAddExistingAccountIsNotAnError:
+    """Re-adding an existing account must not set a non-zero exit code.
+
+    Real sacctmgr reports SLURM_NO_CHANGE_IN_DATA and exits 0 in this case
+    (account_functions.c:341-343). Returning exit 1 here breaks idempotent
+    callers (e.g. the Waldur site agent's account provisioning), which is the
+    regression that the 0.5.2 exit-code work introduced.
+    """
+
+    def test_readding_account_keeps_exit_code_zero(self, tmp_path):
+        em = _emulator(tmp_path)
+        out = em.handle_command(["add", "account", "c-org", "parent=root"])
+        assert "already exists" in out
+        assert em.exit_code == 0
+
+    def test_modify_parent_still_reports_failure(self, tmp_path):
+        # Guard: the fix must not flatten the exit code for genuine failures.
+        em = _emulator(tmp_path)
+        em.handle_command(["modify", "account", "where", "name=p-proj", "set", "parent=c-ghost"])
+        assert em.exit_code == 1
