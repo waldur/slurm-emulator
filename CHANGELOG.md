@@ -4,6 +4,11 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+- `sacctmgr add account` for an account that already exists no longer exits 1; it stays exit 0, matching real Slurm's `SLURM_NO_CHANGE_IN_DATA` behavior. The 0.5.2 exit-code propagation regressed this and broke idempotent callers (e.g. the Waldur site agent's account provisioning).
+
 ## [0.5.2] - 2026-06-10
 
 ### Changed
