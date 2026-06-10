@@ -158,7 +158,7 @@ class SacctmgrEmulator:
             # Account exists globally — but if cluster= specified, just create association
             if target_cluster:
                 if not self.database.get_cluster(target_cluster):
-                    return self._fail(f"sacctmgr: error: Cluster {target_cluster} does not exist")
+                    return f"sacctmgr: error: Cluster {target_cluster} does not exist"
                 assoc_key = self.database._association_key("", account_name, target_cluster)
                 if assoc_key not in self.database.associations:
                     self.database.associations[assoc_key] = Association(
@@ -169,7 +169,9 @@ class SacctmgrEmulator:
                     )
                 self.database.save_state()
                 return f" Adding Account(s)\n  {account_name}\n Settings\n  Cluster    = {target_cluster}"
-            return self._fail(f"sacctmgr: error: Account {account_name} already exists")
+            # Re-adding an existing account is NOT an error in real sacctmgr: it
+            # reports SLURM_NO_CHANGE_IN_DATA and exits 0 (account_functions.c:341).
+            return f"sacctmgr: error: Account {account_name} already exists"
 
         # Add global account (also creates the account-level association on the
         # current cluster carrying parent_acct).
@@ -178,7 +180,7 @@ class SacctmgrEmulator:
         # If cluster= specified, also create the account-level association there.
         if target_cluster:
             if not self.database.get_cluster(target_cluster):
-                return self._fail(f"sacctmgr: error: Cluster {target_cluster} does not exist")
+                return f"sacctmgr: error: Cluster {target_cluster} does not exist"
             assoc_key = self.database._association_key("", account_name, target_cluster)
             self.database.associations[assoc_key] = Association(
                 account=account_name, user="", cluster=target_cluster, parent=parent
