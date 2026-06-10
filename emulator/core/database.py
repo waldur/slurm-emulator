@@ -85,6 +85,11 @@ class Association:
     limits: dict[str, int] = field(default_factory=dict)
     cluster: str = "default"
     partition: Optional[str] = None
+    # parent_acct is stored on the account-level association (user == "").
+    # User associations leave it unset, matching real Slurm where
+    # ``assoc->parent_acct`` is NULL for user rows (see
+    # as_mysql_assoc.c:2116-2126) so ParentName prints blank for them.
+    parent: Optional[str] = None
 
 
 @dataclass
@@ -230,13 +235,36 @@ class SlurmDatabase:
         organization: str,
         parent: Optional[str] = None,
     ) -> None:
-        """Add account to database (global, not per-cluster)."""
+        """Add account to database.
+
+        The account record is global, but — as in real Slurm — every account
+        also has an account-level association (``user == ""``) on a cluster that
+        carries its ``parent_acct``. We create that row on the current cluster so
+        ``show assoc`` / ``show account withassoc`` can report the parent.
+        """
         self.accounts[name] = Account(
             name=name,
             description=description,
             organization=organization,
             parent=parent,
         )
+        key = self._association_key("", name, self.current_cluster)
+        self.associations[key] = Association(
+            account=name, user="", cluster=self.current_cluster, parent=parent
+        )
+
+    def set_account_parent(
+        self, name: str, parent: Optional[str], cluster: Optional[str] = None
+    ) -> None:
+        """Reparent an account: update the record and its account-level association."""
+        cl = cluster or self.current_cluster
+        account = self.accounts.get(name)
+        if account is not None:
+            account.parent = parent
+        key = self._association_key("", name, cl)
+        assoc = self.associations.get(key)
+        if assoc is not None:
+            assoc.parent = parent
 
     def get_account(self, name: str) -> Optional[Account]:
         """Get account by name (global)."""

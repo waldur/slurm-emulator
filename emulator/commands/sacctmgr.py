@@ -13,9 +13,20 @@ class SacctmgrEmulator:
     def __init__(self, database: SlurmDatabase, time_engine: TimeEngine):
         self.database = database
         self.time_engine = time_engine
+        # Mirrors sacctmgr's global ``exit_code`` (sacctmgr.c:61): reset to 0 at
+        # the start of each command, set to 1 by any error path. The dispatcher
+        # propagates it to the process exit status so callers that key off a
+        # non-zero exit (like subprocess.check_output) see real failures.
+        self.exit_code = 0
+
+    def _fail(self, message: str) -> str:
+        """Record a non-zero exit (matching real sacctmgr) and return ``message``."""
+        self.exit_code = 1
+        return message
 
     def handle_command(self, args: list[str]) -> str:
         """Process sacctmgr command and return output."""
+        self.exit_code = 0
         if not args:
             return self._show_help()
 
@@ -108,11 +119,13 @@ class SacctmgrEmulator:
 
         entity = args[0].lower()
 
-        if entity == "account":
+        if entity in {"account", "accounts", "acct"}:
             return self._show_account(args[1:])
-        if entity == "association":
+        # Real sacctmgr prefix-matches the entity: "assoc" is accepted for
+        # "association" (xstrncasecmp, common.c).
+        if entity in {"association", "associations", "assoc"}:
             return self._show_association(args[1:])
-        if entity == "qos":
+        if entity in {"qos", "qoss"}:
             return self._show_qos(args[1:])
         return f"sacctmgr: error: Unknown entity for show: {entity}"
 
@@ -140,30 +153,35 @@ class SacctmgrEmulator:
                 target_cluster = arg.split("=", 1)[1]
 
         # Check if account already exists
-        if self.database.get_account(account_name):
+        existing = self.database.get_account(account_name)
+        if existing:
             # Account exists globally — but if cluster= specified, just create association
             if target_cluster:
                 if not self.database.get_cluster(target_cluster):
-                    return f"sacctmgr: error: Cluster {target_cluster} does not exist"
+                    return self._fail(f"sacctmgr: error: Cluster {target_cluster} does not exist")
                 assoc_key = self.database._association_key("", account_name, target_cluster)
                 if assoc_key not in self.database.associations:
                     self.database.associations[assoc_key] = Association(
-                        account=account_name, user="", cluster=target_cluster
+                        account=account_name,
+                        user="",
+                        cluster=target_cluster,
+                        parent=existing.parent,
                     )
                 self.database.save_state()
                 return f" Adding Account(s)\n  {account_name}\n Settings\n  Cluster    = {target_cluster}"
-            return f"sacctmgr: error: Account {account_name} already exists"
+            return self._fail(f"sacctmgr: error: Account {account_name} already exists")
 
-        # Add global account
+        # Add global account (also creates the account-level association on the
+        # current cluster carrying parent_acct).
         self.database.add_account(account_name, description, organization, parent)
 
-        # If cluster= specified, create association on that cluster
+        # If cluster= specified, also create the account-level association there.
         if target_cluster:
             if not self.database.get_cluster(target_cluster):
-                return f"sacctmgr: error: Cluster {target_cluster} does not exist"
+                return self._fail(f"sacctmgr: error: Cluster {target_cluster} does not exist")
             assoc_key = self.database._association_key("", account_name, target_cluster)
             self.database.associations[assoc_key] = Association(
-                account=account_name, user="", cluster=target_cluster
+                account=account_name, user="", cluster=target_cluster, parent=parent
             )
 
         self.database.save_state()
@@ -241,16 +259,28 @@ class SacctmgrEmulator:
         self.database.save_state()
         return f" Adding User(s)\n  {username}\n Settings\n  Account     = {account}\n  DefaultAccount = {default_account}"
 
+    @staticmethod
+    def _extract_account_filter(cond_args: list[str]) -> Optional[str]:
+        """Resolve the target account name from a modify/where clause.
+
+        Real sacctmgr (account ``_set_cond``) accepts the account either
+        positionally or via ``name=`` / ``account=`` (the ``where`` keyword is
+        optional). Returns the account name, or None if none was given.
+        """
+        for arg in cond_args:
+            low = arg.lower()
+            if low in {"where", "set"}:
+                continue
+            if low.startswith(("name=", "account=")):
+                return arg.split("=", 1)[1]
+            if "=" not in arg:
+                return arg
+        return None
+
     def _modify_account(self, args: list[str]) -> str:
         """Modify account command."""
         if not args:
             return "sacctmgr: error: No account name specified"
-
-        account_name = args[0]
-        account = self.database.get_account(account_name)
-
-        if not account:
-            return f"sacctmgr: error: Account {account_name} does not exist"
 
         # Look for 'set' keyword
         set_index = -1
@@ -261,6 +291,36 @@ class SacctmgrEmulator:
 
         if set_index == -1:
             return "sacctmgr: error: No 'set' clause found"
+
+        account_name = self._extract_account_filter(args[:set_index])
+        account = self.database.get_account(account_name) if account_name else None
+
+        # Parse the set clause up front so reparenting can be handled specially.
+        set_pairs: list[tuple[str, str]] = []
+        for arg in args[set_index + 1 :]:
+            if "=" in arg:
+                key, value = arg.split("=", 1)
+                set_pairs.append((key.lower(), value))
+
+        # ``set parent=`` reparents the account-level association. Match real
+        # sacctmgr semantics (account_functions.c:715-748): a condition that
+        # matches no account, or a no-op change, prints "Nothing modified" and
+        # exits 1; a missing parent account is its own error; a real change
+        # prints "Modified account associations...".
+        parent_value = next((v for k, v in set_pairs if k == "parent"), None)
+        if parent_value is not None:
+            if not account:
+                return self._fail("  Nothing modified")
+            if self.database.get_account(parent_value) is None:
+                return self._fail(f" Parent Account {parent_value} doesn't exist.")
+            if account.parent == parent_value:
+                return self._fail("  Nothing modified")
+            self.database.set_account_parent(account.name, parent_value)
+            self.database.save_state()
+            return f" Modified account associations...\n  {account.name}"
+
+        if not account:
+            return self._fail("  Nothing modified")
 
         # Process set parameters
         modifications = []
@@ -311,12 +371,12 @@ class SacctmgrEmulator:
                 elif key == "rawusage":
                     # Handle raw usage reset
                     if value == "0":
-                        self.database.reset_raw_usage(account_name)
+                        self.database.reset_raw_usage(account.name)
                         modifications.append("RawUsage=0")
 
         self.database.save_state()
 
-        return f" Modified account...\n  {account_name}\n Settings\n  " + "\n  ".join(modifications)
+        return f" Modified account...\n  {account.name}\n Settings\n  " + "\n  ".join(modifications)
 
     def _modify_user(self, args: list[str]) -> str:
         """Modify user command."""
@@ -718,17 +778,78 @@ class SacctmgrEmulator:
         return "\n".join(lines)
 
     def _show_account(self, args: list[str]) -> str:
-        """Show account command."""
-        if not args:
-            return "sacctmgr: error: No account name specified"
+        """Show account command.
 
-        account_name = args[0]
-        account = self.database.get_account(account_name)
+        Mirrors ``sacctmgr show account`` (account_functions.c:436-572):
 
-        if not account:
-            return ""  # No output for non-existent accounts
+        - Without ``WithAssoc`` the account's associations are not loaded, so
+          association fields such as ``ParentName`` print blank (the ``default:``
+          branch passes NULL). One row per account.
+        - With ``WithAssoc`` one row per association is emitted; the account-level
+          row (empty User) carries ParentName, user rows leave it blank.
+        - ``format=`` selects/orders columns. With no ``format=`` the legacy
+          ``Account|Descr|Org|`` shape is kept for existing callers.
+        """
+        positional: list[str] = []
+        format_fields: Optional[list[str]] = None
+        with_assoc = False
+        for arg in args:
+            low = arg.lower()
+            if low.startswith("format="):
+                format_fields = [f.strip().lower() for f in arg.split("=", 1)[1].split(",")]
+            elif low in {"withassoc", "withassociations"}:
+                with_assoc = True
+            elif low == "where":
+                continue
+            elif low.startswith("name="):
+                positional.append(arg.split("=", 1)[1])
+            elif "=" not in arg:
+                positional.append(arg)
 
-        return f"{account.name}|{account.description}|{account.organization}|"
+        accounts = [
+            a for a in self.database.list_accounts() if not positional or a.name in positional
+        ]
+
+        if format_fields is None:
+            # Legacy fixed shape (no association expansion).
+            return "\n".join(f"{a.name}|{a.description}|{a.organization}|" for a in accounts)
+
+        def _account_cell(account, field: str, parentname: str) -> str:
+            if field == "account":
+                return account.name
+            if field in {"descr", "description"}:
+                return account.description
+            if field in {"org", "organization"}:
+                return account.organization
+            if field == "parentname":
+                return parentname
+            if field == "user":
+                return ""
+            return ""
+
+        lines: list[str] = []
+        for account in accounts:
+            if not with_assoc:
+                # No association loaded → ParentName (and other assoc fields) blank.
+                lines.append("|".join(_account_cell(account, f, "") for f in format_fields) + "|")
+                continue
+            assocs = [
+                a
+                for a in self.database.associations.values()
+                if a.account == account.name and a.cluster == self.database.current_cluster
+            ]
+            for assoc in assocs:
+                cells = []
+                for f in format_fields:
+                    if f == "user":
+                        cells.append(assoc.user)
+                    elif f == "parentname":
+                        # Only the account-level row (empty User) carries parent.
+                        cells.append(assoc.parent or "" if assoc.user == "" else "")
+                    else:
+                        cells.append(_account_cell(account, f, assoc.parent or ""))
+                lines.append("|".join(cells) + "|")
+        return "\n".join(lines)
 
     def _show_association(self, args: list[str]) -> str:
         """Show association command."""
@@ -737,15 +858,15 @@ class SacctmgrEmulator:
         account = ""
         format_fields: Optional[list[str]] = None
 
-        for i, arg in enumerate(args):
+        # The ``where`` keyword is optional in real sacctmgr — ``user=``/``account=``
+        # conditions are accepted whether or not it is present.
+        for arg in args:
             if arg.startswith("format="):
                 format_fields = [f.strip().lower() for f in arg.split("=", 1)[1].split(",")]
-            elif arg == "where":
-                for next_arg in args[i + 1 :]:
-                    if next_arg.startswith("user="):
-                        user = next_arg.split("=", 1)[1]
-                    elif next_arg.startswith("account="):
-                        account = next_arg.split("=", 1)[1]
+            elif arg.startswith("user="):
+                user = arg.split("=", 1)[1]
+            elif arg.startswith("account="):
+                account = arg.split("=", 1)[1]
 
         # Default (no format= given) keeps the legacy fixed shape so existing
         # parsers continue to read account|user| at columns 0..1.
@@ -763,6 +884,10 @@ class SacctmgrEmulator:
                     cells.append(a.partition or "")
                 elif f == "cluster":
                     cells.append(a.cluster)
+                elif f == "parentname":
+                    # parent_acct lives on the account-level row (empty User);
+                    # user rows print blank (as_mysql_assoc.c:2116-2126).
+                    cells.append(a.parent or "" if a.user == "" else "")
                 else:
                     cells.append("")
             return "|".join(cells) + "|"
