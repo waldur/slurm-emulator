@@ -8,7 +8,7 @@ GET handlers never write state; POST/DELETE handlers call
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from fastapi import APIRouter, Depends, Request
 
@@ -27,6 +27,7 @@ from emulator.api.slurmrestd.schemas import (
     dbd_job_to_dict,
     qos_to_dict,
     tres_entry,
+    tres_list_from_str,
     tres_str_from_list,
     user_to_dict,
 )
@@ -63,6 +64,50 @@ def _bad_request(request, state, description: str):
 
 def _account_assocs(state: RequestState, name: str) -> list[Association]:
     return [a for a in state.database.associations.values() if a.account == name]
+
+
+def _csv_list(value: Union[str, list, None]) -> list[str]:
+    """CSV_STRING_LIST fields accept either a JSON list or a CSV string."""
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item)]
+    return []
+
+
+def _limits_from_rec_set(rec_set: dict[str, Any]) -> dict[str, int]:
+    """Map flat ASSOC_REC_SET TRES_STR fields onto emulator limit keys.
+
+    ``association_condition.association`` carries sacctmgr-style flat
+    names with CSV TRES strings (ASSOC_REC_SET, parsers.c:8685-8732),
+    unlike the nested ``max`` subtree of plain ASSOC objects.
+    """
+    limits: dict[str, int] = {}
+    prefixes = {
+        "grptresmins": "GrpTRESMins",
+        "grptres": "GrpTRES",
+        "maxtresminsperjob": "MaxTRESMins",
+    }
+    for field, prefix in prefixes.items():
+        value = rec_set.get(field)
+        if isinstance(value, str) and value:
+            for tres_type, count in tres_str_from_list(tres_list_from_str(value)).items():
+                limits[f"{prefix}:{tres_type}"] = count
+    return limits
+
+
+def _ensure_account_association(
+    state: RequestState, account: str, cluster: str, parent: Optional[str]
+) -> None:
+    """Make sure the account-level association row exists on the cluster."""
+    key = state.database._association_key("", account, cluster)
+    assoc = state.database.associations.get(key)
+    if assoc is None:
+        state.database.associations[key] = Association(
+            account=account, user="", cluster=cluster, parent=parent
+        )
+    elif parent:
+        assoc.parent = parent
 
 
 def _user_assocs(state: RequestState, name: str) -> list[Association]:
@@ -355,8 +400,48 @@ async def post_accounts_association(
     request: Request,
     state: StateDep,
 ):
+    """``sacctmgr add account`` equivalent.
+
+    Real request shape (OPENAPI_ACCOUNTS_ADD_COND_RESP /
+    ACCOUNTS_ADD_COND, parsers.c:11038-11046 + 13090-13096):
+    ``{"association_condition": {"accounts": [...], "clusters": [...],
+    "association": {<ASSOC_REC_SET>}}, "account": {"description": ...,
+    "organization": ...}}``. The legacy emulator-only
+    ``{"accounts": [...]}`` shape is still accepted.
+    """
     body = await _json_body(request)
-    added: list[str] = []
+    condition = body.get("association_condition")
+    if condition is not None:
+        accounts = _csv_list(condition.get("accounts"))
+        if not accounts:
+            return _bad_request(request, state, "No accounts specified")
+        clusters = _csv_list(condition.get("clusters")) or [state.cluster]
+        rec_set = condition.get("association") or {}
+        account_short = body.get("account") or {}
+        parent = rec_set.get("parent") or None
+        limits = _limits_from_rec_set(rec_set)
+        added: list[str] = []
+        for name in accounts:
+            entry: dict[str, Any] = {"name": name}
+            if "description" in account_short:
+                entry["description"] = account_short["description"]
+            if "organization" in account_short:
+                entry["organization"] = account_short["organization"]
+            if parent:
+                entry["parent_account"] = parent
+            _upsert_account(state, entry)
+            added.append(name)
+            account_obj = state.database.get_account(name)
+            if account_obj is not None and limits:
+                account_obj.limits.update(limits)
+            if account_obj is not None and rec_set.get("fairshare") is not None:
+                account_obj.fairshare = int(rec_set["fairshare"])
+            for cluster in clusters:
+                _ensure_account_association(state, name, cluster, parent)
+        state.commit()
+        return _respond(request, state, {"added_accounts": added})
+
+    added = []
     for entry in body.get("accounts", []):
         name = _upsert_account(state, entry)
         if name is None:
@@ -461,8 +546,61 @@ async def post_users_association(
     request: Request,
     state: StateDep,
 ):
+    """``sacctmgr add user`` equivalent.
+
+    Real request shape (OPENAPI_USERS_ADD_COND_RESP / USERS_ADD_COND,
+    parsers.c:11061-11069 + 13100-13108):
+    ``{"association_condition": {"users": [...], "accounts": [...],
+    "clusters": [...], "partitions": [...], "association":
+    {<ASSOC_REC_SET>}}, "user": {"default": {"account": ...},
+    "administrator_level": ...}}``. Creates the user records and one
+    association per user x account x cluster (x partition). The legacy
+    emulator-only ``{"users": [...]}`` shape is still accepted.
+    """
     body = await _json_body(request)
-    added: list[str] = []
+    condition = body.get("association_condition")
+    if condition is not None:
+        users = _csv_list(condition.get("users"))
+        if not users:
+            return _bad_request(request, state, "No users specified")
+        accounts = _csv_list(condition.get("accounts"))
+        clusters = _csv_list(condition.get("clusters")) or [state.cluster]
+        partitions = _csv_list(condition.get("partitions")) or [None]
+        rec_set = condition.get("association") or {}
+        user_short = body.get("user") or {}
+        default_account = (user_short.get("default") or {}).get("account", "")
+        limits = _limits_from_rec_set(rec_set)
+        added: list[str] = []
+        for username in users:
+            # sacctmgr defaults a new user's DefaultAccount to the first
+            # account it is being added to (user_functions.c).
+            entry: dict[str, Any] = {"name": username}
+            effective_default = default_account or (accounts[0] if accounts else "")
+            if effective_default:
+                entry["default"] = {"account": effective_default}
+            _upsert_user(state, entry)
+            added.append(username)
+            for account in accounts:
+                for cluster in clusters:
+                    for partition in partitions:
+                        assoc_entry: dict[str, Any] = {
+                            "account": account,
+                            "user": username,
+                            "cluster": cluster,
+                        }
+                        if partition:
+                            assoc_entry["partition"] = partition
+                        _upsert_association(state, assoc_entry)
+                        if limits:
+                            assoc = state.database.get_association(
+                                username, account, cluster=cluster, partition=partition
+                            )
+                            if assoc is not None:
+                                assoc.limits.update(limits)
+        state.commit()
+        return _respond(request, state, {"added_users": added})
+
+    added = []
     for entry in body.get("users", []):
         name = _upsert_user(state, entry)
         if name is None:
@@ -520,13 +658,27 @@ def _upsert_association(state: RequestState, entry: dict[str, Any]) -> bool:
             )
     else:
         # Account-level association: created by add_account; apply
-        # parent/limits updates on the existing row.
+        # parent/limits/qos/fairshare updates on the existing row.
+        # ASSOC parser fields qos ("qos"), default qos ("default/qos") and
+        # shares_raw are settable via POST /associations/ in real
+        # slurmrestd (parsers.c:8780-8790).
         if entry.get("parent_account"):
             state.database.set_account_parent(account, entry["parent_account"], cluster=cluster)
-        if limits:
-            account_obj = state.database.get_account(account)
-            if account_obj is not None:
+        account_obj = state.database.get_account(account)
+        if account_obj is not None:
+            if limits:
                 account_obj.limits.update(limits)
+            qos_list = entry.get("qos")
+            if isinstance(qos_list, list) and qos_list:
+                account_obj.qos = ",".join(str(q) for q in qos_list)
+            default_qos = (entry.get("default") or {}).get("qos")
+            if default_qos:
+                account_obj.default_qos = str(default_qos)
+            shares = entry.get("shares_raw")
+            if isinstance(shares, dict):
+                shares = shares.get("number") if shares.get("set") else None
+            if shares is not None:
+                account_obj.fairshare = int(shares)
     return True
 
 

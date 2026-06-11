@@ -161,10 +161,14 @@ def assoc_to_dict(assoc: Association, account: Optional[Account]) -> dict[str, A
         "parent_account": assoc.parent or "",
         "is_default": True,
         "lineage": _lineage(assoc, account),
-        "qos": [account.qos] if account and not assoc.user else [],
+        # account.qos holds a CSV QoS list (sacctmgr "qos=a,b" semantics);
+        # the REST payload renders it as a list of names.
+        "qos": ([q for q in account.qos.split(",") if q] if account and not assoc.user else []),
         "shares_raw": account.fairshare if account else 1,
         "comment": "",
-        "default": {"qos": account.qos if account else "normal"},
+        "default": {
+            "qos": (account.default_qos or account.qos.split(",")[0]) if account else "normal"
+        },
         "flags": [],
         "max": {
             "jobs": {"active": uint_no_val(), "total": uint_no_val()},
