@@ -110,7 +110,9 @@ class SlurmEmulator:
         if args and args[0] == "-V":
             return f"slurm-emulator {__version__}"
 
-        # Return basic cluster info
+        # Return basic cluster info. This topology must stay in sync with
+        # the REST emulation (emulator/api/slurmrestd/schemas.py:
+        # PARTITION_RANGES).
         return """PARTITION AVAIL  TIMELIMIT  NODES  STATE NODELIST
 debug*       up   infinite      4   idle node[001-004]
 compute      up   infinite     96   idle node[005-100]"""

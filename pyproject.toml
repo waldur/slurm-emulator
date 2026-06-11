@@ -39,6 +39,7 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "httpx>=0.24.0",  # fastapi.testclient backend
     "ruff>=0.12.1",
     "mypy>=1.0.0",
     "pre-commit>=3.0.0",
@@ -49,6 +50,7 @@ dev = [
 
 [project.scripts]
 slurm-emulator = "emulator.cli.main:main"
+slurmrestd-emulator = "emulator.api.slurmrestd.app:main"
 sacctmgr = "emulator.commands.dispatcher:sacctmgr_main"
 sacct = "emulator.commands.dispatcher:sacct_main"
 sshare = "emulator.commands.dispatcher:sshare_main"

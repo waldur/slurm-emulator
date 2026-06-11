@@ -34,6 +34,10 @@ uv run --with mypy mypy emulator/
 - `sacct` lives in `emulator/commands/sacct.py`.
 - Command dispatch and script entry points live in
   `emulator/commands/dispatcher.py`.
+- The slurmrestd REST API emulation (Slurm 26.11, v0.0.46, port 6820)
+  lives in `emulator/api/slurmrestd/`; it must stay consistent with the
+  command emulators (shared `SlurmDatabase`, sacct job math, sinfo
+  topology).
 
 When adding command support, wire it through the dispatcher, add a
 `[project.scripts]` entry in `pyproject.toml`, and include unit tests for
