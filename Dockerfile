@@ -4,9 +4,9 @@ WORKDIR /app
 
 COPY . .
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir . && chmod +x scripts/docker-entrypoint.sh
 
-# Expose SLURM emulator API port
-EXPOSE 8080
+# 8080 — Waldur control API, 6820 — slurmrestd emulation
+EXPOSE 8080 6820
 
-CMD ["python3", "-m", "uvicorn", "emulator.api.emulator_server:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["/app/scripts/docker-entrypoint.sh"]

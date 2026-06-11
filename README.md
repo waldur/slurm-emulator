@@ -186,6 +186,63 @@ curl -X POST http://localhost:8080/api/submit-report \\
 curl -X POST "http://localhost:8080/api/time/advance?months=3"
 ```
 
+## SLURM REST API Emulation (slurmrestd)
+
+The emulator also serves the Slurm 26.11 REST API (`slurmrestd`,
+data parser `v0.0.46`) on port 6820, backed by the same state as the
+CLI commands and the control API:
+
+```bash
+uv run slurmrestd-emulator
+# or: uv run uvicorn emulator.api.slurmrestd.app:app --host 0.0.0.0 --port 6820
+```
+
+### Endpoint families
+
+- `/slurmdb/v0.0.46/...` — accounting: `accounts`, `users`,
+  `associations`, `qos`, `tres`, `clusters`, `jobs` (one job per usage
+  record, matching `sacct` output), `ping`, `diag`, `config`. Write
+  support (POST/DELETE) covers everything Waldur drives via `sacctmgr`.
+- `/slurm/v0.0.46/...` — controller read paths: `jobs` (+ `DELETE
+  /job/{job_id}` as the `scancel` equivalent), `nodes`, `partitions`
+  (static topology matching `sinfo`), `shares`, `ping`, `diag`, `conf`;
+  `reservations`/`licenses` are empty stubs.
+- `/openapi.json`, `/openapi`, `/openapi/v3` — generated self-description.
+
+Responses use the real envelope (`meta`/`errors`/`warnings`, payload
+keys and field names from the v0.0.46 data parser). Unsupported URL
+versions (e.g. `v0.0.45`), unknown paths, and auth failures reject
+with slurmrestd's plain-text errors and exit statuses.
+
+### Authentication
+
+Requests need an `X-SLURM-USER-TOKEN` header (or `Authorization:
+Bearer`); `X-SLURM-USER-NAME` optionally names the user. By default
+any non-empty token is accepted. Set `SLURM_EMULATOR_JWT_KEY` to
+enforce real HS256 verification. Mint tokens via the control API
+(`scontrol token` stand-in):
+
+```bash
+curl -X POST http://localhost:8080/api/token \
+  -H "Content-Type: application/json" -d '{"username": "alice"}'
+
+curl http://localhost:6820/slurmdb/v0.0.46/accounts/ \
+  -H "X-SLURM-USER-TOKEN: <token>"
+```
+
+### State sharing and concurrency
+
+Both API servers and the CLI commands persist to the same JSON state
+files (`/tmp/slurm_emulator_db.json`, `/tmp/slurm_emulator_time.json`;
+override with `SLURM_EMULATOR_STATE_FILE` / `SLURM_EMULATOR_TIME_FILE`).
+The slurmrestd app reloads state on every request and saves after
+writes — file locking prevents torn writes, but concurrent writers are
+last-writer-wins. Note the control API on 8080 loads state once at
+startup, so it can serve stale reads after REST/CLI writes.
+
+The Docker image runs both servers (ports 8080 and 6820) via
+`scripts/docker-entrypoint.sh`.
+
 ## Waldur Site Agent Integration
 
 Configure waldur-site-agent to use the emulator:

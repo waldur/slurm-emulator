@@ -66,6 +66,7 @@ Use these commands:
 
 - **Interactive CLI**: `uv run slurm-emulator`
 - **API Server**: `uv run uvicorn emulator.api.emulator_server:app --host 0.0.0.0 --port 8080`
+- **slurmrestd API**: `uv run slurmrestd-emulator` (Slurm 26.11 REST API v0.0.46 on port 6820)
 - **Direct commands**: `uv run sacctmgr`, `uv run sacct`, `uv run sinfo`
 
 ### Testing and Quality
@@ -167,6 +168,11 @@ This approach ensures code quality while keeping development velocity for an emu
 
 - **CLI Interface** (`emulator/cli/main.py`) - Interactive time travel interface
 - **API Server** (`emulator/api/emulator_server.py`) - REST API for waldur-site-agent
+- **slurmrestd Emulation** (`emulator/api/slurmrestd/`) - Slurm 26.11 REST API (v0.0.46) on
+  port 6820: `/slurmdb` CRUD + `/slurm` controller read paths, real response envelopes,
+  JWT-style auth (`X-SLURM-USER-TOKEN`, optional `SLURM_EMULATOR_JWT_KEY` verification).
+  Shares state with the CLI commands via the JSON state files
+  (`SLURM_EMULATOR_STATE_FILE` / `SLURM_EMULATOR_TIME_FILE` overrides)
 - **Scenario Runner** (`emulator/scenarios/sequence_scenario.py`) - Complete test scenarios
 
 ## Key Features
@@ -285,6 +291,15 @@ print('Current quarter:', te.get_current_quarter())
 - `POST /api/submit-report` - From site agent
 - `POST /api/downscale-resource` - QoS management
 - `GET /api/status` - System status
+- `POST /api/token` - Mint a JWT for the slurmrestd API (scontrol token stand-in)
+
+### slurmrestd Endpoints (port 6820)
+- `/slurmdb/v0.0.46/...` - accounts, users, associations, qos, tres, clusters, jobs
+  (one job per usage record, matching `sacct` output)
+- `/slurm/v0.0.46/...` - jobs (+ `DELETE /job/{id}` = scancel), nodes, partitions,
+  shares, ping, diag
+- Auth header required: `X-SLURM-USER-TOKEN` (any token accepted unless
+  `SLURM_EMULATOR_JWT_KEY` is set)
 
 ### Configuration
 ```yaml
