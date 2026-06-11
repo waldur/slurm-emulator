@@ -100,3 +100,21 @@ class TestValidateFlags:
     def test_error_message_includes_command_name(self):
         with pytest.raises(SystemExit, match="scancel: error:"):
             self.emulator.validate_flags("scancel", ["--immediate"])
+
+
+class TestParsableFlagAccepted:
+    def setup_method(self):
+        self.emulator = SlurmEmulator()
+
+    def test_sacctmgr_accepts_parsable(self):
+        self.emulator.validate_flags("sacctmgr", ["--parsable", "list", "accounts"])
+
+    def test_sacct_accepts_parsable(self):
+        self.emulator.validate_flags("sacct", ["--parsable"])
+
+    def test_sshare_accepts_parsable(self):
+        self.emulator.validate_flags("sshare", ["--parsable"])
+
+    def test_scancel_rejects_parsable(self):
+        with pytest.raises(SystemExit, match="unrecognized arguments: --parsable"):
+            self.emulator.validate_flags("scancel", ["--parsable"])

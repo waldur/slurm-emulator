@@ -1,11 +1,100 @@
-"""sacct command emulator for usage reporting."""
+"""sacct command emulator for usage reporting.
 
-from datetime import datetime
-from typing import Any, Optional, Union
+Output formatting and exit codes mirror real Slurm 26.11:
+
+* default fields are ``JobID,JobName,Partition,Account,AllocCPUS,
+  State,ExitCode`` (src/sacct/sacct.h:66) with the widths from the
+  field table in src/sacct/sacct.c:43-169 (negative = left-aligned);
+* header + dashed underline, ``-p``/``-P``/``-n`` parsable/noheader
+  modes, and ``value[:width-1]+'+'`` truncation come from the shared
+  print_fields module (src/common/print_fields.c semantics);
+* ``Elapsed`` renders ``[D-]HH:MM:SS`` (``secs2time_str``,
+  src/common/parse_time.c:849-874);
+* an invalid time spec prints ``Invalid time specification (pos=N):
+  <str>`` to stderr — no ``sacct:`` prefix, parse_time.c:626-631 — and
+  exits 1; an unknown format field prints ``sacct: error: Invalid field
+  requested: "X"`` and exits 1 (options.c:1215-1216);
+* without ``-S``/``-E`` the window is Midnight → Now on the simulated
+  clock (slurmdb_job_cond_def_start_end, slurmdb_defs.c:350-395);
+* one job row per usage record: numeric JobID from the database,
+  standard TRES string (``cpu=...,mem=...G,node=1,billing=...``) in
+  TRES-id order — the emulator-internal ``node-hours`` key is not
+  exposed.
+
+Documented simplifications: ``-X``/``--allocations`` is a no-op (the
+emulator has no job steps, and real ``-X`` only filters step rows);
+``-a``/``--allusers`` is a no-op (no UID model); jobs are single-node
+(``node001``, partition ``compute``, matching the sinfo emulator).
+"""
+
+import re
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Optional
 
 from emulator import __version__
+from emulator.commands.print_fields import (
+    FieldSpec,
+    OutputMode,
+    UnknownFieldError,
+    parse_format_spec,
+    render_table,
+    resolve_format,
+)
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
+
+# Subset of the real field table (src/sacct/sacct.c:43-169), in table
+# order so prefix matching resolves like options.c:1204-1208 (first
+# match wins, no minimum prefix length).
+_REGISTRY: list[FieldSpec] = [
+    FieldSpec("Account", 10),  # sacct.c:44
+    FieldSpec("AllocCPUS", 10, truncate=False),  # sacct.c:46
+    FieldSpec("AllocNodes", 10),  # sacct.c:47
+    FieldSpec("AllocTRES", 10),  # sacct.c:48
+    FieldSpec("Cluster", 10),  # sacct.c:58
+    FieldSpec("Elapsed", 10),  # sacct.c:69
+    FieldSpec("ElapsedRaw", 10, truncate=False),  # sacct.c:70
+    FieldSpec("End", 19),  # sacct.c:72
+    FieldSpec("ExitCode", 8),  # sacct.c:74
+    FieldSpec("JobID", -12),  # sacct.c:80
+    FieldSpec("JobIDRaw", -12),  # sacct.c:81
+    FieldSpec("JobName", 10),  # sacct.c:82
+    FieldSpec("NNodes", 8, truncate=False),  # sacct.c:105
+    FieldSpec("NodeList", 15),  # sacct.c:106
+    FieldSpec("Partition", 10),  # sacct.c:110
+    FieldSpec("ReqTRES", 10),  # sacct.c:126
+    FieldSpec("Start", 19),  # sacct.c:133
+    FieldSpec("State", 10),  # sacct.c:134
+    FieldSpec("Submit", 19),  # sacct.c:138
+    FieldSpec("Timelimit", 10),  # sacct.c:143
+    FieldSpec("User", 9),  # sacct.c:163
+]
+
+_DEFAULT_FORMAT = "JobID,JobName,Partition,Account,AllocCPUS,State,ExitCode"  # sacct.h:66
+
+# Standard node config used by the usage simulator
+# (usage_simulator.py:156-165): fallback rates when a record carries no
+# raw_tres breakdown.
+_NODE_CPUS = 64
+_NODE_MEM_GB = 512
+_NODE_GPUS = 4
+
+_FAILED_STATES = ("FAILED", "OUT_OF_MEMORY", "TIMEOUT")
+
+
+@dataclass
+class _Config:
+    accounts: list[str] = field(default_factory=list)
+    users: list[str] = field(default_factory=list)
+    clusters: list[str] = field(default_factory=list)
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    format_spec: str = _DEFAULT_FORMAT
+    mode: OutputMode = field(default_factory=OutputMode)
+    noconvert: bool = False
+    version: bool = False
 
 
 class SacctEmulator:
@@ -14,300 +103,283 @@ class SacctEmulator:
     def __init__(self, database: SlurmDatabase, time_engine: TimeEngine):
         self.database = database
         self.time_engine = time_engine
+        # Mirrors sacct's exit handling: 0 unless an error path ran.
+        self.exit_code = 0
 
     def handle_command(self, args: list[str]) -> str:
         """Process sacct command and return output."""
-        # Parse command line arguments
+        self.exit_code = 0
         config = self._parse_args(args)
 
-        if config.get("version"):
+        if config.version:
             return f"slurm-emulator {__version__}"
 
-        # Get usage records based on filters
+        try:
+            fields = resolve_format(parse_format_spec(config.format_spec), _REGISTRY)
+        except UnknownFieldError as e:
+            # options.c:1215-1216 via error(): "sacct: error: ..." on stderr.
+            print(f'sacct: error: Invalid field requested: "{e.token}"', file=sys.stderr)
+            self.exit_code = 1
+            raise SystemExit(1) from None
+
         records = self._get_filtered_records(config)
+        rows = [self._row(record, config) for record in records]
+        return render_table(fields, rows, config.mode)
 
-        # Format output based on requested format
-        return self._format_output(records, config)
+    def _parse_args(self, args: list[str]) -> _Config:
+        """Parse sacct command line arguments (short and long forms)."""
+        cfg = _Config()
 
-    def _parse_args(self, args: list[str]) -> dict[str, Any]:
-        """Parse sacct command line arguments."""
-        config: dict[str, Union[bool, str, list[Any], Optional[datetime]]] = {
-            "accounts": [],
-            "users": [],
-            "clusters": [],
-            "start_time": None,
-            "end_time": None,
-            "format": "Account,ReqTRES,Elapsed,User",
-            "allocations": False,
-            "allusers": False,
-            "noconvert": False,
-            "truncate": False,
-            "version": False,
+        def _csv(value: str) -> list[str]:
+            return [item.strip() for item in value.split(",") if item.strip()]
+
+        # (short, long names, attribute or handler key)
+        value_opts = {
+            "-S": "start",
+            "--starttime": "start",
+            "-E": "end",
+            "--endtime": "end",
+            "-A": "accounts",
+            "--accounts": "accounts",
+            "--account": "accounts",
+            "-u": "users",
+            "--user": "users",
+            "--users": "users",
+            "--uid": "users",
+            "-M": "clusters",
+            "--cluster": "clusters",
+            "--clusters": "clusters",
+            "-o": "format",
+            "--format": "format",
+            "--fields": "format",
         }
+        flag_opts = {
+            "-V": "version",
+            "--version": "version",
+            "-n": "noheader",
+            "--noheader": "noheader",
+            "-p": "parsable",
+            "--parsable": "parsable",
+            "-P": "parsable2",
+            "--parsable2": "parsable2",
+            "-X": "noop",
+            "--allocations": "noop",
+            "-a": "noop",
+            "--allusers": "noop",
+            "--noconvert": "noconvert",
+            "--truncate": "noop",
+            "-b": "noop",
+            "--brief": "noop",
+        }
+
+        def _apply(key: str, value: str) -> None:
+            if key == "start":
+                cfg.start_time = self._parse_time(value)
+            elif key == "end":
+                cfg.end_time = self._parse_time(value)
+            elif key == "accounts":
+                cfg.accounts.extend(_csv(value))
+            elif key == "users":
+                cfg.users.extend(_csv(value))
+            elif key == "clusters":
+                cfg.clusters.extend(_csv(value))
+            elif key == "format":
+                cfg.format_spec = value
 
         i = 0
         while i < len(args):
             arg = args[i]
+            if arg in flag_opts:
+                action = flag_opts[arg]
+                if action == "version":
+                    cfg.version = True
+                elif action == "noheader":
+                    cfg.mode.noheader = True
+                elif action == "parsable":
+                    cfg.mode.parsable = "p"
+                elif action == "parsable2":
+                    cfg.mode.parsable = "P"
+                elif action == "noconvert":
+                    cfg.noconvert = True
+                i += 1
+                continue
+            if "=" in arg and arg.split("=", 1)[0] in value_opts:
+                name, value = arg.split("=", 1)
+                _apply(value_opts[name], value)
+                i += 1
+                continue
+            if arg in value_opts:
+                if i + 1 >= len(args):
+                    print(f"sacct: error: missing argument for {arg}", file=sys.stderr)
+                    self.exit_code = 1
+                    raise SystemExit(1)
+                _apply(value_opts[arg], args[i + 1])
+                i += 2
+                continue
+            # Attached short-option value, e.g. -S2024-01-01.
+            if len(arg) > 2 and arg[:2] in value_opts and arg[1] != "-":
+                _apply(value_opts[arg[:2]], arg[2:])
+                i += 1
+                continue
+            print(f"sacct: error: unrecognized arguments: {arg}", file=sys.stderr)
+            self.exit_code = 1
+            raise SystemExit(1)
 
-            if arg == "-V":
-                config["version"] = True
-            elif arg == "--noconvert":
-                config["noconvert"] = True
-            elif arg == "--truncate":
-                config["truncate"] = True
-            elif arg == "--allocations":
-                config["allocations"] = True
-            elif arg == "--allusers":
-                config["allusers"] = True
-            elif arg.startswith("--starttime="):
-                config["start_time"] = self._parse_time(arg.split("=", 1)[1])
-            elif arg.startswith("--endtime="):
-                config["end_time"] = self._parse_time(arg.split("=", 1)[1])
-            elif arg.startswith("--accounts="):
-                accounts_str = arg.split("=", 1)[1]
-                config["accounts"] = [a.strip() for a in accounts_str.split(",")]
-            elif arg.startswith("--users="):
-                users_str = arg.split("=", 1)[1]
-                config["users"] = [u.strip() for u in users_str.split(",")]
-            elif arg.startswith("--clusters="):
-                clusters_str = arg.split("=", 1)[1]
-                config["clusters"] = [c.strip() for c in clusters_str.split(",")]
-            elif arg.startswith("--format="):
-                config["format"] = arg.split("=", 1)[1]
-            elif arg == "-a":
-                # All jobs (including completed)
-                pass
-            elif arg.startswith("--account="):
-                accounts = config["accounts"]
-                if isinstance(accounts, list):
-                    accounts.append(arg.split("=", 1)[1])
-            elif arg.startswith("--user="):
-                users = config["users"]
-                if isinstance(users, list):
-                    users.append(arg.split("=", 1)[1])
-
-            i += 1
-
-        return config
+        return cfg
 
     def _parse_time(self, time_str: str) -> datetime:
-        """Parse time string in various formats."""
-        # Handle YYYY-MM-DD format
-        if "T" not in time_str and ":" not in time_str:
-            return datetime.strptime(time_str, "%Y-%m-%d")
-        # Handle YYYY-MM-DDTHH:MM:SS format
-        if "T" in time_str:
-            return datetime.fromisoformat(time_str)
-        # Try other common formats
+        """Parse a sacct time spec on the simulated clock.
+
+        Supports the common parse_time() forms: ISO dates/datetimes,
+        ``HH:MM[:SS]`` (today), ``now[{+|-}count[unit]]``, ``today``,
+        ``midnight``. Failure mirrors parse_time.c:626-631: the message
+        goes to stderr without a ``sacct:`` prefix and the process
+        exits 1.
+        """
         try:
-            return datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            return datetime.strptime(time_str, "%Y-%m-%d")
+            return self._parse_time_inner(time_str)
+        except (ValueError, IndexError):
+            print(f"Invalid time specification (pos=0): {time_str}", file=sys.stderr)
+            self.exit_code = 1
+            raise SystemExit(1) from None
 
-    def _get_filtered_records(self, config: dict[str, Any]) -> list[UsageRecord]:
+    def _parse_time_inner(self, time_str: str) -> datetime:
+        """Parse one time spec; raises ValueError on anything bogus."""
+        now = self.time_engine.get_current_time()
+        text = time_str.strip()
+        lowered = text.lower()
+
+        if lowered in {"today", "midnight"}:
+            return now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if lowered.startswith("now"):
+            rest = lowered[3:]
+            if not rest:
+                return now
+            match = re.fullmatch(r"([+-])(\d+)([a-z]*)", rest)
+            if match is None:
+                raise ValueError(rest)
+            sign = 1 if match.group(1) == "+" else -1
+            count = int(match.group(2))
+            unit = match.group(3)
+            seconds_per = {
+                "": 60,  # bare count = minutes, like parse_time()
+                "seconds": 1,
+                "minutes": 60,
+                "hours": 3600,
+                "days": 86400,
+                "weeks": 604800,
+            }
+            for name, secs in seconds_per.items():
+                if name.startswith(unit) and (name or not unit):
+                    return now + timedelta(seconds=sign * count * secs)
+            raise ValueError(unit)
+        if "T" in text:
+            return datetime.fromisoformat(text)
+        if "-" in text:
+            try:
+                return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return datetime.strptime(text, "%Y-%m-%d")
+        if ":" in text:
+            parts = [int(p) for p in text.split(":")]
+            hour, minute = parts[0], parts[1]
+            second = parts[2] if len(parts) > 2 else 0
+            return now.replace(hour=hour, minute=minute, second=second, microsecond=0)
+        raise ValueError(text)
+
+    def _get_filtered_records(self, config: _Config) -> list[UsageRecord]:
         """Get usage records based on filters."""
-        records = self.database.usage_records.copy()
+        self.database.ensure_job_ids()
+        records = list(self.database.usage_records)
 
-        # Filter by clusters (use current_cluster if not specified)
-        clusters = config.get("clusters", [])
-        if clusters:
-            records = [r for r in records if r.cluster in clusters]
+        # Filter by clusters (use current_cluster if not specified). A
+        # nonexistent cluster simply matches no records — real sacct
+        # treats -M as a pure filter and exits 0.
+        if config.clusters:
+            records = [r for r in records if r.cluster in config.clusters]
         else:
             records = [r for r in records if r.cluster == self.database.current_cluster]
 
-        # Filter by accounts
-        if config["accounts"]:
-            records = [r for r in records if r.account in config["accounts"]]
+        if config.accounts:
+            records = [r for r in records if r.account in config.accounts]
+        if config.users:
+            records = [r for r in records if r.user in config.users]
 
-        # Filter by users
-        if config["users"]:
-            records = [r for r in records if r.user in config["users"]]
+        # Default window: Midnight -> Now on the simulated clock
+        # (slurmdb_job_cond_def_start_end, slurmdb_defs.c:371-394).
+        now = self.time_engine.get_current_time()
+        start = config.start_time or now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = config.end_time or now
+        return [r for r in records if start <= r.timestamp <= end]
 
-        # Filter by time range
-        if config["start_time"]:
-            records = [r for r in records if r.timestamp >= config["start_time"]]
-        if config["end_time"]:
-            records = [r for r in records if r.timestamp <= config["end_time"]]
+    def _row(self, record: UsageRecord, config: _Config) -> dict[str, str]:
+        elapsed_secs = int(record.node_hours * 3600)
+        end = record.timestamp
+        start = end - timedelta(seconds=elapsed_secs)
+        state = record.state or "COMPLETED"
+        exit_code = "1:0" if state.startswith(_FAILED_STATES) else "0:0"
+        tres = self._tres_string(record, config.noconvert)
+        job_id = str(record.job_id)
 
-        # If no time range specified, use current month
-        if not config["start_time"] and not config["end_time"]:
-            month_start, month_end = self.time_engine.format_current_month()
-            start_dt = datetime.fromisoformat(month_start)
-            end_dt = datetime.fromisoformat(month_end)
-            records = [r for r in records if start_dt <= r.timestamp <= end_dt]
+        return {
+            "JobID": job_id,
+            "JobIDRaw": job_id,
+            "JobName": f"job_{record.job_id}",
+            "Partition": "compute",
+            "Account": record.account,
+            "AllocCPUS": str(self._cpu_rate(record)),
+            "AllocNodes": "1",
+            "AllocTRES": tres,
+            "Cluster": record.cluster,
+            "Elapsed": _secs2time_str(elapsed_secs),
+            "ElapsedRaw": str(elapsed_secs),
+            "End": end.strftime("%Y-%m-%dT%H:%M:%S"),
+            "ExitCode": exit_code,
+            "NNodes": "1",
+            "NodeList": "node001",
+            "ReqTRES": tres,
+            "Start": start.strftime("%Y-%m-%dT%H:%M:%S"),
+            "State": state,
+            "Submit": start.strftime("%Y-%m-%dT%H:%M:%S"),
+            "Timelimit": "UNLIMITED",
+            "User": record.user,
+        }
 
-        return records
+    def _cpu_rate(self, record: UsageRecord) -> int:
+        return self._rate(record, "CPU", _NODE_CPUS)
 
-    def _format_output(self, records: list[UsageRecord], config: dict[str, Any]) -> str:
-        """Format usage records as sacct output."""
-        format_fields = [f.strip() for f in config["format"].split(",")]
+    @staticmethod
+    def _rate(record: UsageRecord, key: str, default: int) -> int:
+        """Per-hour TRES rate: raw_tres values are <count>-hours totals."""
+        value = record.raw_tres.get(key)
+        if value is None or record.node_hours <= 0:
+            return default
+        return round(value / record.node_hours)
 
-        lines = []
+    def _tres_string(self, record: UsageRecord, noconvert: bool) -> str:
+        """Standard Slurm TRES string in TRES-id order.
 
-        # Group records by account and user for summary
-        if config["allocations"]:
-            # Allocation mode - summarize by account/user
-            summary = {}
-            for record in records:
-                key = (record.account, record.user)
-                if key not in summary:
-                    summary[key] = {
-                        "account": record.account,
-                        "user": record.user,
-                        "total_node_hours": 0.0,
-                        "raw_tres": {"CPU": 0, "Mem": 0, "GRES/gpu": 0},
-                        "elapsed_time": "00:00:00",
-                    }
-                record_data = summary[key]
-                if isinstance(record_data, dict) and "total_node_hours" in record_data:
-                    current_hours = record_data["total_node_hours"]
-                    if isinstance(current_hours, (int, float)):
-                        record_data["total_node_hours"] = current_hours + record.node_hours
+        cpu=1, mem=2, node=4, billing=5, gres/* after — matching
+        slurmdb_make_tres_string_from_simple. The emulator-internal
+        ``node-hours`` raw_tres key is intentionally not exposed.
+        """
+        cpus = self._cpu_rate(record)
+        mem_gb = self._rate(record, "Mem", _NODE_MEM_GB)
+        gpus = self._rate(record, "GRES/gpu", _NODE_GPUS)
+        mem = f"{mem_gb * 1024}M" if noconvert else f"{mem_gb}G"
+        parts = [f"cpu={cpus}", f"mem={mem}", "node=1", f"billing={cpus}"]
+        if gpus:
+            parts.append(f"gres/gpu={gpus}")
+        return ",".join(parts)
 
-                # Sum raw TRES
-                for tres_type, value in record.raw_tres.items():
-                    raw_tres = record_data.get("raw_tres", {})
-                    if isinstance(raw_tres, dict) and tres_type in raw_tres:
-                        raw_tres[tres_type] += value
 
-            # Format summary records
-            for data in summary.values():
-                line_data: list[str] = []
-                for field in format_fields:
-                    if field == "Account":
-                        line_data.append(str(data.get("account", "")))
-                    elif field == "User":
-                        line_data.append(str(data.get("user", "")))
-                    elif field == "ReqTRES":
-                        # Format as TRES string - ensure non-empty for site agent parsing
-                        tres_parts = []
-                        raw_tres = data.get("raw_tres", {})
-                        hours_raw = data.get("total_node_hours", 0)
-                        hours = float(hours_raw) if isinstance(hours_raw, (int, float, str)) else 0
-
-                        # Always include node-hours component first for site agent compatibility
-                        if hours > 0:
-                            tres_parts.append(f"node-hours={int(hours)}")
-
-                        # Add other TRES components
-                        if isinstance(raw_tres, dict):
-                            for tres_type, value in raw_tres.items():
-                                if (
-                                    value > 0 and tres_type != "node-hours"
-                                ):  # Skip node-hours, already added
-                                    if tres_type == "GRES/gpu":
-                                        tres_parts.append(f"gres/gpu={value}")
-                                    else:
-                                        tres_parts.append(f"{tres_type.lower()}={value}")
-
-                        line_data.append(",".join(tres_parts))
-                    elif field == "Elapsed":
-                        # Convert node-hours to elapsed time representation
-                        hours_value = data.get("total_node_hours", 0)
-                        if isinstance(hours_value, (int, float)):
-                            total_hours = float(hours_value)
-                        else:
-                            total_hours = 0.0
-                        hours = int(total_hours)
-                        minutes = int((total_hours - hours) * 60)
-                        line_data.append(f"{hours:02d}:{minutes:02d}:00")
-                    else:
-                        line_data.append("")
-
-                lines.append("|".join(line_data))
-        else:
-            # Job mode - individual records (simulated as jobs)
-            for i, record in enumerate(records):
-                job_line_data: list[str] = []
-                for field in format_fields:
-                    if field == "JobID":
-                        job_line_data.append(f"job_{i + 1}")
-                    elif field == "JobName":
-                        job_line_data.append(f"emulated_job_{i + 1}")
-                    elif field == "Account":
-                        job_line_data.append(record.account)
-                    elif field == "User":
-                        job_line_data.append(record.user)
-                    elif field == "State":
-                        job_line_data.append("COMPLETED")
-                    elif field == "ReqTRES":
-                        # Format as TRES string - ensure non-empty for site agent parsing
-                        tres_parts = []
-                        raw_tres = record.raw_tres
-                        hours = record.node_hours
-
-                        # Always include node-hours component first for site agent compatibility
-                        if hours > 0:
-                            tres_parts.append(f"node-hours={int(hours)}")
-
-                        # Add other TRES components
-                        if isinstance(raw_tres, dict):
-                            for tres_type, value in raw_tres.items():
-                                if (
-                                    value > 0 and tres_type != "node-hours"
-                                ):  # Skip node-hours, already added
-                                    if tres_type == "GRES/gpu":
-                                        tres_parts.append(f"gres/gpu={value}")
-                                    else:
-                                        tres_parts.append(f"{tres_type.lower()}={value}")
-
-                        job_line_data.append(",".join(tres_parts))
-                    elif field == "Elapsed":
-                        hours = int(record.node_hours)
-                        minutes = int((record.node_hours - hours) * 60)
-                        job_line_data.append(f"{hours:02d}:{minutes:02d}:00")
-                    elif field == "Timelimit":
-                        job_line_data.append("UNLIMITED")
-                    elif field == "NodeList":
-                        node_count = max(1, int(record.node_hours))
-                        job_line_data.append(f"node[001-{node_count:03d}]")
-                    else:
-                        job_line_data.append("")
-
-                lines.append("|".join(job_line_data))
-
-        return "\n".join(lines)
-
-    def generate_realistic_usage_report(
-        self, accounts: list[str], start_time: str, end_time: str
-    ) -> str:
-        """Generate realistic usage report for testing."""
-        # This method can be used to generate test data
-        lines = []
-
-        for account in accounts:
-            # Get users for this account
-            users = self.database.list_account_users(account)
-            if not users:
-                users = ["testuser1", "testuser2"]  # Default test users
-
-            for user in users:
-                # Get actual usage records
-                records = self.database.get_usage_records(account=account, user=user)
-
-                if records:
-                    # Use real data
-                    total_tres = {"CPU": 0, "Mem": 0, "GRES/gpu": 0}
-                    total_hours = 0.0
-
-                    for record in records:
-                        total_hours += record.node_hours
-                        for tres_type, value in record.raw_tres.items():
-                            if tres_type in total_tres:
-                                total_tres[tres_type] += value
-
-                    # Format TRES string
-                    tres_parts = []
-                    for tres_type, value in total_tres.items():
-                        if value > 0:
-                            if tres_type == "GRES/gpu":
-                                tres_parts.append(f"gres/gpu={value}")
-                            else:
-                                tres_parts.append(f"{tres_type.lower()}={value}")
-
-                    tres_str = ",".join(tres_parts)
-                    elapsed = f"{int(total_hours):02d}:{int((total_hours % 1) * 60):02d}:00"
-
-                    lines.append(f"{account}|{tres_str}|{elapsed}|{user}")
-
-        return "\n".join(lines)
+def _secs2time_str(secs: int) -> str:
+    """Port of secs2time_str (src/common/parse_time.c:849-874)."""
+    if secs < 0:
+        return "INVALID"
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, seconds = divmod(rem, 60)
+    if days:
+        return f"{days}-{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"

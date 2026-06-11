@@ -27,6 +27,15 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
+from emulator.commands.print_fields import (
+    FieldSpec,
+    OutputMode,
+    UnknownFieldError,
+    parse_format_spec,
+    render_header,
+    render_row,
+    resolve_format,
+)
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
 
@@ -46,35 +55,25 @@ _CANONICAL_TRES: tuple[str, ...] = (
 )
 
 
-@dataclass
-class _PrintField:
-    """Mirror of real Slurm's ``print_field_t`` for one column."""
-
-    name: str
-    width: int
-    right_align: bool
-
-
 # Widths copied from /Users/ilja/workspace/slurm/src/sshare/process.c:51-68.
-# A negative width in real Slurm means left-aligned; we store the
-# absolute width and a separate alignment bit.
-_FIELDS: dict[str, _PrintField] = {
-    "Account": _PrintField("Account", 20, right_align=False),
-    "Cluster": _PrintField("Cluster", 10, right_align=True),
-    "EffectvUsage": _PrintField("EffectvUsage", 13, right_align=True),
-    "FairShare": _PrintField("FairShare", 10, right_align=True),
-    "GrpTRESMins": _PrintField("GrpTRESMins", 30, right_align=True),
-    "GrpTRESRaw": _PrintField("GrpTRESRaw", 30, right_align=True),
-    "ID": _PrintField("ID", 6, right_align=True),
-    "LevelFS": _PrintField("LevelFS", 10, right_align=True),
-    "NormShares": _PrintField("NormShares", 11, right_align=True),
-    "NormUsage": _PrintField("NormUsage", 11, right_align=True),
-    "Partition": _PrintField("Partition", 12, right_align=True),
-    "RawShares": _PrintField("RawShares", 10, right_align=True),
-    "RawUsage": _PrintField("RawUsage", 11, right_align=True),
-    "TRESRunMins": _PrintField("TRESRunMins", 30, right_align=True),
-    "User": _PrintField("User", 10, right_align=True),
-}
+# Signed C-style widths: negative = left-aligned.
+_FIELDS: list[FieldSpec] = [
+    FieldSpec("Account", -20),
+    FieldSpec("Cluster", 10),
+    FieldSpec("EffectvUsage", 13),
+    FieldSpec("FairShare", 10),
+    FieldSpec("GrpTRESMins", 30),
+    FieldSpec("GrpTRESRaw", 30),
+    FieldSpec("ID", 6),
+    FieldSpec("LevelFS", 10),
+    FieldSpec("NormShares", 11),
+    FieldSpec("NormUsage", 11),
+    FieldSpec("Partition", 12),
+    FieldSpec("RawShares", 10),
+    FieldSpec("RawUsage", 11),
+    FieldSpec("TRESRunMins", 30),
+    FieldSpec("User", 10),
+]
 
 
 @dataclass
@@ -82,6 +81,7 @@ class _Config:
     accounts: list[str] = field(default_factory=list)
     users: list[str] = field(default_factory=list)
     clusters: list[str] = field(default_factory=list)
+    raw_clusters: str = ""  # last -M argument as typed (for error messages)
     format_spec: list[tuple[str, Optional[int]]] = field(default_factory=list)
     long: bool = False
     partition: bool = False
@@ -89,6 +89,10 @@ class _Config:
     all_users: bool = False
     noheader: bool = False
     parsable: Optional[str] = None  # None | "p" | "P"
+
+    @property
+    def mode(self) -> OutputMode:
+        return OutputMode(noheader=self.noheader, parsable=self.parsable)
 
 
 @dataclass
@@ -106,20 +110,21 @@ class SshareEmulator:
     def __init__(self, database: SlurmDatabase, time_engine: TimeEngine):
         self.database = database
         self.time_engine = time_engine
+        # 0 unless an error path ran; multi-cluster iteration sets 1 when
+        # any cluster fails (sshare.c:296-316).
+        self.exit_code = 0
 
     def handle_command(self, args: list[str]) -> str:
+        self.exit_code = 0
         cfg = self._parse_args(args)
         fields = self._resolve_format(cfg)
 
-        clusters = cfg.clusters or [self.database.current_cluster]
+        clusters = self._validate_clusters(cfg)
         blocks: list[str] = []
         saved = self.database.current_cluster
         multi = len(clusters) > 1
         try:
             for name in clusters:
-                if name not in self.database.clusters:
-                    blocks.append(f"slurm-emulator: error: Cluster '{name}' does not exist")
-                    continue
                 self.database.current_cluster = name
                 table = self._render_cluster(cfg, fields)
                 if multi:
@@ -130,6 +135,40 @@ class SshareEmulator:
             self.database.current_cluster = saved
 
         return "\n\n".join(blocks) if multi else "\n".join(blocks)
+
+    def _validate_clusters(self, cfg: _Config) -> list[str]:
+        """Resolve the requested cluster list like real sshare.
+
+        Unknown names get a per-name stderr error
+        (slurmdb_defs.c:1511) and are skipped; if none of the requested
+        clusters exist, print_db_notok + fatal() end the process with
+        exit 1 (sshare.c:147-152, proc_args.c:1426-1430). A mix of
+        valid and invalid names proceeds with the valid ones, exit 0.
+        """
+        if not cfg.clusters:
+            return [self.database.current_cluster]
+
+        valid: list[str] = []
+        for name in cfg.clusters:
+            if name in self.database.clusters:
+                valid.append(name)
+            else:
+                print(
+                    f"sshare: error: No cluster '{name}' known by database.",
+                    file=sys.stderr,
+                )
+        if not valid:
+            raw = cfg.raw_clusters or ",".join(cfg.clusters)
+            print(
+                f"sshare: error: '{raw}' can't be reached now, "
+                "or it is an invalid entry for --cluster.  "
+                "Use 'sacctmgr list clusters' to see available clusters.",
+                file=sys.stderr,
+            )
+            print("sshare: fatal: Could not get cluster information", file=sys.stderr)
+            self.exit_code = 1
+            raise SystemExit(1)
+        return valid
 
     def _parse_args(self, args: list[str]) -> _Config:
         cfg = _Config()
@@ -155,11 +194,13 @@ class SshareEmulator:
                 i += 1
                 continue
             if arg in ("-M", "--clusters", "--cluster"):
-                cfg.clusters.extend(_split_csv(_require_value(nxt, "--clusters")))
+                cfg.raw_clusters = _require_value(nxt, "--clusters")
+                cfg.clusters.extend(_split_csv(cfg.raw_clusters))
                 i += 2
                 continue
             if arg.startswith(("--clusters=", "--cluster=")):
-                cfg.clusters.extend(_split_csv(arg.split("=", 1)[1]))
+                cfg.raw_clusters = arg.split("=", 1)[1]
+                cfg.clusters.extend(_split_csv(cfg.raw_clusters))
                 i += 1
                 continue
             if arg in ("-o", "--format"):
@@ -190,23 +231,19 @@ class SshareEmulator:
             i += 1
         return cfg
 
-    def _resolve_format(self, cfg: _Config) -> list[_PrintField]:
+    def _resolve_format(self, cfg: _Config) -> list[FieldSpec]:
         spec = cfg.format_spec or _default_format(cfg.long, cfg.partition)
-        resolved: list[_PrintField] = []
-        for name, width_override in spec:
-            match = _match_field(name)
-            if match is None:
-                print(
-                    f'sshare: error: Invalid field requested: "{name}"',
-                    file=sys.stderr,
-                )
-                raise SystemExit(1)
-            if width_override is not None:
-                match = _PrintField(match.name, width_override, match.right_align)
-            resolved.append(match)
-        return resolved
+        try:
+            return resolve_format(spec, _FIELDS)
+        except UnknownFieldError as e:
+            print(
+                f'sshare: error: Invalid field requested: "{e.token}"',
+                file=sys.stderr,
+            )
+            self.exit_code = 1
+            raise SystemExit(1) from None
 
-    def _render_cluster(self, cfg: _Config, fields: list[_PrintField]) -> str:
+    def _render_cluster(self, cfg: _Config, fields: list[FieldSpec]) -> str:
         rows = self._build_rows(cfg)
         return _render(rows, fields, cfg, self.database)
 
@@ -293,36 +330,7 @@ def _split_csv(value: str) -> list[str]:
 
 
 def _parse_format(value: str) -> list[tuple[str, Optional[int]]]:
-    items: list[tuple[str, Optional[int]]] = []
-    for raw in value.split(","):
-        token = raw.strip()
-        if not token:
-            continue
-        width: Optional[int] = None
-        if "%" in token:
-            head, _, tail = token.partition("%")
-            token = head
-            try:
-                width = int(tail)
-            except ValueError:
-                width = None
-        items.append((token, width))
-    return items
-
-
-def _match_field(name: str) -> Optional[_PrintField]:
-    """Case-insensitive prefix match against the known field names.
-
-    Mirrors real Slurm's ``xstrncasecmp(fields[i].name, object,
-    strlen(object))`` lookup in ``process.c``.
-    """
-    if not name:
-        return None
-    needle = name.casefold()
-    for field_name, descriptor in _FIELDS.items():
-        if field_name.casefold().startswith(needle):
-            return descriptor
-    return None
+    return parse_format_spec(value)
 
 
 def _default_format(long_flag: bool, partition: bool) -> list[tuple[str, Optional[int]]]:
@@ -386,7 +394,7 @@ def _format_tres(values: dict[str, int]) -> str:
 
 def _render(
     rows: list[_Row],
-    fields: list[_PrintField],
+    fields: list[FieldSpec],
     cfg: _Config,
     database: SlurmDatabase,
 ) -> str:
@@ -396,45 +404,17 @@ def _render(
         if r.cluster == database.current_cluster
     )
 
-    cell_grid = [
-        [_cell_for(row, fld, database, cluster_total_raw_seconds) for fld in fields] for row in rows
-    ]
-
-    lines: list[str] = []
-    if not cfg.noheader:
-        lines.append(_render_header(fields, cfg.parsable))
-        if cfg.parsable is None:
-            lines.append(" ".join("-" * f.width for f in fields).rstrip())
-
-    for cells in cell_grid:
-        lines.append(_render_row(cells, fields, cfg.parsable))
-
+    mode = cfg.mode
+    lines = render_header(fields, mode)
+    for row in rows:
+        cells = [_cell_for(row, fld, database, cluster_total_raw_seconds) for fld in fields]
+        lines.append(render_row(cells, fields, mode))
     return "\n".join(lines)
-
-
-def _render_header(fields: list[_PrintField], parsable: Optional[str]) -> str:
-    if parsable is None:
-        return " ".join(_align(f.name, f) for f in fields).rstrip()
-    line = "|".join(f.name for f in fields)
-    return line + "|" if parsable == "p" else line
-
-
-def _render_row(cells: list[str], fields: list[_PrintField], parsable: Optional[str]) -> str:
-    if parsable is None:
-        return " ".join(_align(cell, fld) for cell, fld in zip(cells, fields)).rstrip()
-    line = "|".join(cells)
-    return line + "|" if parsable == "p" else line
-
-
-def _align(text: str, fld: _PrintField) -> str:
-    if len(text) > fld.width:
-        return text[: fld.width]
-    return text.rjust(fld.width) if fld.right_align else text.ljust(fld.width)
 
 
 def _cell_for(
     row: _Row,
-    fld: _PrintField,
+    fld: FieldSpec,
     database: SlurmDatabase,
     cluster_total_raw_seconds: int,
 ) -> str:
