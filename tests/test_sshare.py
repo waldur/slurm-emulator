@@ -325,3 +325,39 @@ class TestSshareDispatcherIntegration:
         output = emulator.execute_command("sshare", ["-P", "-n"])
         # No exception and at least the header is suppressed.
         assert "Account" not in output.splitlines()[0] if output else True
+
+
+class TestSshareBadClusters:
+    """Real sshare bad-cluster semantics (sshare.c:147-152,
+    slurmdb_defs.c:1511, proc_args.c:1426-1430)."""
+
+    def setup_method(self):
+        self.db = SlurmDatabase()
+        self.te = TimeEngine()
+        self.sshare = SshareEmulator(self.db, self.te)
+        self.db.add_account("acct1", "Account 1", "Org")
+        self.db.add_cluster("c1")
+
+    def test_all_unknown_clusters_fatal_exit_one(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            self.sshare.handle_command(["-M", "nope"])
+        assert exc.value.code == 1
+        assert self.sshare.exit_code == 1
+        err = capsys.readouterr().err
+        assert "sshare: error: No cluster 'nope' known by database." in err
+        assert (
+            "sshare: error: 'nope' can't be reached now, "
+            "or it is an invalid entry for --cluster.  "
+            "Use 'sacctmgr list clusters' to see available clusters." in err
+        )
+        assert "sshare: fatal: Could not get cluster information" in err
+
+    def test_mixed_clusters_proceed_with_valid_ones(self, capsys):
+        output = self.sshare.handle_command(["-M", "c1,nope", "-n", "-P"])
+        err = capsys.readouterr().err
+        # Per-name error for the unknown cluster, but the valid one renders
+        # and the command exits 0.
+        assert "sshare: error: No cluster 'nope' known by database." in err
+        assert "fatal" not in err
+        assert self.sshare.exit_code == 0
+        assert "acct1" in output

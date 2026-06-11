@@ -40,8 +40,11 @@ class TestTresFormatting:
         assert raw_tres["GRES/gpu"] == 100 * 4  # 4 GPUs per node
 
     def test_tres_string_format_with_node_hours(self):
-        """Test TRES string formatting prioritizes node-hours."""
-        # Create a usage record with node hours
+        """ReqTRES is a standard per-job TRES string in TRES-id order.
+
+        Real sacct never prints the emulator-internal node-hours key;
+        rates derive from the record's raw_tres totals / node_hours.
+        """
         usage_record = UsageRecord(
             account="test_account",
             user="test_user",
@@ -50,37 +53,24 @@ class TestTresFormatting:
             timestamp=self.time_engine.get_current_time(),
             period=self.time_engine.get_current_quarter(),
         )
-
-        # Set raw TRES data including node-hours
         usage_record.raw_tres = {"node-hours": 50, "CPU": 3200, "Mem": 25600, "GRES/gpu": 200}
-
-        # Add to database
         self.database.usage_records.append(usage_record)
 
-        # Format with ReqTRES field
         result = self.sacct.handle_command(
-            ["sacct", "--format=JobID,ReqTRES", "--accounts=test_account", "--parsable"]
+            ["--format=JobID,ReqTRES", "--accounts=test_account", "-n", "-P"]
         )
 
         lines = result.strip().split("\n")
-        assert len(lines) >= 1  # At least one data line
+        assert len(lines) == 1
+        job_id, tres_field = lines[0].split("|")
+        assert job_id == "1"  # numeric JobID assigned by the database
+        # 3200 CPU-hours / 50 node-hours = 64 cpus; 25600/50 = 512G; 200/50 = 4
+        assert tres_field == "cpu=64,mem=512G,node=1,billing=64,gres/gpu=4"
+        assert "node-hours" not in result
 
-        # Get the data line (no header in parsable format)
-        data_line = lines[0]
-        fields = data_line.split("|")
-        tres_field = fields[1] if len(fields) > 1 else ""
-
-        # Verify node-hours appears first in TRES string
-        assert tres_field.startswith("node-hours=50")
-
-        # Verify other TRES components are included
-        assert "cpu=3200" in tres_field.lower()
-        assert "mem=25600" in tres_field.lower()
-        assert "gres/gpu=200" in tres_field.lower()
-
-    def test_tres_string_empty_when_no_usage(self):
-        """Test TRES string handling when no usage data exists."""
-        # Create usage record with zero node hours
+    def test_tres_string_standard_node_when_no_usage(self):
+        """A zero-elapsed job still requested resources: the TRES string
+        falls back to the standard node config (64 CPU / 512G / 4 GPU)."""
         usage_record = UsageRecord(
             account="test_account",
             user="test_user",
@@ -89,28 +79,17 @@ class TestTresFormatting:
             timestamp=self.time_engine.get_current_time(),
             period=self.time_engine.get_current_quarter(),
         )
-
-        # Set empty raw TRES
         usage_record.raw_tres = {}
-
-        # Add to database
         self.database.usage_records.append(usage_record)
 
-        # Format with ReqTRES field
         result = self.sacct.handle_command(
-            ["sacct", "--format=JobID,ReqTRES", "--accounts=test_account", "--parsable"]
+            ["--format=JobID,ReqTRES", "--accounts=test_account", "-n", "-P"]
         )
 
         lines = result.strip().split("\n")
-        assert len(lines) >= 1  # At least one data line
-
-        # Get the data line (no header in parsable format)
-        data_line = lines[0]
-        fields = data_line.split("|")
-        tres_field = fields[1] if len(fields) > 1 else ""
-
-        # TRES field should be empty for zero usage
-        assert tres_field == ""
+        assert len(lines) == 1
+        tres_field = lines[0].split("|")[1]
+        assert tres_field == "cpu=64,mem=512G,node=1,billing=64,gres/gpu=4"
 
     def test_tres_string_with_mixed_tres_types(self):
         """Test TRES string with various TRES types."""
@@ -129,27 +108,18 @@ class TestTresFormatting:
 
         # Format output
         result = self.sacct.handle_command(
-            ["sacct", "--format=JobID,ReqTRES", "--accounts=test_account", "--parsable"]
+            ["--format=JobID,ReqTRES", "--accounts=test_account", "-n", "-P"]
         )
 
         lines = result.strip().split("\n")
         assert len(lines) >= 1
+        tres_field = lines[0].split("|")[1]
 
-        # Get the data line (no header in parsable format)
-        data_line = lines[0]
-        fields = data_line.split("|")
-        tres_field = fields[1] if len(fields) > 1 else ""
-
-        # Verify node-hours comes first
-        tres_components = tres_field.split(",")
-        assert tres_components[0].startswith("node-hours=25")
-
-        # Verify other components don't include duplicate node-hours
-        remaining_components = ",".join(tres_components[1:])
-        assert "node-hours=" not in remaining_components
-
-        # Verify GPU formatting
-        assert "gres/gpu=100" in tres_field.lower()
+        # The internal node-hours key is never exposed.
+        assert "node-hours" not in tres_field
+        # 100 GPU-hours over 25 node-hours = 4 GPUs.
+        assert "gres/gpu=4" in tres_field
+        assert tres_field.startswith("cpu=64,mem=512G,node=1,billing=64")
 
     def test_usage_simulator_tres_consistency(self):
         """Test that usage simulator generates consistent TRES data."""

@@ -1,10 +1,146 @@
-"""sacctmgr command emulator."""
+"""sacctmgr command emulator.
+
+Output formatting and exit codes mirror real Slurm 26.11:
+
+* list/show output defaults to fixed-width columns with a dashed
+  underline (``src/common/print_fields.c``); ``-p``/``--parsable``
+  pipe-separates with a trailing ``|``, ``-P``/``--parsable2`` without,
+  ``-n``/``--noheader`` drops the header;
+* field names, printed headers, and column widths come from the
+  ``sacctmgr_process_format_list`` chain in ``src/sacctmgr/common.c``
+  (line refs below); default field sets per entity come from each
+  ``sacctmgr/*_functions.c``;
+* errors print with a leading-space `` error: ...`` prefix and exit 1
+  (the dispatcher routes failing output to stderr); ``Nothing
+  modified`` goes to stdout and exits 0 (account_functions.c:727-729 —
+  only the local rc is set, the global ``exit_code`` stays 0);
+* re-adding an existing account reports ``SLURM_NO_CHANGE_IN_DATA``:
+  `` Data has not changed since time specified`` on stdout, exit 0
+  (account_functions.c:342-343, slurm_errno.c:205-207).
+
+Intentional deviations: no interactive commit prompt (``-i`` is an
+accepted no-op — the emulator is headless), and a leading ``-M
+<cluster>`` is tolerated and ignored for waldur-site-agent
+compatibility (real sacctmgr has no ``-M``).
+"""
 
 from typing import Optional
 
 from emulator import __version__
+from emulator.commands.print_fields import (
+    FieldSpec,
+    OutputMode,
+    UnknownFieldError,
+    extract_output_flags,
+    parse_format_spec,
+    render_table,
+    resolve_format,
+)
 from emulator.core.database import QOS, Association, ClusterClassification, SlurmDatabase
 from emulator.core.time_engine import TimeEngine
+
+# Field registry mirroring the prefix-match chain in
+# src/sacctmgr/common.c:219-891. Order matters: tokens resolve to the
+# first entry they prefix-match (e.g. "Cl" must hit Clusters, not
+# Classification, because Classification needs 3 chars). Alias entries
+# (e.g. Acct) carry the canonical printed header so they share a column.
+_REGISTRY: list[FieldSpec] = [
+    FieldSpec("Account", 10, min_prefix=3),  # common.c:219
+    FieldSpec("Acct", 10, header="Account", min_prefix=4),
+    FieldSpec("AdminLevel", 9, header="Admin", min_prefix=2),  # common.c:243
+    FieldSpec("Classification", 9, header="Class", min_prefix=3),  # common.c:263
+    FieldSpec("Clusters", 10, header="Cluster", min_prefix=2),  # common.c:274
+    FieldSpec("ControlHost", 15, min_prefix=8),  # common.c:289
+    FieldSpec("ControlPort", 12, min_prefix=8),  # common.c:294
+    FieldSpec("DefaultAccount", 10, header="Def Acct", min_prefix=8),  # common.c:320
+    FieldSpec("DefaultQOS", 9, header="Def QOS", min_prefix=8),  # common.c:326
+    FieldSpec("Description", 20, header="Descr", min_prefix=3),  # common.c:336
+    FieldSpec("Flags", 20, min_prefix=2),  # common.c:381
+    FieldSpec("GraceTime", 10, min_prefix=3),  # common.c:386
+    FieldSpec("GrpCPUs", 8, min_prefix=6),  # common.c:391
+    FieldSpec("GrpCPUMins", 11, min_prefix=7),  # common.c:396
+    FieldSpec("GrpTRES", 13, min_prefix=7),  # common.c:406
+    FieldSpec("GrpTRESMins", 13, min_prefix=7),  # common.c:411
+    FieldSpec("GrpTRESRunMins", 13, min_prefix=8),  # common.c:416
+    FieldSpec("GrpJobs", 7, min_prefix=4),  # common.c:422
+    FieldSpec("GrpMemory", 7, header="GrpMem", min_prefix=4),  # common.c:433
+    FieldSpec("GrpNodes", 8, min_prefix=4),  # common.c:438
+    FieldSpec("GrpSubmitJobs", 9, header="GrpSubmit", min_prefix=4),  # common.c:443
+    FieldSpec("GrpWall", 11, min_prefix=4),  # common.c:448
+    FieldSpec("ID", 6, min_prefix=2),  # common.c:453
+    FieldSpec("MaxCPUMinsPerJob", 11, header="MaxCPUMins", min_prefix=7),  # common.c:483
+    FieldSpec("MaxCPUsPerJob", 8, header="MaxCPUs", min_prefix=6),  # common.c:497
+    FieldSpec("MaxTRES", 13, min_prefix=7),  # common.c:511
+    FieldSpec("MaxTRESPerJob", 13, header="MaxTRES", min_prefix=11),
+    FieldSpec("MaxTRESPerNode", 14, min_prefix=11),  # common.c:521
+    FieldSpec("MaxTRESPN", 14, header="MaxTRESPerNode", min_prefix=9),
+    FieldSpec("MaxTRESMinsPerJob", 13, header="MaxTRESMins", min_prefix=11),  # common.c:529
+    FieldSpec("MaxTRESRunMinsPerAccount", 16, header="MaxTRESRunMinsPA", min_prefix=16),
+    FieldSpec("MaxTRESRunMinsPerAcct", 16, header="MaxTRESRunMinsPA", min_prefix=16),
+    FieldSpec("MaxTRESRunMinsPA", 16, min_prefix=16),  # common.c:537
+    FieldSpec("MaxTRESRunMinsPerUser", 16, header="MaxTRESRunMinsPU", min_prefix=16),
+    FieldSpec("MaxTRESRunMinsPU", 16, min_prefix=16),  # common.c:547
+    FieldSpec("MaxTRESPerAccount", 13, header="MaxTRESPA", min_prefix=11),  # common.c:555
+    FieldSpec("MaxTRESPerAcct", 13, header="MaxTRESPA", min_prefix=11),
+    FieldSpec("MaxTRESPA", 13, min_prefix=9),
+    FieldSpec("MaxTRESPerUser", 13, header="MaxTRESPU", min_prefix=11),  # common.c:565
+    FieldSpec("MaxTRESPU", 13, min_prefix=9),
+    FieldSpec("MaxJobs", 7, min_prefix=4),  # common.c:573
+    FieldSpec("MaxJobsPerAccount", 9, header="MaxJobsPA", min_prefix=8),  # common.c:602
+    FieldSpec("MaxJobsPerAcct", 9, header="MaxJobsPA", min_prefix=8),
+    FieldSpec("MaxJobsPA", 9, min_prefix=8),
+    FieldSpec("MaxJobsPerUser", 9, header="MaxJobsPU", min_prefix=8),  # common.c:612
+    FieldSpec("MaxJobsPU", 9, min_prefix=8),
+    FieldSpec("MaxNodesPerJob", 8, header="MaxNodes", min_prefix=4),  # common.c:620
+    FieldSpec("MaxSubmitJobs", 9, header="MaxSubmit", min_prefix=4),  # common.c:640
+    FieldSpec("MaxSubmitJobsPerAccount", 11, header="MaxSubmitPA", min_prefix=11),
+    FieldSpec("MaxSubmitJobsPerAcct", 11, header="MaxSubmitPA", min_prefix=11),
+    FieldSpec("MaxSubmitPA", 11, min_prefix=10),  # common.c:646
+    FieldSpec("MaxSubmitJobsPerUser", 11, header="MaxSubmitPU", min_prefix=11),
+    FieldSpec("MaxSubmitPU", 11, min_prefix=10),  # common.c:658
+    FieldSpec("MaxWallDurationPerJob", 11, header="MaxWall", min_prefix=4),  # common.c:668
+    FieldSpec("MinTRESPerJob", 13, header="MinTRES", min_prefix=7),  # common.c:680
+    FieldSpec("Name", 10, min_prefix=2),  # common.c:686
+    FieldSpec("Organization", 20, header="Org", min_prefix=1),  # common.c:706
+    FieldSpec("ParentName", 10, min_prefix=7),  # common.c:716
+    FieldSpec("Partition", 10, min_prefix=4),  # common.c:721
+    FieldSpec("PreemptMode", 11, min_prefix=8),  # common.c:726
+    FieldSpec("Preempt", 10, min_prefix=7),  # common.c:732
+    FieldSpec("PreemptExemptTime", 19, min_prefix=8),  # common.c:737
+    FieldSpec("Priority", 10, min_prefix=3),  # common.c:743
+    FieldSpec("QOSLevel", 20, header="QOS", min_prefix=3),  # common.c:753
+    FieldSpec("RPC", 5, min_prefix=1),  # common.c:769
+    FieldSpec("Share", 9, min_prefix=1),  # common.c:779
+    FieldSpec("FairShare", 9, header="Share", min_prefix=2),
+    FieldSpec("Type", 8, min_prefix=2),  # common.c:831
+    FieldSpec("UsageFactor", 11, min_prefix=6),  # common.c:838
+    FieldSpec("UsageThreshold", 10, header="UsageThres", min_prefix=6),  # common.c:843
+    FieldSpec("User", 10, min_prefix=1),  # common.c:867
+]
+
+# Default format strings, verbatim from real sacctmgr.
+_ACCOUNT_DEFAULT = "Acc,Des,O"  # account_functions.c:400
+_ACCOUNT_WITHASSOC = (  # account_functions.c:402-408
+    "Cl,ParentN,U,Share,Priority,GrpJ,GrpN,GrpCPUs,GrpMEM,GrpS,GrpWall,"
+    "GrpCPUMins,MaxJ,MaxN,MaxCPUs,MaxS,MaxW,MaxCPUMins,QOS,DefaultQOS"
+)
+_USER_DEFAULT = "U,DefaultA,Ad"  # user_functions.c:968
+_ASSOC_DEFAULT = (  # association_functions.c:793-801
+    "Cluster,Account,User,Part,Share,Priority,GrpJ,GrpTRES,GrpS,GrpWall,"
+    "GrpTRESMins,MaxJ,MaxTRES,MaxTRESPerN,MaxS,MaxW,MaxTRESMins,QOS,"
+    "DefaultQOS,GrpTRESRunMins"
+)
+_CLUSTER_DEFAULT = (  # cluster_functions.c:482-489
+    "Cl,Controlh,Controlp,RPC,Fa,GrpJ,GrpTRES,GrpS,MaxJ,MaxTRES,MaxS,MaxW,QOS,DefaultQOS"
+)
+_QOS_DEFAULT = (  # qos_functions.c:1178-1193
+    "Name,Prio,GraceT,Preempt,PreemptE,PreemptM,Flags%40,UsageThres,"
+    "UsageFactor,GrpTRES,GrpTRESMins,GrpTRESRunMins,GrpJ,GrpS,GrpW,"
+    "MaxTRES,MaxTRESPerN,MaxTRESMins,MaxW,MaxTRESPerUser,MaxJobsPerUser,"
+    "MaxSubmitJobsPerUser,MaxTRESPerAcct,MaxTRESRunMinsPerAcct%22,"
+    "MaxTRESRunMinsPerUser%22,MaxJobsPerAcct,MaxSubmitJobsPerAcct,MinTRES"
+)
+_TRES_DEFAULT = "Type,Name%15,ID"  # tres_function.c:152
 
 
 class SacctmgrEmulator:
@@ -15,9 +151,10 @@ class SacctmgrEmulator:
         self.time_engine = time_engine
         # Mirrors sacctmgr's global ``exit_code`` (sacctmgr.c:61): reset to 0 at
         # the start of each command, set to 1 by any error path. The dispatcher
-        # propagates it to the process exit status so callers that key off a
-        # non-zero exit (like subprocess.check_output) see real failures.
+        # propagates it to the process exit status and routes failing output
+        # to stderr.
         self.exit_code = 0
+        self._mode = OutputMode()
 
     def _fail(self, message: str) -> str:
         """Record a non-zero exit (matching real sacctmgr) and return ``message``."""
@@ -27,6 +164,17 @@ class SacctmgrEmulator:
     def handle_command(self, args: list[str]) -> str:
         """Process sacctmgr command and return output."""
         self.exit_code = 0
+        # -i/--immediate is accepted but has no effect: the emulator is
+        # headless and never shows real sacctmgr's commit prompt.
+        self._mode, _immediate, args = extract_output_flags(args, shorts="npPi")
+        args = self._strip_cluster_flag(args)
+        try:
+            return self._dispatch(args)
+        except UnknownFieldError as e:
+            # common.c:882-885: bare "Unknown field '%s'" on stderr, exit 1.
+            return self._fail(f"Unknown field '{e.token}'")
+
+    def _dispatch(self, args: list[str]) -> str:
         if not args:
             return self._show_help()
 
@@ -44,12 +192,46 @@ class SacctmgrEmulator:
             return self._handle_show(args[1:])
         if command == "-V":
             return f"slurm-emulator {__version__}"
-        return f"sacctmgr: error: Unknown command: {command}"
+        return self._fail(f" error: Unknown command: {command}")
+
+    @staticmethod
+    def _strip_cluster_flag(args: list[str]) -> list[str]:
+        """Tolerate and drop ``-M <name>`` / ``--cluster(s)=<name>``.
+
+        Real sacctmgr has no ``-M`` (it talks to one slurmdbd), but
+        existing emulator consumers pass it; ignoring it keeps them
+        working.
+        """
+        out: list[str] = []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg == "-M" and i + 1 < len(args):
+                i += 2
+                continue
+            if arg.startswith(("--cluster=", "--clusters=")):
+                i += 1
+                continue
+            out.append(arg)
+            i += 1
+        return out
+
+    def _resolve(self, default_spec: str, args: list[str]) -> list[FieldSpec]:
+        """Resolve ``format=`` (or the default spec) to field specs.
+
+        Raises :class:`UnknownFieldError` for bogus tokens;
+        ``handle_command`` turns that into ``Unknown field '%s'`` + exit 1.
+        """
+        spec = default_spec
+        for arg in args:
+            if arg.lower().startswith("format="):
+                spec = arg.split("=", 1)[1]
+        return resolve_format(parse_format_spec(spec), _REGISTRY)
 
     def _handle_add(self, args: list[str]) -> str:
         """Handle add commands."""
         if not args:
-            return "sacctmgr: error: No entity specified for add"
+            return self._fail(" error: No entity specified for add")
 
         entity = args[0].lower()
 
@@ -61,12 +243,12 @@ class SacctmgrEmulator:
             return self._add_cluster(args[1:])
         if entity == "qos":
             return self._add_qos(args[1:])
-        return f"sacctmgr: error: Unknown entity for add: {entity}"
+        return self._fail(f" error: Unknown entity for add: {entity}")
 
     def _handle_modify(self, args: list[str]) -> str:
         """Handle modify commands."""
         if not args:
-            return "sacctmgr: error: No entity specified for modify"
+            return self._fail(" error: No entity specified for modify")
 
         entity = args[0].lower()
 
@@ -76,12 +258,12 @@ class SacctmgrEmulator:
             return self._modify_user(args[1:])
         if entity == "qos":
             return self._modify_qos(args[1:])
-        return f"sacctmgr: error: Unknown entity for modify: {entity}"
+        return self._fail(f" error: Unknown entity for modify: {entity}")
 
     def _handle_remove(self, args: list[str]) -> str:
         """Handle remove/delete commands."""
         if not args:
-            return "sacctmgr: error: No entity specified for remove"
+            return self._fail(" error: No entity specified for remove")
 
         entity = args[0].lower()
 
@@ -91,31 +273,33 @@ class SacctmgrEmulator:
             return self._remove_user(args[1:])
         if entity == "cluster":
             return self._remove_cluster(args[1:])
-        return f"sacctmgr: error: Unknown entity for remove: {entity}"
+        return self._fail(f" error: Unknown entity for remove: {entity}")
 
     def _handle_list(self, args: list[str]) -> str:
-        """Handle list commands."""
+        """Handle list commands (real ``show`` is an alias for ``list``)."""
         if not args:
-            return "sacctmgr: error: No entity specified for list"
+            return self._fail(" error: No entity specified for list")
 
         entity = args[0].lower()
 
-        if entity in {"account", "accounts"}:
+        if entity in {"account", "accounts", "acct"}:
             return self._list_accounts(args[1:])
         if entity in {"user", "users"}:
             return self._list_users(args[1:])
-        if entity in {"association", "associations"}:
+        if entity in {"association", "associations", "assoc"}:
             return self._list_associations(args[1:])
         if entity == "tres":
-            return self._list_tres()
+            return self._list_tres(args[1:])
         if entity in {"cluster", "clusters"}:
             return self._list_clusters(args[1:])
-        return f"sacctmgr: error: Unknown entity for list: {entity}"
+        if entity in {"qos", "qoss"}:
+            return self._list_qos(args[1:])
+        return self._fail(f" error: Unknown entity for list: {entity}")
 
     def _handle_show(self, args: list[str]) -> str:
         """Handle show commands."""
         if not args:
-            return "sacctmgr: error: No entity specified for show"
+            return self._fail(" error: No entity specified for show")
 
         entity = args[0].lower()
 
@@ -126,13 +310,19 @@ class SacctmgrEmulator:
         if entity in {"association", "associations", "assoc"}:
             return self._show_association(args[1:])
         if entity in {"qos", "qoss"}:
-            return self._show_qos(args[1:])
-        return f"sacctmgr: error: Unknown entity for show: {entity}"
+            return self._list_qos(args[1:])
+        if entity in {"cluster", "clusters"}:
+            return self._list_clusters(args[1:])
+        if entity in {"user", "users"}:
+            return self._list_users(args[1:])
+        if entity == "tres":
+            return self._list_tres(args[1:])
+        return self._fail(f" error: Unknown entity for show: {entity}")
 
     def _add_account(self, args: list[str]) -> str:
         """Add account command."""
         if not args:
-            return "sacctmgr: error: No account name specified"
+            return self._fail(" error: No account name specified")
 
         account_name = args[0]
 
@@ -158,7 +348,7 @@ class SacctmgrEmulator:
             # Account exists globally — but if cluster= specified, just create association
             if target_cluster:
                 if not self.database.get_cluster(target_cluster):
-                    return f"sacctmgr: error: Cluster {target_cluster} does not exist"
+                    return self._fail(f" error: Cluster {target_cluster} does not exist")
                 assoc_key = self.database._association_key("", account_name, target_cluster)
                 if assoc_key not in self.database.associations:
                     self.database.associations[assoc_key] = Association(
@@ -169,9 +359,10 @@ class SacctmgrEmulator:
                     )
                 self.database.save_state()
                 return f" Adding Account(s)\n  {account_name}\n Settings\n  Cluster    = {target_cluster}"
-            # Re-adding an existing account is NOT an error in real sacctmgr: it
-            # reports SLURM_NO_CHANGE_IN_DATA and exits 0 (account_functions.c:341).
-            return f"sacctmgr: error: Account {account_name} already exists"
+            # Re-adding an existing account is NOT an error in real sacctmgr:
+            # SLURM_NO_CHANGE_IN_DATA prints slurm_strerror(rc) to stdout and
+            # exits 0 (account_functions.c:342-343, slurm_errno.c:205-207).
+            return " Data has not changed since time specified"
 
         # Add global account (also creates the account-level association on the
         # current cluster carrying parent_acct).
@@ -180,7 +371,7 @@ class SacctmgrEmulator:
         # If cluster= specified, also create the account-level association there.
         if target_cluster:
             if not self.database.get_cluster(target_cluster):
-                return f"sacctmgr: error: Cluster {target_cluster} does not exist"
+                return self._fail(f" error: Cluster {target_cluster} does not exist")
             assoc_key = self.database._association_key("", account_name, target_cluster)
             self.database.associations[assoc_key] = Association(
                 account=account_name, user="", cluster=target_cluster, parent=parent
@@ -193,7 +384,7 @@ class SacctmgrEmulator:
     def _add_user(self, args: list[str]) -> str:
         """Add user command."""
         if not args:
-            return "sacctmgr: error: No user name specified"
+            return self._fail(" error: No user name specified")
 
         username = args[0]
         account = ""
@@ -227,7 +418,7 @@ class SacctmgrEmulator:
                 # to the "Unknown option" branch with exit_code=1. The
                 # emulator must do the same so callers that rely on the
                 # rejection see it here too.
-                return f" Unknown option: {arg}"
+                return self._fail(f" Unknown option: {arg}")
             # Other association attributes (Share, FairShare, Priority,
             # GrpJobs, MaxTRES, …) are silently accepted: real sacctmgr
             # supports them and the emulator does not model them yet.
@@ -239,7 +430,7 @@ class SacctmgrEmulator:
         # Add association if account specified
         if account:
             if not self.database.get_account(account):
-                return f"sacctmgr: error: Account {account} does not exist"
+                return self._fail(f" error: Account {account} does not exist")
             # One association row per partition (matches
             # _add_assoc_cond_partition in as_mysql_assoc.c — no base
             # row is created when partitions are given).
@@ -282,7 +473,7 @@ class SacctmgrEmulator:
     def _modify_account(self, args: list[str]) -> str:
         """Modify account command."""
         if not args:
-            return "sacctmgr: error: No account name specified"
+            return self._fail(" error: No account name specified")
 
         # Look for 'set' keyword
         set_index = -1
@@ -292,7 +483,7 @@ class SacctmgrEmulator:
                 break
 
         if set_index == -1:
-            return "sacctmgr: error: No 'set' clause found"
+            return self._fail(" error: No 'set' clause found")
 
         account_name = self._extract_account_filter(args[:set_index])
         account = self.database.get_account(account_name) if account_name else None
@@ -306,23 +497,24 @@ class SacctmgrEmulator:
 
         # ``set parent=`` reparents the account-level association. Match real
         # sacctmgr semantics (account_functions.c:715-748): a condition that
-        # matches no account, or a no-op change, prints "Nothing modified" and
-        # exits 1; a missing parent account is its own error; a real change
-        # prints "Modified account associations...".
+        # matches no account, or a no-op change, prints "  Nothing modified"
+        # to stdout and exits 0 (only the local rc is set, never the global
+        # exit_code); a missing parent account is its own error with exit 1;
+        # a real change prints "Modified account associations...".
         parent_value = next((v for k, v in set_pairs if k == "parent"), None)
         if parent_value is not None:
             if not account:
-                return self._fail("  Nothing modified")
+                return "  Nothing modified"
             if self.database.get_account(parent_value) is None:
                 return self._fail(f" Parent Account {parent_value} doesn't exist.")
             if account.parent == parent_value:
-                return self._fail("  Nothing modified")
+                return "  Nothing modified"
             self.database.set_account_parent(account.name, parent_value)
             self.database.save_state()
             return f" Modified account associations...\n  {account.name}"
 
         if not account:
-            return self._fail("  Nothing modified")
+            return "  Nothing modified"
 
         # Process set parameters
         modifications = []
@@ -384,7 +576,7 @@ class SacctmgrEmulator:
         """Modify user command."""
         # Parse user modification - typically for per-user limits
         if "where" not in args:
-            return "sacctmgr: error: No where clause found"
+            return self._fail(" error: No where clause found")
 
         where_index = args.index("where")
         set_index = -1
@@ -395,7 +587,7 @@ class SacctmgrEmulator:
                 break
 
         if set_index == -1:
-            return "sacctmgr: error: No 'set' clause found"
+            return self._fail(" error: No 'set' clause found")
 
         # Parse where clause for account
         account = ""
@@ -404,14 +596,14 @@ class SacctmgrEmulator:
                 account = arg.split("=", 1)[1]
 
         if not account:
-            return "sacctmgr: error: No account specified in where clause"
+            return self._fail(" error: No account specified in where clause")
 
         return f" Modified user associations for account {account}"
 
     def _remove_account(self, args: list[str]) -> str:
         """Remove account command."""
         if "where" not in args:
-            return "sacctmgr: error: No where clause found"
+            return self._fail(" error: No where clause found")
 
         where_index = args.index("where")
 
@@ -422,10 +614,10 @@ class SacctmgrEmulator:
                 account_name = arg.split("=", 1)[1]
 
         if not account_name:
-            return "sacctmgr: error: No account name specified in where clause"
+            return self._fail(" error: No account name specified in where clause")
 
         if not self.database.get_account(account_name):
-            return f"sacctmgr: error: Account {account_name} does not exist"
+            return self._fail(f" error: Account {account_name} does not exist")
 
         self.database.delete_account(account_name)
         self.database.save_state()
@@ -435,7 +627,7 @@ class SacctmgrEmulator:
     def _remove_user(self, args: list[str]) -> str:
         """Remove user command."""
         if "where" not in args:
-            return "sacctmgr: error: No where clause found"
+            return self._fail(" error: No where clause found")
 
         where_index = args.index("where")
 
@@ -462,7 +654,7 @@ class SacctmgrEmulator:
                 self.database.delete_user_associations(user, account)
             result = f" Deleting {len(users)} user association(s) from account {account}"
         else:
-            return "sacctmgr: error: Insufficient parameters in where clause"
+            return self._fail(" error: Insufficient parameters in where clause")
 
         self.database.save_state()
         return result
@@ -470,7 +662,7 @@ class SacctmgrEmulator:
     def _add_cluster(self, args: list[str]) -> str:
         """Add cluster command."""
         if not args:
-            return "sacctmgr: error: No cluster name specified"
+            return self._fail(" error: No cluster name specified")
 
         cluster_name = args[0]
 
@@ -490,13 +682,13 @@ class SacctmgrEmulator:
         # Validate classification value
         valid_values = [e.value for e in ClusterClassification]
         if classification and classification not in valid_values:
-            return (
-                f"sacctmgr: error: Invalid classification '{classification}'. "
+            return self._fail(
+                f" error: Invalid classification '{classification}'. "
                 f"Valid values: {', '.join(v for v in valid_values if v)}"
             )
 
         if self.database.get_cluster(cluster_name):
-            return f"sacctmgr: error: Cluster {cluster_name} already exists"
+            return self._fail(f" error: Cluster {cluster_name} already exists")
 
         self.database.add_cluster(cluster_name, control_host, control_port, classification)
         self.database.save_state()
@@ -514,12 +706,12 @@ class SacctmgrEmulator:
         argv element (just like real sacctmgr).
         """
         if not args:
-            return "sacctmgr: error: No qos name specified"
+            return self._fail(" error: No qos name specified")
 
         qos_name = args[0]
 
         if qos_name in self.database.qos_list:
-            return f"sacctmgr: error: QOS {qos_name} already exists"
+            return self._fail(f" error: QOS {qos_name} already exists")
 
         qos = QOS(name=qos_name)
 
@@ -528,7 +720,9 @@ class SacctmgrEmulator:
             if lower == "set":
                 continue
             if "=" not in arg:
-                return f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
+                return self._fail(
+                    f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
+                )
             key, value = arg.split("=", 1)
             key = key.lower()
             if key == "flags":
@@ -544,7 +738,9 @@ class SacctmgrEmulator:
             elif key == "mintresperjob":
                 qos.min_tres_per_job = value
             else:
-                return f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
+                return self._fail(
+                    f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
+                )
 
         self.database.qos_list[qos_name] = qos
         return f" Adding QOS(s)\n  Name          = {qos_name}"
@@ -555,12 +751,13 @@ class SacctmgrEmulator:
         Parses: modify qos <name> set key=value [key=value ...]
         """
         if not args:
-            return "sacctmgr: error: No qos name specified"
+            return self._fail(" error: No qos name specified")
 
         qos_name = args[0]
         qos = self.database.qos_list.get(qos_name)
         if qos is None:
-            return " Nothing modified"
+            # Same SLURM_NO_CHANGE_IN_DATA shape as accounts: stdout, exit 0.
+            return "  Nothing modified"
 
         set_index = -1
         for i, arg in enumerate(args):
@@ -569,11 +766,11 @@ class SacctmgrEmulator:
                 break
 
         if set_index == -1:
-            return "sacctmgr: error: No 'set' clause found"
+            return self._fail(" error: No 'set' clause found")
 
         for arg in args[set_index + 1 :]:
             if "=" not in arg:
-                return f" Unknown option: {arg}"
+                return self._fail(f" Unknown option: {arg}")
             key, value = arg.split("=", 1)
             key = key.lower()
             if key == "flags":
@@ -591,25 +788,10 @@ class SacctmgrEmulator:
 
         return f" Modified qos...\n  {qos_name}"
 
-    def _show_qos(self, args: list[str]) -> str:
-        """Show QOS details (parsable format with | separator)."""
-        if not args:
-            # Show all
-            lines = []
-            for qos in self.database.qos_list.values():
-                lines.append(f"{qos.name}|{qos.flags}")
-            return "\n".join(lines)
-
-        qos_name = args[0]
-        found_qos: Optional[QOS] = self.database.qos_list.get(qos_name)
-        if found_qos is None:
-            return ""
-        return f"{found_qos.name}|{found_qos.flags}"
-
     def _remove_cluster(self, args: list[str]) -> str:
         """Remove cluster command."""
         if "where" not in args:
-            return "sacctmgr: error: No where clause found"
+            return self._fail(" error: No where clause found")
 
         where_index = args.index("where")
         cluster_name = ""
@@ -618,166 +800,145 @@ class SacctmgrEmulator:
                 cluster_name = arg.split("=", 1)[1]
 
         if not cluster_name:
-            return "sacctmgr: error: No cluster name specified in where clause"
+            return self._fail(" error: No cluster name specified in where clause")
 
         if cluster_name == "default":
-            return "sacctmgr: error: Cannot delete the default cluster"
+            return self._fail(" error: Cannot delete the default cluster")
 
         if not self.database.get_cluster(cluster_name):
-            return f"sacctmgr: error: Cluster {cluster_name} does not exist"
+            return self._fail(f" error: Cluster {cluster_name} does not exist")
 
         try:
             self.database.delete_cluster(cluster_name)
         except ValueError as e:
-            return f"sacctmgr: error: {e}"
+            return self._fail(f" error: {e}")
 
         self.database.save_state()
 
         return f" Deleting cluster(s)...\n  {cluster_name}"
 
+    # --- List/show rendering ---
+
+    def _list_qos(self, args: list[str]) -> str:
+        """List QOS (real default format from qos_functions.c:1178-1193)."""
+        fields = self._resolve(_QOS_DEFAULT, args)
+
+        positional = [a for a in args if "=" not in a and a.lower() != "where"]
+        qos_items = [
+            q for name, q in self.database.qos_list.items() if not positional or name in positional
+        ]
+
+        def _row(q: QOS) -> dict[str, str]:
+            return {
+                "Name": q.name,
+                # Real defaults for a fresh QOS row.
+                "Priority": "0",
+                "GraceTime": "00:00:00",
+                "PreemptMode": "cluster",
+                "UsageFactor": "1.000000",
+                "Flags": q.flags,
+                "GrpTRES": q.grp_tres,
+                "MaxJobs": str(q.max_jobs) if q.max_jobs else "",
+                "MaxSubmit": str(q.max_submit) if q.max_submit else "",
+                "MaxWall": q.max_wall,
+                "MinTRES": q.min_tres_per_job,
+            }
+
+        return render_table(fields, [_row(q) for q in qos_items], self._mode)
+
     def _list_clusters(self, args: list[str]) -> str:
-        """List clusters command.
+        """List clusters (real default format from cluster_functions.c:482-489)."""
+        fields = self._resolve(_CLUSTER_DEFAULT, args)
 
-        When ``format=`` is supplied, render only the requested columns and
-        use ``--parsable2`` semantics — fields joined by ``|`` with no
-        trailing separator, and no header line. This matches real SLURM
-        ``sacctmgr --parsable2 --noheader list cluster format=cluster``:
-        with a single field, every line is just the bare cluster name.
-        """
-        clusters = self.database.list_clusters()
-
-        format_spec = None
-        for arg in args:
-            if arg.startswith("format="):
-                format_spec = arg.split("=", 1)[1]
-                break
-
-        if format_spec is not None:
-            fields = [f.strip().lower() for f in format_spec.split(",") if f.strip()]
-
-            def _field_value(cluster, field: str) -> str:
-                if field == "cluster":
-                    return cluster.name
-                if field in ("controlhost", "control_host"):
-                    return cluster.control_host
-                if field in ("controlport", "control_port"):
-                    return str(cluster.control_port)
-                if field == "rpc":
-                    return str(cluster.rpc_version)
-                if field == "classification":
-                    return cluster.classification.value if cluster.classification else ""
-                return ""
-
-            lines = []
-            for cluster in clusters:
-                lines.append("|".join(_field_value(cluster, f) for f in fields))
-            return "\n".join(lines)
-
-        if not clusters:
-            return "Cluster|ControlHost|ControlPort|RPC|Classification|"
-
-        lines = ["Cluster|ControlHost|ControlPort|RPC|Classification|"]
-        for cluster in clusters:
-            cls_val = cluster.classification.value if cluster.classification else ""
-            lines.append(
-                f"{cluster.name}|{cluster.control_host}|{cluster.control_port}|"
-                f"{cluster.rpc_version}|{cls_val}|"
+        rows = []
+        for cluster in self.database.list_clusters():
+            rows.append(
+                {
+                    "Cluster": cluster.name,
+                    "ControlHost": cluster.control_host,
+                    "ControlPort": str(cluster.control_port),
+                    "RPC": str(cluster.rpc_version),
+                    "Class": cluster.classification.value if cluster.classification else "",
+                }
             )
-
-        return "\n".join(lines)
+        return render_table(fields, rows, self._mode)
 
     def _list_accounts(self, args: list[str]) -> str:
-        """List accounts command."""
-        accounts = self.database.list_accounts()
+        """List accounts (real default ``Acc,Des,O``)."""
+        fields = self._resolve(_ACCOUNT_DEFAULT, args)
 
-        if not accounts:
-            return "Account|Descr|Org|"
-
-        lines = ["Account|Descr|Org|"]
-        for account in accounts:
-            lines.append(f"{account.name}|{account.description}|{account.organization}|")
-
-        return "\n".join(lines)
+        rows = [
+            {
+                "Account": a.name,
+                "Descr": a.description,
+                "Org": a.organization,
+            }
+            for a in self.database.list_accounts()
+        ]
+        return render_table(fields, rows, self._mode)
 
     def _list_users(self, args: list[str]) -> str:
-        """List users command."""
-        users = list(self.database.users.values())
+        """List users (real default ``U,DefaultA,Ad``)."""
+        fields = self._resolve(_USER_DEFAULT, args)
 
-        if not users:
-            return "User|DefaultAccount|"
-
-        lines = ["User|DefaultAccount|"]
-        for user in users:
-            lines.append(f"{user.name}|{user.default_account}|")
-
-        return "\n".join(lines)
+        rows = [
+            {
+                "User": u.name,
+                "Def Acct": u.default_account,
+                # Real sacctmgr prints "None" for regular users.
+                "Admin": "None",
+            }
+            for u in self.database.users.values()
+        ]
+        return render_table(fields, rows, self._mode)
 
     def _list_associations(self, args: list[str]) -> str:
-        """List associations command."""
-        # Parse format and where clauses
-        format_fields = ["account", "user"]
-        account_filter = None
+        """List associations (real default from association_functions.c:793-801)."""
+        fields = self._resolve(_ASSOC_DEFAULT, args)
 
-        for i, arg in enumerate(args):
-            if arg.startswith("format="):
-                format_spec = arg.split("=", 1)[1]
-                format_fields = [f.strip().lower() for f in format_spec.split(",")]
-            elif arg.startswith("where"):
-                # Look for account filter
-                for j in range(i + 1, len(args)):
-                    if args[j].startswith("account="):
-                        account_filter = args[j].split("=", 1)[1]
+        account_filter = None
+        user_filter = None
+        for arg in args:
+            if arg.startswith("account="):
+                account_filter = arg.split("=", 1)[1]
+            elif arg.startswith("user="):
+                user_filter = arg.split("=", 1)[1]
 
         associations = list(self.database.associations.values())
-
         if account_filter:
             associations = [a for a in associations if a.account == account_filter]
+        if user_filter:
+            associations = [a for a in associations if a.user == user_filter]
 
-        # Build header
-        header = "|".join([f.title() for f in format_fields]) + "|"
-        lines = [header]
+        return render_table(fields, [self._assoc_row(a) for a in associations], self._mode)
 
-        # Build data lines
-        for assoc in associations:
-            row_data = []
-            for field in format_fields:
-                if field == "account":
-                    row_data.append(assoc.account)
-                elif field == "user":
-                    row_data.append(assoc.user)
-                elif field == "qos":
-                    account_obj = self.database.get_account(assoc.account)
-                    row_data.append(account_obj.qos if account_obj else "")
-                elif field in {"maxtresmin", "maxtressmins"}:
-                    # Format user limits
-                    limits_str = ",".join([f"{k}={v}" for k, v in assoc.limits.items()])
-                    row_data.append(limits_str)
-                elif field == "partition":
-                    row_data.append(assoc.partition or "")
-                elif field in {"partitions", "defaultpartition", "def_partition"}:
-                    # Real sacctmgr's only association format token in
-                    # this space is "Partition" (Part minimum prefix).
-                    # The plural/Default* variants don't exist and
-                    # `common.c:fprintf("Unknown field '%s'")` exits.
-                    return f"sacctmgr: Unknown field '{field}'"
-                else:
-                    row_data.append("")
+    def _assoc_row(self, assoc: Association) -> dict[str, str]:
+        account_obj = self.database.get_account(assoc.account)
+        limits = ",".join(f"{k}={v}" for k, v in assoc.limits.items()) if assoc.limits else ""
+        return {
+            "Cluster": assoc.cluster,
+            "Account": assoc.account,
+            "User": assoc.user,
+            "Partition": assoc.partition or "",
+            # parent_acct lives on the account-level row (empty User);
+            # user rows print blank (as_mysql_assoc.c:2116-2126).
+            "ParentName": (assoc.parent or "") if assoc.user == "" else "",
+            "QOS": account_obj.qos if account_obj else "",
+            "MaxTRESMins": limits,
+        }
 
-            lines.append("|".join(row_data) + "|")
+    def _list_tres(self, args: list[str]) -> str:
+        """List TRES types (real default ``Type,Name%15,ID``)."""
+        fields = self._resolve(_TRES_DEFAULT, args)
 
-        return "\n".join(lines)
-
-    def _list_tres(self) -> str:
-        """List TRES types."""
-        lines = ["Type|Name|"]
-        for tres_type in self.database.tres_types:
+        rows = []
+        for idx, tres_type in enumerate(self.database.tres_types, start=1):
             if "/" in tres_type:
                 type_part, name_part = tres_type.split("/", 1)
-                lines.append(f"{type_part}|{name_part}|")
             else:
-                lines.append(f"{tres_type}||")
-
-        return "\n".join(lines)
+                type_part, name_part = tres_type, ""
+            rows.append({"Type": type_part, "Name": name_part, "ID": str(idx)})
+        return render_table(fields, rows, self._mode)
 
     def _show_account(self, args: list[str]) -> str:
         """Show account command.
@@ -789,17 +950,16 @@ class SacctmgrEmulator:
           branch passes NULL). One row per account.
         - With ``WithAssoc`` one row per association is emitted; the account-level
           row (empty User) carries ParentName, user rows leave it blank.
-        - ``format=`` selects/orders columns. With no ``format=`` the legacy
-          ``Account|Descr|Org|`` shape is kept for existing callers.
+        - ``format=`` selects/orders columns; the default field set matches
+          real sacctmgr (``Acc,Des,O`` plus the WithAssoc block).
         """
         positional: list[str] = []
-        format_fields: Optional[list[str]] = None
         with_assoc = False
         for arg in args:
             low = arg.lower()
             if low.startswith("format="):
-                format_fields = [f.strip().lower() for f in arg.split("=", 1)[1].split(",")]
-            elif low in {"withassoc", "withassociations"}:
+                continue
+            if low in {"withassoc", "withassociations"}:
                 with_assoc = True
             elif low == "where":
                 continue
@@ -808,32 +968,26 @@ class SacctmgrEmulator:
             elif "=" not in arg:
                 positional.append(arg)
 
+        default_spec = _ACCOUNT_DEFAULT
+        if with_assoc:
+            default_spec = f"{_ACCOUNT_DEFAULT},{_ACCOUNT_WITHASSOC}"
+        fields = self._resolve(default_spec, args)
+
         accounts = [
             a for a in self.database.list_accounts() if not positional or a.name in positional
         ]
 
-        if format_fields is None:
-            # Legacy fixed shape (no association expansion).
-            return "\n".join(f"{a.name}|{a.description}|{a.organization}|" for a in accounts)
-
-        def _account_cell(account, field: str, parentname: str) -> str:
-            if field == "account":
-                return account.name
-            if field in {"descr", "description"}:
-                return account.description
-            if field in {"org", "organization"}:
-                return account.organization
-            if field == "parentname":
-                return parentname
-            if field == "user":
-                return ""
-            return ""
-
-        lines: list[str] = []
+        rows: list[dict[str, str]] = []
         for account in accounts:
+            base = {
+                "Account": account.name,
+                "Descr": account.description,
+                "Org": account.organization,
+            }
             if not with_assoc:
-                # No association loaded → ParentName (and other assoc fields) blank.
-                lines.append("|".join(_account_cell(account, f, "") for f in format_fields) + "|")
+                # No association loaded → ParentName (and other assoc
+                # fields) stay blank.
+                rows.append(base)
                 continue
             assocs = [
                 a
@@ -841,76 +995,44 @@ class SacctmgrEmulator:
                 if a.account == account.name and a.cluster == self.database.current_cluster
             ]
             for assoc in assocs:
-                cells = []
-                for f in format_fields:
-                    if f == "user":
-                        cells.append(assoc.user)
-                    elif f == "parentname":
-                        # Only the account-level row (empty User) carries parent.
-                        cells.append(assoc.parent or "" if assoc.user == "" else "")
-                    else:
-                        cells.append(_account_cell(account, f, assoc.parent or ""))
-                lines.append("|".join(cells) + "|")
-        return "\n".join(lines)
+                row = dict(base)
+                row.update(
+                    {
+                        "Cluster": assoc.cluster,
+                        "User": assoc.user,
+                        "ParentName": (assoc.parent or "") if assoc.user == "" else "",
+                        "QOS": account.qos,
+                        "Share": str(account.fairshare),
+                    }
+                )
+                rows.append(row)
+        return render_table(fields, rows, self._mode)
 
     def _show_association(self, args: list[str]) -> str:
         """Show association command."""
-        # Parse where clause and optional format=
+        # Parse where clause and optional format=. The ``where`` keyword is
+        # optional in real sacctmgr — ``user=``/``account=`` conditions are
+        # accepted whether or not it is present.
         user = ""
         account = ""
-        format_fields: Optional[list[str]] = None
-
-        # The ``where`` keyword is optional in real sacctmgr — ``user=``/``account=``
-        # conditions are accepted whether or not it is present.
         for arg in args:
-            if arg.startswith("format="):
-                format_fields = [f.strip().lower() for f in arg.split("=", 1)[1].split(",")]
-            elif arg.startswith("user="):
+            if arg.startswith("user="):
                 user = arg.split("=", 1)[1]
             elif arg.startswith("account="):
                 account = arg.split("=", 1)[1]
 
-        # Default (no format= given) keeps the legacy fixed shape so existing
-        # parsers continue to read account|user| at columns 0..1.
-        def _render_default(a: Association) -> str:
-            return f"{a.account}|{a.user}||||||||| |"
-
-        def _render_format(a: Association) -> str:
-            cells = []
-            for f in format_fields or []:
-                if f == "account":
-                    cells.append(a.account)
-                elif f == "user":
-                    cells.append(a.user)
-                elif f == "partition":
-                    cells.append(a.partition or "")
-                elif f == "cluster":
-                    cells.append(a.cluster)
-                elif f == "parentname":
-                    # parent_acct lives on the account-level row (empty User);
-                    # user rows print blank (as_mysql_assoc.c:2116-2126).
-                    cells.append(a.parent or "" if a.user == "" else "")
-                else:
-                    cells.append("")
-            return "|".join(cells) + "|"
-
-        # Validate format fields up front so the emulator crashes on
-        # the same bogus tokens real sacctmgr rejects (common.c).
-        if format_fields:
-            for f in format_fields:
-                if f in {"partitions", "defaultpartition", "def_partition"}:
-                    return f"sacctmgr: Unknown field '{f}'"
-
-        render = _render_format if format_fields else _render_default
+        fields = self._resolve(_ASSOC_DEFAULT, args)
 
         if user and account:
-            rows = self.database.list_user_associations(user, account)
-            return "\n".join(render(a) for a in rows)
+            associations = self.database.list_user_associations(user, account)
+        else:
+            associations = [
+                a
+                for a in self.database.associations.values()
+                if not account or a.account == account
+            ]
 
-        associations = [
-            a for a in self.database.associations.values() if not account or a.account == account
-        ]
-        return "\n".join(render(a) for a in associations)
+        return render_table(fields, [self._assoc_row(a) for a in associations], self._mode)
 
     def _show_help(self) -> str:
         """Show help message."""

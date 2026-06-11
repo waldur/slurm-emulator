@@ -90,7 +90,9 @@ class TestListAssociationsPartitionFormat:
     def test_partition_format_field(self, tmp_path):
         em = _emulator(tmp_path)
         em.handle_command(["add", "user", "alice", "account=acct1", "Partitions=zen3,zen5"])
-        out = em.handle_command(["list", "associations", "format=account,user,partition"])
+        out = em.handle_command(
+            ["list", "associations", "format=account,user,partition", "-n", "-P"]
+        )
         # One data line per (account, user, partition) row.
         alice_lines = [line for line in out.splitlines() if "alice" in line]
         assert len(alice_lines) == 2
@@ -102,12 +104,15 @@ class TestListAssociationsPartitionFormat:
         em.handle_command(["add", "user", "alice", "account=acct1", "Partitions=zen3"])
         out = em.handle_command(["list", "associations", "format=account,user,partitions"])
         assert "Unknown field 'partitions'" in out
+        # common.c:882-885: exit_code=1 when a format token is bogus.
+        assert em.exit_code == 1
 
     def test_defaultpartition_format_rejected(self, tmp_path):
         em = _emulator(tmp_path)
         em.handle_command(["add", "user", "alice", "account=acct1", "Partitions=zen3"])
         out = em.handle_command(["list", "associations", "format=account,user,defaultpartition"])
         assert "Unknown field 'defaultpartition'" in out
+        assert em.exit_code == 1
 
 
 class TestShowAssociationPartitionFormat:
@@ -122,6 +127,8 @@ class TestShowAssociationPartitionFormat:
                 "user=alice",
                 "account=acct1",
                 "format=account,user,partition",
+                "-n",
+                "-P",
             ]
         )
         lines = [line for line in out.splitlines() if line]
@@ -129,18 +136,21 @@ class TestShowAssociationPartitionFormat:
         partitions = sorted(line.split("|")[2] for line in lines)
         assert partitions == ["zen3", "zen5"]
 
-    def test_show_default_format_back_compat(self, tmp_path):
-        """Without format=, the legacy 11-column shape must be preserved.
-
-        Existing site-agent parsers depend on this exact column layout.
-        """
+    def test_show_default_format_matches_real_sacctmgr(self, tmp_path):
+        """Without format=, the real 20-field default applies
+        (association_functions.c:793-801): Cluster, Account, User,
+        Partition lead the row."""
         em = _emulator(tmp_path)
         em.handle_command(["add", "user", "alice", "account=acct1", "Partitions=zen3"])
-        out = em.handle_command(["show", "association", "where", "user=alice", "account=acct1"])
+        out = em.handle_command(
+            ["show", "association", "where", "user=alice", "account=acct1", "-n", "-P"]
+        )
         cells = out.split("|")
-        assert cells[0] == "acct1"
-        assert cells[1] == "alice"
-        assert len(cells) >= 10
+        assert len(cells) == 20
+        assert cells[0] == "default"  # Cluster
+        assert cells[1] == "acct1"  # Account
+        assert cells[2] == "alice"  # User
+        assert cells[3] == "zen3"  # Partition
 
     def test_show_plural_format_rejected(self, tmp_path):
         em = _emulator(tmp_path)

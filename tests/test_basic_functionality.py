@@ -216,9 +216,11 @@ class TestBasicCommands:
         sacctmgr = SacctmgrEmulator(self.database, self.time_engine)
         sacct = SacctEmulator(self.database, self.time_engine)
 
-        # Test that commands return strings and don't crash
-        result1 = sacctmgr.handle_command(["sacctmgr", "--version"])
-        result2 = sacct.handle_command(["sacct", "--version"])
+        # Test that commands return strings and don't crash. handle_command
+        # takes argv[1:] — no program name (real sacct rejects stray
+        # positionals with exit 1).
+        result1 = sacctmgr.handle_command(["-V"])
+        result2 = sacct.handle_command(["--version"])
 
         assert isinstance(result1, str)
         assert isinstance(result2, str)
