@@ -1,6 +1,8 @@
 """In-memory database for SLURM emulator state."""
 
+import fcntl
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -142,7 +144,9 @@ class SlurmDatabase:
         self.jobs: dict[str, Job] = {}
         self.qos_list: dict[str, QOS] = {}
         self.tres_types = ["CPU", "Mem", "GRES/gpu", "billing"]
-        self.state_file = Path("/tmp/slurm_emulator_db.json")
+        self.state_file = Path(
+            os.environ.get("SLURM_EMULATOR_STATE_FILE", "/tmp/slurm_emulator_db.json")
+        )
 
         # Create global root account and root association for default cluster
         self.add_account("root", "Root account", "system")
@@ -528,6 +532,13 @@ class SlurmDatabase:
                 d["classification"] = str(d.get("classification", ""))
             return d
 
+        def _serialize_job(job: Job) -> dict:
+            d = asdict(job)
+            for dt_field in ("submit_time", "start_time", "end_time"):
+                if d.get(dt_field) is not None:
+                    d[dt_field] = d[dt_field].isoformat()
+            return d
+
         state = {
             "_next_cluster_id": self._next_cluster_id,
             "_next_job_id": self._next_job_id,
@@ -537,11 +548,20 @@ class SlurmDatabase:
             "users": {name: asdict(user) for name, user in self.users.items()},
             "associations": {key: asdict(assoc) for key, assoc in self.associations.items()},
             "usage_records": [self._serialize_usage_record(r) for r in self.usage_records],
-            "jobs": {jid: asdict(job) for jid, job in self.jobs.items()},
+            "jobs": {jid: _serialize_job(job) for jid, job in self.jobs.items()},
+            "qos": {name: asdict(qos) for name, qos in self.qos_list.items()},
         }
 
         try:
-            with self.state_file.open("w") as f:
+            # Lock-then-truncate so concurrent CLI/API processes never
+            # produce torn JSON: open("w") would truncate before the
+            # lock is held, letting a LOCK_SH reader observe an empty
+            # file (or a second writer leave trailing bytes). Whole-file
+            # last-writer-wins semantics are unchanged.
+            with self.state_file.open("a+") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                f.seek(0)
+                f.truncate()
                 json.dump(state, f, indent=2)
         except Exception as e:
             print(f"Warning: Failed to save database state: {e}")
@@ -551,6 +571,7 @@ class SlurmDatabase:
         try:
             if self.state_file.exists():
                 with self.state_file.open() as f:
+                    fcntl.flock(f, fcntl.LOCK_SH)
                     state = json.load(f)
 
                 self._next_cluster_id = state.get("_next_cluster_id", 1)
@@ -655,6 +676,11 @@ class SlurmDatabase:
                         if data.get(dt_field):
                             data[dt_field] = datetime.fromisoformat(data[dt_field])
                     self.jobs[jid] = Job(**data)
+
+                # Load QOS entries (absent in pre-0.7 state files)
+                self.qos_list = {}
+                for name, data in state.get("qos", {}).items():
+                    self.qos_list[name] = QOS(**data)
 
         except Exception as e:
             print(f"Warning: Failed to load database state: {e}")

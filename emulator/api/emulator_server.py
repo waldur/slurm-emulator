@@ -1,5 +1,6 @@
 """REST API server for waldur-site-agent integration."""
 
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -7,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from emulator import __version__
+from emulator.api.slurmrestd.auth import DEFAULT_JWT_KEY, encode_jwt_hs256
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
 from emulator.core.usage_simulator import UsageSimulator
@@ -52,6 +54,11 @@ class ClusterCreateRequest(BaseModel):
     control_host: str = "localhost"
     control_port: int = 6817
     classification: str = ""
+
+
+class TokenRequest(BaseModel):
+    username: str = "root"
+    lifespan: int = 1800
 
 
 class EmulatorServer:
@@ -343,6 +350,18 @@ class EmulatorServer:
             )
             self.database.save_state()
             return {"status": "success", "cluster": request.name}
+
+        @self.app.post("/api/token")
+        async def issue_token(request: TokenRequest):
+            """Mint a JWT for the slurmrestd emulator (scontrol token stand-in).
+
+            Signed with SLURM_EMULATOR_JWT_KEY when set, else the shared
+            dev key — either way the 6820 app accepts the result.
+            """
+            key = os.environ.get("SLURM_EMULATOR_JWT_KEY", DEFAULT_JWT_KEY)
+            token = encode_jwt_hs256(request.username, request.lifespan, key)
+            # Second key mirrors `scontrol token` stdout format.
+            return {"token": token, "SLURM_JWT": f"SLURM_JWT={token}"}
 
         @self.app.post("/api/time/advance")
         async def advance_time(days: int = 0, months: int = 0, quarters: int = 0):

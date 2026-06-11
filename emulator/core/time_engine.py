@@ -1,6 +1,7 @@
 """Time manipulation engine for SLURM emulator."""
 
 import json
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
@@ -14,7 +15,9 @@ class TimeEngine:
     def __init__(self, start_time: Optional[datetime] = None):
         self.current_time = start_time or datetime(2024, 1, 1)
         self.time_callbacks: list[Callable] = []
-        self.state_file = Path("/tmp/slurm_emulator_time.json")
+        self.state_file = Path(
+            os.environ.get("SLURM_EMULATOR_TIME_FILE", "/tmp/slurm_emulator_time.json")
+        )
         self._load_state()
 
     def advance_time(self, days: int = 0, months: int = 0, quarters: int = 0) -> None:
