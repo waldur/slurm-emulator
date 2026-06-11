@@ -129,7 +129,12 @@ slurm-emulator> sacctmgr modify account test-account set GrpTRESMins=billing=720
   GrpTRESMins=billing=72000
 
 slurm-emulator> sacct --accounts=test-account --starttime=2024-01-01 --endtime=2024-12-31
-test-account|cpu=12800,mem=102400,gres/gpu=800|08:00:00|user1
+JobID           JobName  Partition    Account  AllocCPUS      State ExitCode
+------------ ---------- ---------- ---------- ---------- ---------- --------
+1                 job_1    compute test-acco+         64  COMPLETED      0:0
+
+slurm-emulator> sacct --accounts=test-account -S 2024-01-01 --format=Account,ReqTRES,Elapsed,User --noheader --parsable2
+test-account|cpu=64,mem=512G,node=1,billing=64,gres/gpu=4|08:00:00|user1
 ```
 
 ## API Integration
@@ -387,7 +392,7 @@ sinfo <args>                         # Run sinfo command
 # Examples:
 sacctmgr list accounts
 sacctmgr modify account test set fairshare=333
-sacct --accounts=test --format=Account,User,Elapsed
+sacct --accounts=test --format=Account,User,Elapsed --noheader --parsable2
 ```
 
 ## Testing Scenarios

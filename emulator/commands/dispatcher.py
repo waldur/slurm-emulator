@@ -27,16 +27,16 @@ class SlurmEmulator:
 
     # Flags that are only valid for specific commands
     _VALID_FLAGS: ClassVar[dict[str, set[str]]] = {
-        "sacctmgr": {"--parsable2", "--noheader", "--immediate"},
-        "sacct": {"--parsable2", "--noheader"},
-        "sshare": {"--parsable2", "--noheader"},
+        "sacctmgr": {"--parsable", "--parsable2", "--noheader", "--immediate"},
+        "sacct": {"--parsable", "--parsable2", "--noheader"},
+        "sshare": {"--parsable", "--parsable2", "--noheader"},
         "scancel": set(),
         "id": set(),
         "sinfo": {"-V"},
     }
 
     # The set of SLURM formatting/control flags that we validate
-    _SLURM_FLAGS = frozenset({"--parsable2", "--noheader", "--immediate"})
+    _SLURM_FLAGS = frozenset({"--parsable", "--parsable2", "--noheader", "--immediate"})
 
     def validate_flags(self, command_name: str, args: list[str]) -> None:
         """Validate flags for the given command.
@@ -80,19 +80,14 @@ class SlurmEmulator:
         return filtered, cluster
 
     def execute_command(self, command_name: str, args: list[str]) -> str:
-        """Execute a SLURM command and return output."""
-        # sacct supports the legacy single -M extraction; sshare parses
-        # its own (multi-cluster) -M / --cluster(s)= internally so the
-        # CLUSTER: banner can be emitted per cluster.
-        cluster = None
-        if command_name == "sacct":
-            args, cluster = self.extract_cluster_flag(args)
-        saved_cluster = self.database.current_cluster
-        if cluster:
-            if not self.database.get_cluster(cluster):
-                return f"slurm-emulator: error: Cluster '{cluster}' does not exist"
-            self.database.current_cluster = cluster
+        """Execute a SLURM command and return output.
 
+        sacct, sshare, and sacctmgr parse (or tolerate) their own
+        ``-M``/``--cluster(s)=`` internally — real sacct treats it as a
+        pure record filter (a nonexistent cluster just matches nothing,
+        exit 0), and sshare validates the list itself.
+        """
+        saved_cluster = self.database.current_cluster
         try:
             if command_name == "sacctmgr":
                 return self.sacctmgr.handle_command(args)
@@ -184,21 +179,25 @@ def sacctmgr_main():
     emulator = get_emulator()
     args = sys.argv[1:]
 
-    # Validate flags (all three are valid for sacctmgr)
+    # sacctmgr honours --parsable/--parsable2/--noheader/--immediate
+    # internally (real-sacctmgr parity), so nothing is stripped here.
     emulator.validate_flags("sacctmgr", args)
 
-    # Filter out formatting/control flags handled by the emulator internally
-    # Keep -M and --clusters= for cluster handling in execute_command
-    filtered_args = [a for a in args if a not in ("--parsable2", "--noheader", "--immediate")]
-
     try:
-        output = emulator.execute_command("sacctmgr", filtered_args)
-        print(output)
+        output = emulator.execute_command("sacctmgr", args)
+        # Real sacctmgr writes errors to stderr (" error: ..." style)
+        # and normal output to stdout; the emulator returns a single
+        # message per command, so route by the recorded exit code.
+        stream = sys.stderr if emulator.sacctmgr.exit_code else sys.stdout
+        if output:
+            print(output, file=stream)
+    except SystemExit:
+        raise
     except Exception as e:
         print(f"sacctmgr: error: {e}", file=sys.stderr)
         sys.exit(1)
-    # Propagate the command's exit status (sacctmgr.c sets exit_code=1 on any
-    # error, e.g. "Nothing modified" or a missing parent account).
+    # Propagate the command's exit status (mirrors sacctmgr.c's global
+    # exit_code; note "Nothing modified" leaves it 0).
     sys.exit(emulator.sacctmgr.exit_code)
 
 
@@ -214,15 +213,18 @@ def sacct_main():
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-    # Filter out formatting flags handled by the emulator internally
-    filtered_args = [a for a in args if a not in ("--parsable2", "--noheader")]
-
+    # sacct honours --parsable/--parsable2/--noheader and -M internally
+    # (real-sacct parity), so nothing is stripped here.
     try:
-        output = emulator.execute_command("sacct", filtered_args)
-        print(output)
+        output = emulator.execute_command("sacct", args)
+        if output:
+            print(output)
+    except SystemExit:
+        raise
     except Exception as e:
         print(f"sacct: error: {e}", file=sys.stderr)
         sys.exit(1)
+    sys.exit(emulator.sacct.exit_code)
 
 
 def sshare_main():
@@ -240,12 +242,14 @@ def sshare_main():
     # parity), so we do NOT strip them before dispatch.
     try:
         output = emulator.execute_command("sshare", args)
-        print(output)
+        if output:
+            print(output)
     except SystemExit:
         raise
     except Exception as e:
         print(f"sshare: error: {e}", file=sys.stderr)
         sys.exit(1)
+    sys.exit(emulator.sshare.exit_code)
 
 
 def sinfo_main():

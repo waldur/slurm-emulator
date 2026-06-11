@@ -12,9 +12,10 @@ Validates emulator parity with real Slurm (/Users/ilja/workspace/slurm):
   blank (as_mysql_assoc.c:2116-2126).
 - ``modify account ... set parent=`` reparents the account-level
   association. A no-op change or a condition matching no account prints
-  "Nothing modified" and exits 1; a missing parent account is its own
-  error; a real change prints "Modified account associations..."
-  (account_functions.c:715-748, exit mapping in sacctmgr.c:982-984).
+  "  Nothing modified" to stdout and exits 0 — only the local rc is set,
+  never the global exit_code (account_functions.c:727-729,
+  sacctmgr.c:304); a missing parent account is its own error with exit
+  1; a real change prints "Modified account associations...".
 """
 
 from emulator.commands.sacctmgr import SacctmgrEmulator
@@ -42,8 +43,8 @@ class TestShowAccountParentName:
         out = em.handle_command(
             ["show", "account", "p-proj", "format=Account,ParentName", "-n", "-P"]
         )
-        # ParentName column is empty (emulator uses a trailing-``|`` row shape).
-        assert out == "p-proj||"
+        # ParentName column is empty (parsable2: no trailing pipe).
+        assert out == "p-proj|"
         # The decisive parity property: the parent is NOT recoverable here.
         assert "c-org" not in out
 
@@ -51,11 +52,11 @@ class TestShowAccountParentName:
         # Real Slurm: WithAssoc loads the account-level association → parent shown.
         em = _emulator(tmp_path)
         out = em.handle_command(
-            ["show", "account", "p-proj", "withassoc", "format=Account,ParentName"]
+            ["show", "account", "p-proj", "withassoc", "format=Account,ParentName", "-n", "-P"]
         )
         rows = [r for r in out.splitlines() if r.startswith("p-proj|")]
         # Account-level row carries the parent.
-        assert "p-proj|c-org|" in rows
+        assert "p-proj|c-org" in rows
 
 
 class TestShowAssociationParentName:
@@ -67,7 +68,7 @@ class TestShowAssociationParentName:
             ["show", "assoc", "account=p-proj", "format=Account,ParentName,User", "-n", "-P"]
         )
         # The account-level row (empty User) reports the parent.
-        assert "p-proj|c-org||" in out.splitlines()
+        assert "p-proj|c-org|" in out.splitlines()
 
     def test_user_row_parentname_is_blank(self, tmp_path):
         em = _emulator(tmp_path)
@@ -75,7 +76,7 @@ class TestShowAssociationParentName:
             ["show", "assoc", "account=p-proj", "format=Account,ParentName,User", "-n", "-P"]
         )
         # The user row prints a blank ParentName (assoc->parent_acct is NULL).
-        assert "p-proj||alice|" in out.splitlines()
+        assert "p-proj||alice" in out.splitlines()
 
     def test_where_keyword_is_optional(self, tmp_path):
         em = _emulator(tmp_path)
@@ -112,15 +113,18 @@ class TestModifyAccountParent:
         assoc = em.handle_command(
             ["show", "assoc", "account=p-proj", "format=Account,ParentName,User", "-n", "-P"]
         )
-        assert "p-proj|c-new||" in assoc.splitlines()
+        assert "p-proj|c-new|" in assoc.splitlines()
 
     def test_reparent_to_same_parent_is_nothing_modified(self, tmp_path):
         em = _emulator(tmp_path)
         out = em.handle_command(
             ["modify", "account", "where", "name=p-proj", "set", "parent=c-org"]
         )
-        assert "Nothing modified" in out
-        assert em.exit_code == 1
+        assert out == "  Nothing modified"
+        # Real sacctmgr exits 0 here: account_functions.c:727-729 sets only
+        # the local rc, and the process exits with the untouched global
+        # exit_code (sacctmgr.c:304).
+        assert em.exit_code == 0
 
     def test_reparent_to_missing_parent_errors(self, tmp_path):
         em = _emulator(tmp_path)
@@ -137,8 +141,8 @@ class TestModifyAccountParent:
         out = em.handle_command(
             ["modify", "account", "where", "name=p-ghost", "set", "parent=c-org"]
         )
-        assert "Nothing modified" in out
-        assert em.exit_code == 1
+        assert out == "  Nothing modified"
+        assert em.exit_code == 0
 
     def test_where_name_filter_form_is_parsed(self, tmp_path):
         # The agent uses ``where name=<acct>`` — real Slurm parses ``name=`` as
@@ -171,7 +175,9 @@ class TestAddExistingAccountIsNotAnError:
     def test_readding_account_keeps_exit_code_zero(self, tmp_path):
         em = _emulator(tmp_path)
         out = em.handle_command(["add", "account", "c-org", "parent=root"])
-        assert "already exists" in out
+        # Exact SLURM_NO_CHANGE_IN_DATA shape: printf(" %s", slurm_strerror(rc))
+        # to stdout (account_functions.c:342-343, slurm_errno.c:205-207).
+        assert out == " Data has not changed since time specified"
         assert em.exit_code == 0
 
     def test_modify_parent_still_reports_failure(self, tmp_path):

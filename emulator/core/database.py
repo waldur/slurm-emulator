@@ -104,6 +104,10 @@ class UsageRecord:
     period: str
     raw_tres: dict[str, int] = field(default_factory=dict)
     cluster: str = "default"
+    # Numeric job id (real sacct JobIDs are numeric); assigned by the
+    # database when None so direct construction stays backward compatible.
+    job_id: Optional[int] = None
+    state: str = "COMPLETED"
 
 
 @dataclass
@@ -126,6 +130,7 @@ class SlurmDatabase:
 
     def __init__(self) -> None:
         self._next_cluster_id: int = 1
+        self._next_job_id: int = 1
         self.clusters: dict[str, Cluster] = {
             "default": Cluster(name="default", id=self._allocate_cluster_id())
         }
@@ -412,7 +417,27 @@ class SlurmDatabase:
 
     def add_usage_record(self, record: UsageRecord) -> None:
         """Add usage record."""
+        if record.job_id is None:
+            record.job_id = self._next_job_id
+            self._next_job_id += 1
         self.usage_records.append(record)
+
+    def ensure_job_ids(self) -> None:
+        """Assign job ids to records appended without one.
+
+        Tests (and older state files) append to ``usage_records``
+        directly; ids are handed out in list order so they are
+        deterministic and stable across calls.
+        """
+        max_assigned = max(
+            (r.job_id for r in self.usage_records if r.job_id is not None),
+            default=0,
+        )
+        self._next_job_id = max(self._next_job_id, max_assigned + 1)
+        for record in self.usage_records:
+            if record.job_id is None:
+                record.job_id = self._next_job_id
+                self._next_job_id += 1
 
     def get_usage_records(
         self,
@@ -505,6 +530,7 @@ class SlurmDatabase:
 
         state = {
             "_next_cluster_id": self._next_cluster_id,
+            "_next_job_id": self._next_job_id,
             "clusters": {name: _serialize_cluster(cl) for name, cl in self.clusters.items()},
             "current_cluster": self.current_cluster,
             "accounts": {key: asdict(acc) for key, acc in self.accounts.items()},
@@ -528,6 +554,7 @@ class SlurmDatabase:
                     state = json.load(f)
 
                 self._next_cluster_id = state.get("_next_cluster_id", 1)
+                self._next_job_id = state.get("_next_job_id", 1)
 
                 # Load clusters (new field, migrate if absent)
                 if "clusters" in state:
@@ -616,6 +643,8 @@ class SlurmDatabase:
                 for data in state.get("usage_records", []):
                     data.setdefault("cluster", "default")
                     self.usage_records.append(self._deserialize_usage_record(data))
+                # Migrate pre-job_id state files.
+                self.ensure_job_ids()
 
                 # Load jobs
                 self.jobs = {}
@@ -639,4 +668,6 @@ class SlurmDatabase:
     def _deserialize_usage_record(self, data: dict[str, Any]) -> UsageRecord:
         """Deserialize usage record from JSON storage."""
         data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+        data.setdefault("job_id", None)
+        data.setdefault("state", "COMPLETED")
         return UsageRecord(**data)

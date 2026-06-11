@@ -268,14 +268,25 @@ class TestClusterFlagParsing:
         assert "does not exist" not in output
 
     def test_execute_command_nonexistent_cluster_sacct(self):
+        # Real sacct treats -M as a pure record filter: a nonexistent
+        # cluster yields the header and zero data rows, exit 0.
         emulator = SlurmEmulator()
         output = emulator.execute_command("sacct", ["-M", "nope"])
-        assert "does not exist" in output
+        assert "does not exist" not in output
+        assert "JobID" in output  # header still printed
+        assert len(output.splitlines()) == 2  # name row + dash row only
+        assert emulator.sacct.exit_code == 0
 
-    def test_execute_command_nonexistent_cluster_sshare(self):
+    def test_execute_command_nonexistent_cluster_sshare(self, capsys):
+        # Real sshare: per-name error, then print_db_notok + fatal()
+        # → stderr + exit 1 (sshare.c:147-152, proc_args.c:1426-1430).
         emulator = SlurmEmulator()
-        output = emulator.execute_command("sshare", ["--cluster=nope"])
-        assert "does not exist" in output
+        with pytest.raises(SystemExit) as exc:
+            emulator.execute_command("sshare", ["--cluster=nope"])
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert "sshare: error: No cluster 'nope' known by database." in err
+        assert "sshare: fatal: Could not get cluster information" in err
 
     def test_sshare_multi_cluster_emits_banner_per_cluster(self):
         """Real sshare (sshare.c:296-316) prints `CLUSTER: <name>`
@@ -335,6 +346,9 @@ class TestSacctmgrClusterCommands:
         assert "prod" in output
         assert "dev" in output
         assert "RPC" in output  # New column
+        # Classification is not part of the real default format
+        # (cluster_functions.c:482-489) — only reachable via format=.
+        assert "Class" not in output
 
     def test_list_clusters_format_cluster_returns_bare_names(self):
         # Mirrors real sacctmgr: `--parsable2 --noheader format=cluster`
@@ -348,11 +362,25 @@ class TestSacctmgrClusterCommands:
         db.add_cluster("prod")
         db.add_cluster("dev")
 
-        output = sacctmgr.handle_command(["list", "cluster", "format=cluster"])
+        output = sacctmgr.handle_command(
+            ["--noheader", "--parsable2", "list", "cluster", "format=cluster"]
+        )
         assert "|" not in output
         assert "Cluster" not in output  # no header
         lines = [ln for ln in output.splitlines() if ln.strip()]
         assert set(lines) == {"default", "prod", "dev"}
+
+    def test_list_clusters_format_cluster_default_mode_has_header(self):
+        # Without -n/-P real sacctmgr prints a fixed-width header + dashes.
+        db = SlurmDatabase()
+        te = TimeEngine()
+        sacctmgr = SacctmgrEmulator(db, te)
+
+        output = sacctmgr.handle_command(["list", "cluster", "format=cluster"])
+        lines = output.splitlines()
+        assert lines[0] == "   Cluster "
+        assert lines[1] == "---------- "
+        assert "   default " in lines
 
     def test_remove_cluster(self):
         db = SlurmDatabase()
@@ -377,7 +405,7 @@ class TestSacctmgrClusterCommands:
         te = TimeEngine()
         sacctmgr = SacctmgrEmulator(db, te)
 
-        output = sacctmgr.handle_command(["list", "accounts"])
+        output = sacctmgr.handle_command(["-p", "list", "accounts"])
         assert "Cluster" not in output
         assert "Account|Descr|Org|" in output
 

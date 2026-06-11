@@ -4,6 +4,33 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+- **BREAKING**: `sacctmgr` list/show output now matches real SLURM 26.11 —
+  fixed-width columns with a dashed header by default; pass `-p`/`--parsable`
+  (trailing `|`), `-P`/`--parsable2` (no trailing `|`), and `-n`/`--noheader`
+  for the parsable shapes previously emitted unconditionally. Default field
+  sets, headers, and widths mirror `sacctmgr/common.c`.
+- **BREAKING**: `sacct` now matches real SLURM 26.11 — default format
+  `JobID,JobName,Partition,Account,AllocCPUS,State,ExitCode` with header and
+  dashes, `-p`/`-P`/`-n` and short flags (`-S/-E/-A/-u/-o/-X/-a/-M`)
+  supported, numeric job IDs, `[DD-]HH:MM:SS` elapsed times, standard TRES
+  strings (`cpu=...,mem=...G,node=1,billing=...`; the internal `node-hours`
+  key is no longer exposed), and a Midnight→Now default time window.
+- `sacctmgr` re-adding an existing account prints
+  ` Data has not changed since time specified` (exit 0), matching
+  `SLURM_NO_CHANGE_IN_DATA`.
+
+### Fixed
+- `sacctmgr` "Nothing modified" now exits 0 (stdout), matching real sacctmgr;
+  genuine errors print ` error: ...` to stderr and exit 1.
+- `sacctmgr add account cluster=<missing>` now exits 1.
+- `sacct` exits 1 on invalid time specs and unknown format fields.
+- `sshare -M <unknown>` prints the real per-name database error and
+  `fatal: Could not get cluster information` to stderr with exit 1; a mix of
+  valid and invalid clusters proceeds with the valid ones.
+
 ## [0.5.3] - 2026-06-10
 
 ### Fixed
