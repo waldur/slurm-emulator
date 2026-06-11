@@ -4,6 +4,11 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] - 2026-06-11
+
+### Added
+- Add slurmrestd REST API emulation (Slurm 26.11, v0.0.46) on port 6820 with `/slurmdb` CRUD and `/slurm` controller read endpoints, JWT-style authentication, and shared state with CLI commands
+
 ## [0.6.0] - 2026-06-11
 
 ### Changed
