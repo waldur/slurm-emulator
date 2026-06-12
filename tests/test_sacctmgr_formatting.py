@@ -126,10 +126,14 @@ class TestFieldResolution:
 
 
 class TestExitCodesAndMessages:
-    def test_nothing_modified_exits_zero(self, em):
+    def test_nothing_modified_exits_one(self, em):
+        # Real sacctmgr: the message goes to stdout (printf) but the modify
+        # branch returns SLURM_ERROR and _modify_it() sets exit_code=1
+        # (account_functions.c:727-729, sacctmgr.c:982-984).
         out = em.handle_command(["modify", "account", "where", "name=ghost", "set", "parent=root"])
         assert out == "  Nothing modified"
-        assert em.exit_code == 0
+        assert em.exit_code == 1
+        assert em.stdout_error is True
 
     def test_readd_account_reports_no_change(self, em):
         out = em.handle_command(["add", "account", "proj-a"])

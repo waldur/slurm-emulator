@@ -4,6 +4,14 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+- Fix `POST /slurmdb/v0.0.46/accounts_association/` to accept the real slurmrestd request shape (`association_condition` with accounts/clusters CSV lists and an `ASSOC_REC_SET`, plus an `account` short record); the legacy `{"accounts": [...]}` shape is still accepted
+- Fix `POST /slurmdb/v0.0.46/users_association/` to accept the real slurmrestd request shape (`association_condition` with users/accounts/clusters/partitions and an `ASSOC_REC_SET`, plus a `user` short record) and actually create the user associations; the legacy `{"users": [...]}` shape is still accepted
+- Fix `POST /slurmdb/v0.0.46/associations/` to apply `qos`, `default/qos` and `shares_raw` on account-level associations
+- Fix `sacctmgr` "Nothing modified" to exit 1 with the message still on stdout, matching real sacctmgr (`_modify_it()` sets the global exit code on any modify error)
+
 ## [0.7.0] - 2026-06-11
 
 ### Added

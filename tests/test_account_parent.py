@@ -12,10 +12,11 @@ Validates emulator parity with real Slurm (/Users/ilja/workspace/slurm):
   blank (as_mysql_assoc.c:2116-2126).
 - ``modify account ... set parent=`` reparents the account-level
   association. A no-op change or a condition matching no account prints
-  "  Nothing modified" to stdout and exits 0 — only the local rc is set,
-  never the global exit_code (account_functions.c:727-729,
-  sacctmgr.c:304); a missing parent account is its own error with exit
-  1; a real change prints "Modified account associations...".
+  "  Nothing modified" to stdout but exits 1 — the branch returns
+  SLURM_ERROR (account_functions.c:727-729) and ``_modify_it()`` sets
+  the global ``exit_code = 1`` on any non-SUCCESS error_code
+  (sacctmgr.c:982-984); a missing parent account is its own error with
+  exit 1; a real change prints "Modified account associations...".
 """
 
 from emulator.commands.sacctmgr import SacctmgrEmulator
@@ -121,10 +122,12 @@ class TestModifyAccountParent:
             ["modify", "account", "where", "name=p-proj", "set", "parent=c-org"]
         )
         assert out == "  Nothing modified"
-        # Real sacctmgr exits 0 here: account_functions.c:727-729 sets only
-        # the local rc, and the process exits with the untouched global
-        # exit_code (sacctmgr.c:304).
-        assert em.exit_code == 0
+        # Real sacctmgr exits 1 here: the branch returns SLURM_ERROR
+        # (account_functions.c:727-729) and _modify_it() sets the global
+        # exit_code on any non-SUCCESS error_code (sacctmgr.c:982-984).
+        # The message itself still goes to stdout.
+        assert em.exit_code == 1
+        assert em.stdout_error is True
 
     def test_reparent_to_missing_parent_errors(self, tmp_path):
         em = _emulator(tmp_path)
@@ -142,7 +145,7 @@ class TestModifyAccountParent:
             ["modify", "account", "where", "name=p-ghost", "set", "parent=c-org"]
         )
         assert out == "  Nothing modified"
-        assert em.exit_code == 0
+        assert em.exit_code == 1
 
     def test_where_name_filter_form_is_parsed(self, tmp_path):
         # The agent uses ``where name=<acct>`` — real Slurm parses ``name=`` as

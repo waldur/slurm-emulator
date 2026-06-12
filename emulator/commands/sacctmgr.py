@@ -154,6 +154,10 @@ class SacctmgrEmulator:
         # propagates it to the process exit status and routes failing output
         # to stderr.
         self.exit_code = 0
+        # True when a failing command's message belongs on stdout, not
+        # stderr (real sacctmgr prints "Nothing modified" with printf but
+        # still exits 1).
+        self.stdout_error = False
         self._mode = OutputMode()
 
     def _fail(self, message: str) -> str:
@@ -161,9 +165,23 @@ class SacctmgrEmulator:
         self.exit_code = 1
         return message
 
+    def _nothing_modified(self) -> str:
+        """No-op modify: message on stdout, process exit code 1.
+
+        The modify branch prints "  Nothing modified" with printf and
+        returns SLURM_ERROR (account_functions.c:727-729), and
+        _modify_it() turns any non-SUCCESS error_code into the global
+        exit_code=1 (sacctmgr.c:982-984) — so the process exits 1 even
+        though the message goes to stdout.
+        """
+        self.exit_code = 1
+        self.stdout_error = True
+        return "  Nothing modified"
+
     def handle_command(self, args: list[str]) -> str:
         """Process sacctmgr command and return output."""
         self.exit_code = 0
+        self.stdout_error = False
         # -i/--immediate is accepted but has no effect: the emulator is
         # headless and never shows real sacctmgr's commit prompt.
         self._mode, _immediate, args = extract_output_flags(args, shorts="npPi")
@@ -498,23 +516,24 @@ class SacctmgrEmulator:
         # ``set parent=`` reparents the account-level association. Match real
         # sacctmgr semantics (account_functions.c:715-748): a condition that
         # matches no account, or a no-op change, prints "  Nothing modified"
-        # to stdout and exits 0 (only the local rc is set, never the global
-        # exit_code); a missing parent account is its own error with exit 1;
-        # a real change prints "Modified account associations...".
+        # to stdout but exits 1 — the branch returns SLURM_ERROR and
+        # _modify_it() sets the global exit_code (sacctmgr.c:982-984); a
+        # missing parent account is its own error with exit 1; a real
+        # change prints "Modified account associations...".
         parent_value = next((v for k, v in set_pairs if k == "parent"), None)
         if parent_value is not None:
             if not account:
-                return "  Nothing modified"
+                return self._nothing_modified()
             if self.database.get_account(parent_value) is None:
                 return self._fail(f" Parent Account {parent_value} doesn't exist.")
             if account.parent == parent_value:
-                return "  Nothing modified"
+                return self._nothing_modified()
             self.database.set_account_parent(account.name, parent_value)
             self.database.save_state()
             return f" Modified account associations...\n  {account.name}"
 
         if not account:
-            return "  Nothing modified"
+            return self._nothing_modified()
 
         # Process set parameters
         modifications = []
@@ -756,8 +775,8 @@ class SacctmgrEmulator:
         qos_name = args[0]
         qos = self.database.qos_list.get(qos_name)
         if qos is None:
-            # Same SLURM_NO_CHANGE_IN_DATA shape as accounts: stdout, exit 0.
-            return "  Nothing modified"
+            # Same SLURM_NO_CHANGE_IN_DATA shape as accounts: stdout, exit 1.
+            return self._nothing_modified()
 
         set_index = -1
         for i, arg in enumerate(args):

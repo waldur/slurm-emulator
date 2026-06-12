@@ -49,14 +49,16 @@ class TestSacctmgrRouting:
         assert code == 0
         assert captured.err == ""
 
-    def test_nothing_modified_stdout_exit_zero(self, fresh_emulator, monkeypatch, capsys):
+    def test_nothing_modified_stdout_exit_one(self, fresh_emulator, monkeypatch, capsys):
+        # Real sacctmgr prints "Nothing modified" with printf (stdout) but
+        # exits 1 (_modify_it() sets exit_code on SLURM_ERROR).
         code = _run_main(
             monkeypatch,
             dispatcher.sacctmgr_main,
             ["sacctmgr", "modify", "account", "where", "name=ghost-xyz", "set", "parent=root"],
         )
         captured = capsys.readouterr()
-        assert code == 0
+        assert code == 1
         assert "Nothing modified" in captured.out
         assert captured.err == ""
 
