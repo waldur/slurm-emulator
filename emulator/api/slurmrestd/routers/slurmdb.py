@@ -443,12 +443,12 @@ async def post_accounts_association(
 
     added = []
     for entry in body.get("accounts", []):
-        name = _upsert_account(state, entry)
-        if name is None:
+        entry_name = _upsert_account(state, entry)
+        if entry_name is None:
             return _bad_request(request, state, "Account name is required")
-        added.append(name)
+        added.append(entry_name)
         for assoc_entry in entry.get("associations", []):
-            _upsert_association(state, {**assoc_entry, "account": name})
+            _upsert_association(state, {**assoc_entry, "account": entry_name})
     state.commit()
     return _respond(request, state, {"added_accounts": added})
 
@@ -565,7 +565,7 @@ async def post_users_association(
             return _bad_request(request, state, "No users specified")
         accounts = _csv_list(condition.get("accounts"))
         clusters = _csv_list(condition.get("clusters")) or [state.cluster]
-        partitions = _csv_list(condition.get("partitions")) or [None]
+        partitions: list[Optional[str]] = list(_csv_list(condition.get("partitions"))) or [None]
         rec_set = condition.get("association") or {}
         user_short = body.get("user") or {}
         default_account = (user_short.get("default") or {}).get("account", "")
