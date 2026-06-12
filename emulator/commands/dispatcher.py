@@ -189,8 +189,11 @@ def sacctmgr_main():
         output = emulator.execute_command("sacctmgr", args)
         # Real sacctmgr writes errors to stderr (" error: ..." style)
         # and normal output to stdout; the emulator returns a single
-        # message per command, so route by the recorded exit code.
-        stream = sys.stderr if emulator.sacctmgr.exit_code else sys.stdout
+        # message per command, so route by the recorded exit code —
+        # except "Nothing modified", which real sacctmgr prints with
+        # printf (stdout) while still exiting 1.
+        failing = emulator.sacctmgr.exit_code and not emulator.sacctmgr.stdout_error
+        stream = sys.stderr if failing else sys.stdout
         if output:
             print(output, file=stream)
     except SystemExit:
@@ -199,7 +202,8 @@ def sacctmgr_main():
         print(f"sacctmgr: error: {e}", file=sys.stderr)
         sys.exit(1)
     # Propagate the command's exit status (mirrors sacctmgr.c's global
-    # exit_code; note "Nothing modified" leaves it 0).
+    # exit_code, which _modify_it() sets on any modify error including
+    # "Nothing modified").
     sys.exit(emulator.sacctmgr.exit_code)
 
 

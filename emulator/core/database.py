@@ -45,6 +45,7 @@ class Account:
     parent: Optional[str] = None
     fairshare: int = 1
     qos: str = "normal"
+    default_qos: str = ""
     limits: dict[str, int] = field(default_factory=dict)
     last_period: Optional[str] = None
     allocation: int = 1000  # Base allocation in node-hours
