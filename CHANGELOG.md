@@ -4,6 +4,11 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.2] - 2026-06-25
+
+### Fixed
+- Strip quotes from sacctmgr `parent=` value to match real Slurm
+
 ## [0.7.1] - 2026-06-12
 
 ### Fixed
