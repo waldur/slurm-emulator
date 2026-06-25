@@ -166,6 +166,39 @@ class TestAddAccountCreatesParentAssociation:
         assert assoc.parent == "c-org"
 
 
+class TestParentValueQuoteStripping:
+    """``parent=`` values are quote-stripped, matching real Slurm.
+
+    Real sacctmgr runs the value through ``strip_quotes`` before storing it
+    (association_functions.c:512), exactly as it does for description and
+    organization (account_functions.c:224,243). The Waldur site agent quotes
+    the value (``parent="acct"``) and passes it to subprocess without a shell,
+    so the binary receives literal quotes; the emulator must strip them or the
+    stored/returned parent carries quotes and parent comparisons break.
+    """
+
+    def test_add_account_strips_quotes_from_parent(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["add", "account", "c-quoted", 'parent="root"'])
+        # Stored parent has no quotes.
+        assert em.database.get_account("c-quoted").parent == "root"
+        # And it prints clean (not "root") in the association.
+        out = em.handle_command(
+            ["show", "assoc", "account=c-quoted", "format=Account,ParentName,User", "-n", "-P"]
+        )
+        assert "c-quoted|root|" in out.splitlines()
+
+    def test_modify_account_strips_quotes_from_parent(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["add", "account", "c-new", "parent=root"])
+        out = em.handle_command(
+            ["modify", "account", "where", "name=p-proj", "set", 'parent="c-new"']
+        )
+        assert "Modified account associations" in out
+        assert em.exit_code == 0
+        assert em.database.get_account("p-proj").parent == "c-new"
+
+
 class TestAddExistingAccountIsNotAnError:
     """Re-adding an existing account must not set a non-zero exit code.
 

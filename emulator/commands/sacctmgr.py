@@ -356,7 +356,9 @@ class SacctmgrEmulator:
             elif arg.startswith("organization="):
                 organization = arg.split("=", 1)[1].strip('"')
             elif arg.startswith("parent="):
-                parent = arg.split("=", 1)[1]
+                # Real sacctmgr runs the value through strip_quotes()
+                # (association_functions.c:512), same as description/organization.
+                parent = arg.split("=", 1)[1].strip("\"'")
             elif arg.startswith("cluster="):
                 target_cluster = arg.split("=", 1)[1]
 
@@ -522,6 +524,9 @@ class SacctmgrEmulator:
         # change prints "Modified account associations...".
         parent_value = next((v for k, v in set_pairs if k == "parent"), None)
         if parent_value is not None:
+            # Real sacctmgr strips quotes from the parent value (strip_quotes,
+            # association_functions.c:512) before resolving the account.
+            parent_value = parent_value.strip("\"'")
             if not account:
                 return self._nothing_modified()
             if self.database.get_account(parent_value) is None:
