@@ -17,6 +17,14 @@ secrets:
   ssh_private_key_fireuser:
     file: ./secrets/ssh_private_key_fireuser
 
+# Named volumes persist each emulator's job/accounting state and uploaded
+# files across container restarts. `docker compose down -v` wipes them.
+volumes:
+  slurm_state:
+  slurm_home:
+  slurm2_state:
+  slurm2_home:
+
 services:
   # --- The cluster: slurm-emulator (slurmrestd + SSH filesystem plane) ---
   slurm:
@@ -32,6 +40,14 @@ services:
       SLURM_EMULATOR_JOB_CLOCK: "wall"
       SLURM_EMULATOR_JOB_RUN_DELAY: "2"
       SLURM_EMULATOR_JOB_RUN_DURATION: "8"
+      # Persist accounting/job state across container restarts (see volumes).
+      SLURM_EMULATOR_STATE_FILE: "/state/db.json"
+      SLURM_EMULATOR_TIME_FILE: "/state/time.json"
+      # Topology: debug node[001-004] + compute node[005-100] = 100 nodes.
+      SLURM_EMULATOR_PARTITIONS: "debug:1-4,compute:5-100"
+    volumes:
+      - slurm_state:/state     # job/accounting state
+      - slurm_home:/home       # uploaded files (FS_ROOT=/)
     ports:
       - "${HOST_IP:-127.0.0.1}:6820:6820"
       - "${HOST_IP:-127.0.0.1}:2222:22"
@@ -56,6 +72,14 @@ services:
       SLURM_EMULATOR_JOB_CLOCK: "wall"
       SLURM_EMULATOR_JOB_RUN_DELAY: "2"
       SLURM_EMULATOR_JOB_RUN_DURATION: "8"
+      SLURM_EMULATOR_STATE_FILE: "/state/db.json"
+      SLURM_EMULATOR_TIME_FILE: "/state/time.json"
+      # Deliberately different topology: gpu node[001-008] + compute
+      # node[009-040] = 40 nodes, so the two clusters look distinct in the UI.
+      SLURM_EMULATOR_PARTITIONS: "gpu:8,compute:32"
+    volumes:
+      - slurm2_state:/state
+      - slurm2_home:/home
     ports:
       - "${HOST_IP:-127.0.0.1}:6821:6820"
       - "${HOST_IP:-127.0.0.1}:2223:22"

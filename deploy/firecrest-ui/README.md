@@ -50,6 +50,18 @@ container with independent state, addressed by name in the API
 (`/compute/{system}/...`) and the UI's "HPC Clusters" nav. Drop the `slurm2`
 service + its `clusters:` entry in `firecrest/config.yaml` for a single-cluster setup.
 
+They're deliberately given **different topologies** via `SLURM_EMULATOR_PARTITIONS`
+so they look distinct: `slurm` = `debug:1-4,compute:5-100` (100 nodes), `slurm2` =
+`gpu:8,compute:32` (40 nodes). The value accepts counts (`gpu:8`) or explicit node
+ranges (`compute:5-100`).
+
+### Persistence
+
+Each emulator's job/accounting state (`SLURM_EMULATOR_STATE_FILE`) and uploaded
+files (`/home`) live on named Docker volumes (`slurm_state`/`slurm_home`,
+`slurm2_state`/`slurm2_home`), so **jobs and files survive `docker compose restart`
+and container recreation**. `docker compose down -v` wipes them for a clean slate.
+
 ## What works
 
 - **Login** via Keycloak (realm `kcrealm`, client `firecrest-web-ui`).

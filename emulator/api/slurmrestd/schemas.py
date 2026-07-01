@@ -11,6 +11,7 @@ Waldur's parsers touch, plus enough context to look real.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 
 from emulator.commands.sacct import (
@@ -361,11 +362,47 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
     }
 
 
-# Static cluster topology — must stay consistent with the sinfo
-# emulation (dispatcher.py:_handle_sinfo): debug* node[001-004],
-# compute node[005-100]. Node specs match the usage simulator's
-# standard node (sacct.py:_NODE_CPUS/_NODE_MEM_GB/_NODE_GPUS).
-PARTITION_RANGES = {"debug": (1, 4), "compute": (5, 100)}
+# Cluster topology. Defaults to debug* node[001-004], compute node[005-100]
+# (node specs match the usage simulator's standard node —
+# sacct.py:_NODE_CPUS/_NODE_MEM_GB/_NODE_GPUS). Override per instance with the
+# SLURM_EMULATOR_PARTITIONS env var so several emulators can look different: it
+# accepts either counts (e.g. gpu:8,compute:32 — auto contiguous ranges) or
+# explicit node ranges (e.g. debug:1-4,compute:5-100). dispatcher.py's sinfo
+# derives its output from PARTITION_RANGES, so both views stay in sync.
+_DEFAULT_PARTITIONS = "debug:1-4,compute:5-100"
+
+
+def _parse_partition_ranges(spec: str) -> dict[str, tuple[int, int]]:
+    """Parse ``name:first-last`` or ``name:count`` (counts get contiguous ranges)."""
+    ranges: dict[str, tuple[int, int]] = {}
+    nxt = 1
+    for part in spec.split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        name, _, rng = part.partition(":")
+        name, rng = name.strip(), rng.strip()
+        if not name:
+            continue
+        if "-" in rng:
+            a, b = rng.split("-", 1)
+            first, last = int(a), int(b)
+        else:
+            first, last = nxt, nxt + int(rng) - 1
+        ranges[name] = (first, last)
+        nxt = last + 1
+    return ranges
+
+
+def _load_partition_ranges() -> dict[str, tuple[int, int]]:
+    spec = os.environ.get("SLURM_EMULATOR_PARTITIONS", "").strip()
+    try:
+        return _parse_partition_ranges(spec) or _parse_partition_ranges(_DEFAULT_PARTITIONS)
+    except (ValueError, IndexError):
+        return _parse_partition_ranges(_DEFAULT_PARTITIONS)
+
+
+PARTITION_RANGES = _load_partition_ranges()
 
 
 def _node_names(partition: str) -> list[str]:
