@@ -4,6 +4,16 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.0] - 2026-07-01
+
+### Added
+- Add lightweight HTMX web dashboard for status and full control of the emulator
+- Add FireCREST v2 conformance harness and one-command firecrest-ui stack
+
+### Changed
+- Fold account names to lower case to match real Slurm
+- Isolate FireCREST integration under `examples/firecrest` and add a UI guide
+
 ## [0.7.2] - 2026-06-25
 
 ### Fixed
