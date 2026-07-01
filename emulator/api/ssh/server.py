@@ -262,20 +262,70 @@ def _run_shell(user: str, command: str) -> tuple[str, str, int]:
     return proc.stdout, proc.stderr, proc.returncode
 
 
-def _dispatch(user: str, command: str) -> tuple[str, str, int]:
+async def _run_shell_async(user: str, command: str, process) -> tuple[str, str, int]:
+    """Run a shell command, streaming the SSH channel's stdin into it.
+
+    FireCREST uploads small files with ``base64 -d > path`` and streams the
+    content over stdin, so the channel's stdin must reach the subprocess or the
+    file lands empty. Commands that read no stdin still finish normally — we
+    stop pumping once the process exits.
+    """
+    home = _user_home(user)
+    env = _command_env(user)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "/bin/bash",
+            "-c",
+            command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(home),
+            env=env,
+        )
+    except OSError as exc:
+        return "", f"{exc}\n", 1
+
+    async def pump_stdin() -> None:
+        try:
+            while True:
+                data = await process.stdin.read(65536)
+                if not data:  # SSH client sent EOF
+                    break
+                proc.stdin.write(data if isinstance(data, bytes) else data.encode())
+                await proc.stdin.drain()
+        except Exception:  # channel closed / process gone — stop feeding
+            pass
+        finally:
+            with contextlib.suppress(Exception):
+                proc.stdin.close()
+
+    stdin_task = asyncio.create_task(pump_stdin())
+    try:
+        out_b, err_b = await asyncio.wait_for(
+            asyncio.gather(proc.stdout.read(), proc.stderr.read()),
+            timeout=_SHELL_TIMEOUT,
+        )
+        await proc.wait()
+        code = proc.returncode or 0
+    except asyncio.TimeoutError:
+        proc.kill()
+        out_b, err_b, code = b"", b"command timed out\n", 124
+    finally:
+        stdin_task.cancel()
+    return out_b.decode(errors="replace"), err_b.decode(errors="replace"), code
+
+
+def _slurm_argv(command: str) -> Optional[list[str]]:
+    """Return the parsed argv if this command is an emulator-handled Slurm binary."""
     stripped = command.strip()
     if not stripped:
-        return "", "", 0
-    first = stripped.split(None, 1)[0]
-    base = Path(first).name
-    if base in _SLURM_BINS:
-        try:
-            argv = shlex.split(command)
-        except ValueError:
-            return "", "parse error\n", 2
-        argv[0] = base
-        return _run_slurm(user, argv)
-    return _run_shell(user, command)
+        return None
+    if Path(stripped.split(None, 1)[0]).name not in _SLURM_BINS:
+        return None
+    argv = shlex.split(command)
+    argv[0] = Path(argv[0]).name
+    return argv
 
 
 # --- asyncssh wiring ---
@@ -288,8 +338,21 @@ async def _handle_process(process) -> None:  # pragma: no cover - needs a live s
         process.stdout.write("slurm-emulator ssh: interactive shell not supported\n")
         process.exit(0)
         return
-    loop = asyncio.get_event_loop()
-    stdout, stderr, code = await loop.run_in_executor(None, _dispatch, user, command)
+    try:
+        argv = _slurm_argv(command)
+    except ValueError:
+        process.stderr.write("parse error\n")
+        process.exit(2)
+        return
+
+    if argv is not None:
+        # Slurm commands don't consume file stdin; run on the executor.
+        loop = asyncio.get_event_loop()
+        stdout, stderr, code = await loop.run_in_executor(None, _run_slurm, user, argv)
+    else:
+        # Shell/filesystem commands may receive stdin (e.g. base64 -d > file).
+        stdout, stderr, code = await _run_shell_async(user, command, process)
+
     if stdout:
         process.stdout.write(stdout)
     if stderr:
