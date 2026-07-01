@@ -312,6 +312,11 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
     node_count = getattr(job, "node_count", 1) or 1
     total_cpus = _NODE_CPUS * node_count
     time_limit = getattr(job, "time_limit", None)
+    failed = job.state.startswith(_FAILED_STATES)
+    exit_code = {
+        "status": ["ERROR"] if failed else ["SUCCESS"],
+        "return_code": uint_no_val(1 if failed else 0),
+    }
 
     return {
         "job_id": int(job.job_id) if str(job.job_id).isdigit() else 0,
@@ -323,6 +328,10 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         "job_state": [job.state],
         "state_reason": "None",
         "state_description": "",
+        # Real JOB_INFO carries exit_code/derived_exit_code (PROCESS_EXIT_CODE);
+        # FireCREST's SlurmJob builds its required `status` from exit_code.
+        "exit_code": exit_code,
+        "derived_exit_code": exit_code,
         "cluster": job.cluster,
         "qos": job.qos or "normal",
         "priority": uint_no_val(getattr(job, "priority", 1)),
@@ -336,8 +345,15 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         # None -> UNLIMITED (infinite), matching a job with no --time.
         "time_limit": uint_no_val(time_limit, infinite=(time_limit is None)),
         "submit_time": ts(job.submit_time),
-        "start_time": ts(job.start_time),
-        "end_time": ts(job.end_time),
+        # FireCREST's SlurmJob only builds its required `time` when both
+        # start_time and end_time are non-null. Pending/running jobs have no
+        # real start/end yet, so fall back to submit_time (real slurm likewise
+        # reports estimated start/end for pending jobs).
+        "start_time": ts(job.start_time or job.submit_time),
+        "end_time": ts(job.end_time or job.start_time or job.submit_time),
+        # FireCREST's SlurmJob folds suspend_time into time.suspended and
+        # requires the key present (unset NO_VAL = not suspended).
+        "suspend_time": uint_no_val(),
         "standard_input": job.standard_input or "/dev/null",
         "standard_output": job.standard_output or "",
         "standard_error": job.standard_error or "",

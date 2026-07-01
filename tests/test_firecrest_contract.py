@@ -108,6 +108,14 @@ class TestJobViewShapes:
         assert _no_val(job["priority"])
         assert _no_val(job["start_time"])
         assert _no_val(job["end_time"])
+        # SlurmJob builds its required `status` from exit_code and its required
+        # `time` from start_time/end_time/suspend_time — all must be present even
+        # for a PENDING job (start/end fall back to submit_time).
+        assert _no_val(job["suspend_time"])
+        assert job["exit_code"]["status"] == ["SUCCESS"]
+        assert _no_val(job["exit_code"]["return_code"])
+        assert job["start_time"]["set"] is True  # pending -> falls back to submit_time
+        assert job["end_time"]["set"] is True
 
     def test_single_job_missing_is_empty_not_error_body(self, restd, auth_headers):
         # FireCREST treats a 404 single-job as "no job" — the ctld path
