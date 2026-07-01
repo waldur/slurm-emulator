@@ -143,6 +143,7 @@ async def ping(
         {
             "hostname": "localhost",
             "responding": True,
+            "pinged": "UP",
             "latency": 123,
             "primary": "primary",
             "status": "No error",

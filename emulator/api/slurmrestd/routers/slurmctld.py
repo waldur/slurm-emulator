@@ -94,6 +94,9 @@ async def ping(
         {
             "hostname": "localhost",
             "responding": True,
+            # FireCREST's scheduler health check reads ping["pinged"] == "UP";
+            # real slurm exposes the same state under "responding".
+            "pinged": "UP",
             "latency": 123,
             "primary": "primary",
             "status": "No error",

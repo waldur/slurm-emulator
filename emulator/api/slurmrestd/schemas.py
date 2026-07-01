@@ -384,7 +384,8 @@ def node_to_dict(name: str, now_ts: int) -> dict[str, Any]:
         "boot_time": uint_no_val(now_ts),
         "last_busy": uint_no_val(now_ts),
         "slurmd_start_time": uint_no_val(now_ts),
-        "weight": uint_no_val(1),
+        # FireCREST's SlurmNode.weight is a plain int (not a NO_VAL struct).
+        "weight": 1,
         "tres": f"cpu={_NODE_CPUS},mem={mem_mb}M,billing={_NODE_CPUS},gres/gpu={_NODE_GPUS}",
         "tres_used": "",
         "reason": "",
