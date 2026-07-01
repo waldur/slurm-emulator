@@ -115,7 +115,13 @@ class UsageRecord:
 
 @dataclass
 class Job:
-    """SLURM job representation."""
+    """SLURM job representation.
+
+    The trailing fields carry what a slurmrestd ``POST /job/submit`` body
+    provides (name, partition, script, working directory, …) so a job
+    submitted over REST round-trips through the active-job view. They all
+    default, so older state files and direct constructions stay valid.
+    """
 
     job_id: str
     account: str
@@ -126,6 +132,20 @@ class Job:
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     cluster: str = "default"
+    name: str = ""
+    partition: str = "compute"
+    qos: str = "normal"
+    working_directory: str = ""
+    script: str = ""
+    standard_output: str = ""
+    standard_error: str = ""
+    standard_input: str = "/dev/null"
+    node_count: int = 1
+    priority: int = 1
+    # Wall-clock minutes; ``None`` renders as UNLIMITED / infinite.
+    time_limit: Optional[int] = None
+    environment: dict[str, str] = field(default_factory=dict)
+    constraints: str = ""
 
 
 class SlurmDatabase:
@@ -493,6 +513,21 @@ class SlurmDatabase:
             account_obj.limits["raw_usage_reset"] = 1
 
     # --- Job methods (cluster-aware) ---
+
+    def allocate_job_id(self) -> int:
+        """Allocate a fresh numeric job id shared with usage records.
+
+        Active jobs and completed usage records draw from the same
+        ``_next_job_id`` counter so a submitted job keeps its id when it
+        rolls over into accounting. Bumps past any id already present.
+        """
+        self.ensure_job_ids()
+        existing = [int(j.job_id) for j in self.jobs.values() if str(j.job_id).isdigit()]
+        if existing:
+            self._next_job_id = max(self._next_job_id, max(existing) + 1)
+        jid = self._next_job_id
+        self._next_job_id += 1
+        return jid
 
     def add_job(self, job: Job) -> None:
         """Add job to database."""

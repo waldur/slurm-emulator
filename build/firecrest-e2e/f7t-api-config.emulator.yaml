@@ -1,0 +1,38 @@
+# FireCREST v2 cluster config pointing at the slurm-emulator.
+#
+# Drop this in as FireCREST's YAML_CONFIG_FILE (or merge the `clusters` entry
+# into your existing f7t-api-config.*.yaml). Field names track FireCREST's
+# `src/firecrest/config.py` (Scheduler at ~:130, HPCCluster at ~:427) — align
+# them with your FireCREST version if the schema has moved.
+#
+# Key points:
+#   scheduler.connection_mode: rest   -> job ops go over slurmrestd
+#   scheduler.api_version: "0.0.46"   -> matches the emulator's data_parser,
+#                                        so the submit dialect lines up
+#                                        (script inside the job body, env as list)
+#   ssh.host: <emulator>              -> filesystem + get_job_metadata + submit-by-path
+clusters:
+  - name: "cluster-emulator"
+    ssh:
+      host: "slurm"          # emulator container (service name in the overlay)
+      port: 22
+      max_clients: 10
+      timeout:
+        connection: 5
+        login: 5
+        command_execution: 30
+    scheduler:
+      type: "slurm"
+      connection_mode: "rest"
+      version: "26.11.0"
+      api_url: "http://slurm:6820"
+      api_version: "0.0.46"
+      timeout: 10
+    service_account:
+      client_id: "firecrest-cluster"
+      secret: "change-me"
+    file_systems:
+      - path: "/home"
+        data_type: "users"
+        default_work_dir: true
+    # Point data_transfer at FireCREST's MinIO/S3 as in the demo config.

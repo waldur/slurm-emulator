@@ -1,0 +1,8 @@
+secrets/
+.firecrest-v2/
+.env
+upstream-docker-compose.yml
+upstream-local-env.yaml
+ui-env_example
+*.png
+sessions/

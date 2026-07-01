@@ -35,6 +35,7 @@ from emulator.api.slurmrestd.state import RequestState, StateDep
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacct import _Config as SacctConfig
 from emulator.core.database import QOS, Association
+from emulator.core.scheduler import advance_job_states
 
 router = APIRouter(
     prefix="/slurmdb/{version}",
@@ -114,6 +115,21 @@ def _user_assocs(state: RequestState, name: str) -> list[Association]:
     return [a for a in state.database.associations.values() if a.user == name]
 
 
+def _assoc_is_default(state: RequestState, assoc: Association) -> bool:
+    """Whether this row is the user's default-account association (ASSOC.is_default).
+
+    Account-level rows (user == "") stay default; when a user has no recorded
+    default_account we fall back to True so the common single-account case
+    keeps working.
+    """
+    if not assoc.user:
+        return True
+    user = state.database.get_user(assoc.user)
+    if user is None or not user.default_account:
+        return True
+    return user.default_account == assoc.account
+
+
 # --- ping / diag / conf ---
 
 
@@ -126,6 +142,7 @@ async def ping(
         {
             "hostname": "localhost",
             "responding": True,
+            "pinged": "UP",
             "latency": 123,
             "primary": "primary",
             "status": "No error",
@@ -725,7 +742,10 @@ async def get_associations(
     partition: Optional[str] = None,
 ):
     assocs = _filter_associations(state, account, user, cluster, partition)
-    payload = [assoc_to_dict(a, state.database.get_account(a.account)) for a in assocs]
+    payload = [
+        assoc_to_dict(a, state.database.get_account(a.account), _assoc_is_default(state, a))
+        for a in assocs
+    ]
     warnings = []
     if not payload:
         warnings.append(found_nothing_warning("slurmdb_associations_get()", request))
@@ -914,6 +934,8 @@ async def get_jobs(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
 ):
+    if advance_job_states(state.database, state.time_engine):
+        state.commit()
     sacct = SacctEmulator(state.database, state.time_engine)
     cfg = SacctConfig()
     if account:
@@ -944,6 +966,8 @@ async def get_job(
     request: Request,
     state: StateDep,
 ):
+    if advance_job_states(state.database, state.time_engine):
+        state.commit()
     state.database.ensure_job_ids()
     matched = [r for r in state.database.usage_records if str(r.job_id) == job_id]
     payload = [dbd_job_to_dict(r) for r in matched]

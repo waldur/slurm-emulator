@@ -89,6 +89,7 @@ class _Config:
     accounts: list[str] = field(default_factory=list)
     users: list[str] = field(default_factory=list)
     clusters: list[str] = field(default_factory=list)
+    jobs: list[str] = field(default_factory=list)
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     format_spec: str = _DEFAULT_FORMAT
@@ -149,6 +150,9 @@ class SacctEmulator:
             "-M": "clusters",
             "--cluster": "clusters",
             "--clusters": "clusters",
+            "-j": "jobs",
+            "--jobs": "jobs",
+            "--job": "jobs",
             "-o": "format",
             "--format": "format",
             "--fields": "format",
@@ -183,6 +187,9 @@ class SacctEmulator:
                 cfg.users.extend(_csv(value))
             elif key == "clusters":
                 cfg.clusters.extend(_csv(value))
+            elif key == "jobs":
+                # sacct -j accepts "id" or "id.step"; keep the job id part.
+                cfg.jobs.extend(item.split(".", 1)[0] for item in _csv(value))
             elif key == "format":
                 cfg.format_spec = value
 
@@ -304,6 +311,13 @@ class SacctEmulator:
             records = [r for r in records if r.account in config.accounts]
         if config.users:
             records = [r for r in records if r.user in config.users]
+        if config.jobs:
+            records = [r for r in records if str(r.job_id) in config.jobs]
+
+        # Explicit job ids bypass the default time window — real sacct
+        # returns the job regardless of when it ran unless -S/-E are given.
+        if config.jobs and not (config.start_time or config.end_time):
+            return records
 
         # Default window: Midnight -> Now on the simulated clock
         # (slurmdb_job_cond_def_start_end, slurmdb_defs.c:371-394).
