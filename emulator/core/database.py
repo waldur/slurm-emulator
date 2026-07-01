@@ -7,7 +7,15 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, overload
+
+
+@overload
+def fold_account(name: str) -> str: ...
+
+
+@overload
+def fold_account(name: None) -> None: ...
 
 
 def fold_account(name: Optional[str]) -> Optional[str]:
