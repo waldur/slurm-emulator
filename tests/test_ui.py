@@ -225,6 +225,66 @@ def test_bootstrapped_qos_classes_available_and_assignable(ui):
     assert "qos-high" in resp.text
 
 
+def test_scenario_builder_opens_with_action_row(ui):
+    b = ui.get("/ui/scenario/build", auth=AUTH)
+    assert b.status_code == 200
+    assert "Build scenario" in b.text
+    assert 'name="row-0-type"' in b.text  # at least one action row
+    assert "Create account" in b.text  # action type options
+
+
+def test_scenario_builder_add_and_remove_rows(ui):
+    added = ui.post(
+        "/ui/scenario/build/rows",
+        auth=AUTH,
+        data={"op": "add", "row-0-type": "account_create"},
+    )
+    assert 'name="row-1-type"' in added.text  # a second row appeared
+
+    removed = ui.post(
+        "/ui/scenario/build/rows",
+        auth=AUTH,
+        data={
+            "op": "remove",
+            "idx": "1",
+            "row-0-type": "account_create",
+            "row-1-type": "usage_inject",
+        },
+    )
+    assert 'name="row-1-type"' not in removed.text  # back to one row
+
+
+def test_scenario_builder_run_executes_actions(ui):
+    # Build: create account → inject usage → advance time, then run.
+    data = {
+        "row-0-type": "account_create",
+        "row-0-name": "built-acct",
+        "row-0-allocation": "1000",
+        "row-1-type": "usage_inject",
+        "row-1-account": "built-acct",
+        "row-1-user": "dave",
+        "row-1-amount": "250",
+        "row-2-type": "time_advance",
+        "row-2-amount": "3",
+        "row-2-unit": "months",
+    }
+    run = ui.post("/ui/scenario/build/run", auth=AUTH, data=data)
+    assert run.status_code == 200
+    assert "completed" in run.text
+    assert 'class="console-log"' in run.text
+    # The actions actually mutated live state.
+    status = ui.get("/ui/status", auth=AUTH)
+    assert "built-acct" in status.text
+    assert "dave" in status.text
+
+
+def test_scenario_builder_prefills_from_scenario(ui):
+    b = ui.get("/ui/scenario/build", auth=AUTH, params={"name": "traditional_max_tres_mins"})
+    assert b.status_code == 200
+    # Its account_create/usage_inject actions become editable rows.
+    assert "traditional_account" in b.text
+
+
 def test_config_view_shows_partitions_and_tres(ui):
     cfg = ui.get("/ui/config", auth=AUTH)
     assert cfg.status_code == 200

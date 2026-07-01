@@ -160,6 +160,9 @@
     <div id="scenario-result"></div>
     <div class="modal-actions">
       <button type="button" class="btn-ghost" data-close>Close</button>
+      <button type="button" class="btn-warn" title="Adjust the steps before running"
+              hx-get="/ui/scenario/build" hx-include="closest form"
+              hx-target="#modal-mount" hx-swap="innerHTML">✎ Edit steps</button>
       <button type="submit">Run</button>
     </div>
   </form>

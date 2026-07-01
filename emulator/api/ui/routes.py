@@ -18,15 +18,21 @@ from fastapi import APIRouter, Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.datastructures import FormData
 
 from emulator import __version__
 from emulator.api.ui.auth import require_ui_user, warn_if_default_credentials
-from emulator.scenarios.scenario_registry import ActionType
+from emulator.scenarios.scenario_registry import (
+    ActionType,
+    ScenarioAction,
+    ScenarioDefinition,
+    ScenarioStep,
+    ScenarioType,
+)
 from emulator.scenarios.sequence_scenario import SequenceScenario
 
 if TYPE_CHECKING:
     from emulator.api.emulator_server import EmulatorServer
-    from emulator.scenarios.scenario_registry import ScenarioDefinition
 
 _UI_DIR = Path(__file__).parent
 _templates = Jinja2Templates(directory=str(_UI_DIR / "templates"))
@@ -75,6 +81,156 @@ _SEQUENCE_STEPS = [
         "actions": [],
     },
 ]
+
+
+# --- Scenario builder ------------------------------------------------------
+# Action types the headless runner executes, with their editable fields.
+_ACTION_LABELS = {
+    "account_create": "Create account",
+    "account_delete": "Delete account",
+    "usage_inject": "Inject usage",
+    "time_advance": "Advance time",
+    "time_set": "Set date",
+    "qos_set": "Set QoS",
+    "qos_check": "Check QoS",
+    "limits_calculate": "Calculate limits",
+}
+_ACTION_FIELDS: dict[str, list[dict[str, str]]] = {
+    "account_create": [
+        {"key": "name", "kind": "text", "ph": "account name"},
+        {"key": "allocation", "kind": "number", "ph": "allocation (Nh)"},
+        {"key": "description", "kind": "text", "ph": "description"},
+    ],
+    "account_delete": [{"key": "account", "kind": "account", "ph": "account"}],
+    "usage_inject": [
+        {"key": "account", "kind": "account", "ph": "account"},
+        {"key": "user", "kind": "text", "ph": "user"},
+        {"key": "amount", "kind": "number", "ph": "node-hours"},
+    ],
+    "time_advance": [
+        {"key": "amount", "kind": "number", "ph": "amount"},
+        {"key": "unit", "kind": "unit", "ph": ""},
+    ],
+    "time_set": [{"key": "time", "kind": "date", "ph": ""}],
+    "qos_set": [
+        {"key": "account", "kind": "account", "ph": "account"},
+        {"key": "qos", "kind": "qos", "ph": ""},
+    ],
+    "qos_check": [{"key": "account", "kind": "account", "ph": "account"}],
+    "limits_calculate": [{"key": "account", "kind": "account", "ph": "account"}],
+}
+
+
+def _blank_action() -> dict[str, Any]:
+    return {"type": "account_create", "params": {}}
+
+
+def _action_to_builder(action: ScenarioAction) -> dict[str, Any]:
+    """Flatten a ScenarioAction into a builder row (string params)."""
+    return {
+        "type": action.type.value,
+        "params": {k: str(v) for k, v in action.parameters.items()},
+    }
+
+
+def _parse_builder_actions(form: FormData) -> list[dict[str, Any]]:
+    """Group ordered ``row-{i}-{field}`` form fields into an ordered action list."""
+    rows: dict[int, dict[str, str]] = {}
+    for key, value in form.multi_items():
+        if not key.startswith("row-"):
+            continue
+        parts = key.split("-", 2)
+        if len(parts) != 3 or not parts[1].isdigit():
+            continue
+        rows.setdefault(int(parts[1]), {})[parts[2]] = str(value)
+    actions: list[dict[str, Any]] = []
+    for i in sorted(rows):
+        row = rows[i]
+        action_type = row.get("type", "")
+        if action_type not in _ACTION_FIELDS:
+            continue
+        params = {f["key"]: (row.get(f["key"]) or "").strip() for f in _ACTION_FIELDS[action_type]}
+        actions.append({"type": action_type, "params": params})
+    return actions
+
+
+def _to_int(value: str, default: int) -> int:
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return default
+
+
+def _to_float(value: str, default: float) -> float:
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def _build_scenario(actions: list[dict[str, Any]]) -> ScenarioDefinition:
+    """Turn builder rows into a runnable single-step ScenarioDefinition."""
+    built: list[ScenarioAction] = []
+    for action in actions:
+        action_type = action["type"]
+        p = action["params"]
+        if action_type == "time_advance":
+            unit = p.get("unit") or "months"
+            params: dict[str, Any] = {"amount": _to_int(p.get("amount", ""), 0), "unit": unit}
+            desc = f"Advance time {params['amount']} {unit}"
+        elif action_type == "time_set":
+            params = {"time": p.get("time", "")}
+            desc = f"Set date to {p.get('time', '')}"
+        elif action_type == "account_create":
+            params = {
+                "name": p.get("name", ""),
+                "description": p.get("description") or "Built via UI",
+                "allocation": _to_int(p.get("allocation", ""), 1000),
+            }
+            desc = f"Create account {p.get('name', '')} @ {params['allocation']}Nh"
+        elif action_type == "account_delete":
+            params = {"account": p.get("account", "")}
+            desc = f"Delete account {p.get('account', '')}"
+        elif action_type == "usage_inject":
+            params = {
+                "account": p.get("account") or "default_account",
+                "user": p.get("user") or "aggregate",
+                "amount": _to_float(p.get("amount", ""), 0.0),
+            }
+            desc = f"Inject {params['amount']}Nh for {params['user']} in {params['account']}"
+        elif action_type == "qos_set":
+            params = {"account": p.get("account", ""), "qos": p.get("qos", "")}
+            desc = f"Set QoS {p.get('qos', '')} on {p.get('account', '')}"
+        else:  # qos_check, limits_calculate
+            params = {"account": p.get("account") or "default_account"}
+            desc = f"{_ACTION_LABELS.get(action_type, action_type)} for {params['account']}"
+        built.append(
+            ScenarioAction(type=ActionType(action_type), description=desc, parameters=params)
+        )
+
+    step = ScenarioStep(name="custom", description="Custom scenario", actions=built)
+    return ScenarioDefinition(
+        name="__custom__",
+        title="Custom scenario",
+        description="Built in the scenario editor",
+        scenario_type=ScenarioType.PERIODIC_LIMITS,
+        steps=[step],
+    )
+
+
+def _builder_context(
+    server: EmulatorServer, request: Request, actions: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        "request": request,
+        "actions": actions,
+        "action_labels": _ACTION_LABELS,
+        "action_fields": _ACTION_FIELDS,
+        "qos_options": _qos_options(server),
+        "units": ["days", "months", "quarters"],
+        "accounts": sorted(a.name for a in server.database.list_accounts() if a.name != "root"),
+        "scenarios": ["sequence", *[s.name for s in server.scenario_registry.list_scenarios()]],
+    }
 
 
 def _account_rows(server: EmulatorServer, cluster: str) -> list[dict[str, Any]]:
@@ -502,6 +658,64 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
                     ],
                 }
         return _templates.TemplateResponse("_scenario_steps.html", ctx)
+
+    @router.get("/scenario/build", response_class=HTMLResponse)
+    async def scenario_build(request: Request, name: str = ""):
+        # Prefill from an existing scenario's actions when a name is given.
+        actions: list[dict[str, Any]] = []
+        if name and name != "sequence":
+            definition = server.scenario_registry.get_scenario(name)
+            if definition is not None:
+                actions = [
+                    _action_to_builder(act)
+                    for step in definition.steps
+                    for act in step.actions
+                    if act.type.value in _ACTION_FIELDS
+                ]
+        if not actions:
+            actions = [_blank_action()]
+        return _templates.TemplateResponse(
+            "_scenario_builder.html", _builder_context(server, request, actions)
+        )
+
+    @router.post("/scenario/build/rows", response_class=HTMLResponse)
+    async def scenario_build_rows(request: Request):
+        form = await request.form()
+        op = str(form.get("op", ""))
+        idx = _to_int(str(form.get("idx", "-1")), -1)
+        actions = _parse_builder_actions(form)
+        if op == "add":
+            actions.append(_blank_action())
+        elif op == "remove" and 0 <= idx < len(actions):
+            actions.pop(idx)
+        elif op == "up" and 0 < idx < len(actions):
+            actions[idx - 1], actions[idx] = actions[idx], actions[idx - 1]
+        elif op == "down" and 0 <= idx < len(actions) - 1:
+            actions[idx + 1], actions[idx] = actions[idx], actions[idx + 1]
+        # Any other op (e.g. a type change) just re-renders with the parsed state.
+        if not actions:
+            actions = [_blank_action()]
+        return _templates.TemplateResponse(
+            "_builder_rows.html", _builder_context(server, request, actions)
+        )
+
+    @router.post("/scenario/build/run", response_class=HTMLResponse)
+    async def scenario_build_run(request: Request):
+        form = await request.form()
+        actions = _parse_builder_actions(form)
+        result: dict[str, Any] = {"name": "custom scenario"}
+        buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buffer):
+                _run_scenario_headless(server, _build_scenario(actions))
+            server.database.save_state()
+            result["ok"] = True
+            result["summary_line"] = f"{len(actions)} actions executed"
+        except Exception as e:  # surface any build/run failure to the UI
+            result["ok"] = False
+            result["error"] = str(e)
+        result["log"] = buffer.getvalue().strip()
+        return _templates.TemplateResponse("_result.html", {"request": request, "result": result})
 
     @router.get("/control/{action}", response_class=HTMLResponse)
     async def control_form(request: Request, action: str):
