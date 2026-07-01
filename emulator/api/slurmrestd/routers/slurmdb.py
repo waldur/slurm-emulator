@@ -34,7 +34,7 @@ from emulator.api.slurmrestd.schemas import (
 from emulator.api.slurmrestd.state import RequestState, StateDep
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacct import _Config as SacctConfig
-from emulator.core.database import QOS, Association
+from emulator.core.database import QOS, Association, fold_account
 from emulator.core.scheduler import advance_job_states
 
 router = APIRouter(
@@ -64,6 +64,7 @@ def _bad_request(request, state, description: str):
 
 
 def _account_assocs(state: RequestState, name: str) -> list[Association]:
+    name = fold_account(name)
     return [a for a in state.database.associations.values() if a.account == name]
 
 
@@ -321,6 +322,7 @@ def _upsert_account(state: RequestState, entry: dict[str, Any]) -> Optional[str]
     name = entry.get("name")
     if not name:
         return None
+    name = fold_account(name)
     existing = state.database.get_account(name)
     if existing is None:
         state.database.add_account(
@@ -402,6 +404,7 @@ async def delete_account(
             {"removed_accounts": []},
             warnings=[found_nothing_warning("slurmdb_accounts_get()", request)],
         )
+    account_name = fold_account(account_name)
     state.database.delete_account(account_name)
     # Cascade: drop every association referencing the account, matching
     # sacctmgr remove account semantics.
@@ -708,6 +711,7 @@ def _filter_associations(
 ) -> list[Association]:
     assocs = list(state.database.associations.values())
     if account is not None:
+        account = fold_account(account)
         assocs = [a for a in assocs if a.account == account]
     if user is not None:
         assocs = [a for a in assocs if a.user == user]
