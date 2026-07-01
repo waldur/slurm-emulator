@@ -10,7 +10,7 @@
   <thead>
     <tr>
       <th>Account</th><th>Parent</th><th>Users</th><th>Usage (Nh)</th><th>Allocation</th><th>Used %</th>
-      <th>QoS</th><th>Threshold</th><th>Fairshare</th>
+      <th>QoS</th><th>Threshold</th><th>Fairshare</th><th></th>
     </tr>
   </thead>
   <tbody>
@@ -29,19 +29,26 @@
         <div class="bar"><span style="width: {{ [a.percentage, 100] | min }}%"></span></div>
         {{ a.percentage }}%
       </td>
-      <td><span class="badge badge-{{ a.qos }}">{{ a.qos }}</span></td>
+      <td>
+        <select class="qos-select qos-{{ a.qos }}" name="qos" aria-label="QoS for {{ a.name }}"
+                hx-post="/ui/qos/set" hx-vals='{"account": "{{ a.name }}"}'
+                hx-target="#status" hx-swap="innerHTML" hx-trigger="change">
+          {% for q in qos_options %}
+          <option value="{{ q }}"{% if q == a.qos %} selected{% endif %}>{{ q }}</option>
+          {% endfor %}
+        </select>
+      </td>
       <td><span class="badge badge-{{ a.threshold_status }}">{{ a.threshold_status }}</span></td>
       <td>{{ a.fairshare }}</td>
+      <td>
+        <button class="row-act" data-open="modal"
+                hx-get="/ui/associations/{{ a.name }}" hx-target="#modal-mount" hx-swap="innerHTML"
+                title="Show associations for {{ a.name }}">assoc ▸</button>
+      </td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
-<div class="assoc-toggle">
-  <button class="link" hx-get="/ui/associations" hx-target="#assoc-detail" hx-swap="innerHTML">
-    ▸ show associations
-  </button>
-  <div id="assoc-detail"></div>
-</div>
 {% else %}
 <p class="empty">No accounts yet — create one from the Controls panel.</p>
 {% endif %}

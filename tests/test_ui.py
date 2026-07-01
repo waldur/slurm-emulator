@@ -99,6 +99,99 @@ def test_run_unknown_scenario_reports_error(ui):
     assert "not found" in resp.text
 
 
+def test_edit_account_updates_allocation_and_parent(ui):
+    ui.post("/ui/accounts", auth=AUTH, data={"name": "proj-x", "allocation": 100})
+    resp = ui.post(
+        "/ui/accounts/edit",
+        auth=AUTH,
+        data={"name": "proj-x", "allocation": "750", "parent": "root", "description": ""},
+    )
+    assert resp.status_code == 200
+    assert "750" in resp.text  # updated allocation shown in status partial
+
+    status = ui.get("/ui/status", auth=AUTH)
+    assert "750" in status.text
+
+
+def test_edit_account_blank_fields_keep_values(ui):
+    ui.post("/ui/accounts", auth=AUTH, data={"name": "proj-y", "allocation": 500})
+    # Blank allocation must not wipe the existing value.
+    ui.post("/ui/accounts/edit", auth=AUTH, data={"name": "proj-y", "allocation": ""})
+    status = ui.get("/ui/status", auth=AUTH)
+    assert "500" in status.text
+
+
+def test_control_form_account_field_is_dropdown(ui):
+    ui.post("/ui/accounts", auth=AUTH, data={"name": "proj-drop", "allocation": 10})
+    form = ui.get("/ui/control/usage", auth=AUTH)
+    assert form.status_code == 200
+    assert '<select name="account"' in form.text  # dropdown, not free text
+    assert "proj-drop" in form.text
+
+
+def test_control_form_needs_account_notice_when_empty(ui):
+    form = ui.get("/ui/control/qos", auth=AUTH)
+    assert "No accounts exist yet" in form.text
+
+
+def test_account_associations_modal(ui):
+    ui.post(
+        "/ui/usage/inject",
+        auth=AUTH,
+        data={"account": "proj-assoc", "user": "frank", "node_hours": 3},
+    )
+    modal = ui.get("/ui/associations/proj-assoc", auth=AUTH)
+    assert modal.status_code == 200
+    assert "Associations · proj-assoc" in modal.text
+    assert "frank" in modal.text
+
+
+def test_inline_qos_set_from_status(ui):
+    ui.post("/ui/accounts", auth=AUTH, data={"name": "proj-q", "allocation": 100})
+    resp = ui.post("/ui/qos/set", auth=AUTH, data={"account": "proj-q", "qos": "blocked"})
+    assert resp.status_code == 200
+    assert "qos-blocked" in resp.text  # status partial reflects new QoS
+
+    # Status table renders a QoS dropdown limited to available levels.
+    status = ui.get("/ui/status", auth=AUTH)
+    assert 'class="qos-select' in status.text
+    assert 'hx-post="/ui/qos/set"' in status.text
+
+
+def test_scenario_form_shows_descriptions(ui):
+    form = ui.get("/ui/control/scenario", auth=AUTH)
+    assert form.status_code == 200
+    assert "data-desc" in form.text
+    assert 'id="scenario-desc"' in form.text
+    assert "periodic-limits sequence" in form.text  # sequence description present
+
+
+def test_registry_scenario_log_covers_all_actions(ui):
+    resp = ui.post("/ui/scenario/run", auth=AUTH, data={"name": "traditional_max_tres_mins"})
+    assert resp.status_code == 200
+    assert "actions executed" in resp.text
+    # Each action prints a "🔧" line, so the log length matches the action count.
+    assert resp.text.count("🔧") >= 5
+
+
+def test_scenario_run_returns_console_log(ui):
+    resp = ui.post("/ui/scenario/run", auth=AUTH, data={"name": "sequence"})
+    assert resp.status_code == 200
+    assert "completed" in resp.text
+    assert 'class="console-log"' in resp.text  # captured stdout is shown
+
+
+def test_bootstrapped_qos_classes_available_and_assignable(ui):
+    cfg = ui.get("/ui/config", auth=AUTH)
+    assert "DenyOnLimit" in cfg.text  # seeded QoS class flags present
+    assert "long" in cfg.text
+    # A bootstrapped class (not an operational level) is assignable to an account.
+    ui.post("/ui/accounts", auth=AUTH, data={"name": "proj-h", "allocation": 100})
+    resp = ui.post("/ui/qos/set", auth=AUTH, data={"account": "proj-h", "qos": "high"})
+    assert resp.status_code == 200
+    assert "qos-high" in resp.text
+
+
 def test_config_view_shows_partitions_and_tres(ui):
     cfg = ui.get("/ui/config", auth=AUTH)
     assert cfg.status_code == 200

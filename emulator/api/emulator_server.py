@@ -131,6 +131,10 @@ class EmulatorServer:
         # Load existing state
         self.database.load_state()
 
+        # Seed usable QoS classes on first run so accounts can be assigned QoS.
+        if self.database.bootstrap_default_qos():
+            self.database.save_state()
+
         # Setup routes
         self._setup_routes()
 

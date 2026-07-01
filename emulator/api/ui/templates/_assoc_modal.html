@@ -1,0 +1,28 @@
+<div class="modal-head">
+  <h3>Associations · {{ account }}</h3>
+  <button class="modal-x" data-close aria-label="Close">✕</button>
+</div>
+<div class="modal-form">
+  {% if associations %}
+  <table class="data compact">
+    <thead>
+      <tr><th>User</th><th>Partition</th><th>Parent</th><th>Limits</th></tr>
+    </thead>
+    <tbody>
+      {% for a in associations %}
+      <tr>
+        <td class="name">{{ a.user }}</td>
+        <td class="muted">{{ a.partition }}</td>
+        <td class="muted">{{ a.parent }}</td>
+        <td class="muted">{{ a.limits }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="modal-note">No associations for this account on the current cluster.</p>
+  {% endif %}
+  <div class="modal-actions">
+    <button type="button" class="btn-ghost" data-close>Close</button>
+  </div>
+</div>

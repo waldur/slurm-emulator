@@ -8,6 +8,8 @@ status partial for HTMX to swap in.
 
 from __future__ import annotations
 
+import contextlib
+import io
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional
@@ -69,7 +71,9 @@ def _account_rows(server: EmulatorServer, cluster: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _associations_context(server: EmulatorServer, request: Request) -> dict[str, Any]:
+def _associations_context(
+    server: EmulatorServer, request: Request, account: Optional[str] = None
+) -> dict[str, Any]:
     cl = server.database.current_cluster
     rows = [
         {
@@ -80,7 +84,7 @@ def _associations_context(server: EmulatorServer, request: Request) -> dict[str,
             "limits": ", ".join(f"{k}={v}" for k, v in a.limits.items()) or "—",
         }
         for a in server.database.associations.values()
-        if a.cluster == cl
+        if a.cluster == cl and (account is None or a.account == account)
     ]
     rows.sort(key=lambda r: (r["account"], r["user"]))
     return {"request": request, "associations": rows}
@@ -97,7 +101,18 @@ def _status_context(
         "cluster": cl,
         "clusters": [c.name for c in server.database.list_clusters()],
         "accounts": _account_rows(server, cl),
+        # QoS values valid on this cluster (what set_account_qos accepts):
+        # defined QoS classes first, then any operational level not among them.
+        "qos_options": _qos_options(server),
     }
+
+
+def _qos_options(server: EmulatorServer) -> list[str]:
+    options = list(server.database.qos_list.keys())
+    for level in server.qos_manager.qos_levels:
+        if level not in options:
+            options.append(level)
+    return options
 
 
 def _run_scenario_headless(server: EmulatorServer, scenario: ScenarioDefinition) -> dict[str, Any]:
@@ -108,12 +123,22 @@ def _run_scenario_headless(server: EmulatorServer, scenario: ScenarioDefinition)
     action types (checkpoint/validate/config-reload/cleanup) are skipped.
     """
     actions_run = 0
-    for step in scenario.steps:
+    print(f"🎬 {scenario.title}")
+    print("=" * 60)
+    if scenario.description:
+        print(scenario.description)
+
+    for i, step in enumerate(scenario.steps, 1):
+        print(f"\n📍 Step {i}: {step.name}")
+        if step.description:
+            print(f"   {step.description}")
         if step.time_point:
             server.time_engine.set_time(step.time_point)
+            print(f"   ⏰ Time set to {step.time_point}")
 
         for action in step.actions:
             params = action.parameters
+            print(f"   🔧 {action.description}")
             if action.type == ActionType.TIME_SET:
                 server.time_engine.set_time(datetime.fromisoformat(params["time"]))
             elif action.type == ActionType.TIME_ADVANCE:
@@ -132,6 +157,7 @@ def _run_scenario_headless(server: EmulatorServer, scenario: ScenarioDefinition)
                     name, params.get("description", "Test Account"), "emulator"
                 )
                 server.database.set_account_allocation(name, params.get("allocation", 1000))
+                print(f"      ✅ account {name} @ {params.get('allocation', 1000)}Nh")
             elif action.type == ActionType.ACCOUNT_DELETE and server.database.get_account(
                 params["account"]
             ):
@@ -147,13 +173,24 @@ def _run_scenario_headless(server: EmulatorServer, scenario: ScenarioDefinition)
                 server.qos_manager.check_and_update_qos(
                     account, usage, settings["qos_threshold"], settings["grace_limit"]
                 )
+                print(
+                    f"      📊 usage {usage:.0f}Nh vs threshold "
+                    f"{settings['qos_threshold']:.0f}Nh → QoS {server.qos_manager.get_account_qos(account)}"
+                )
             elif action.type == ActionType.LIMITS_CALCULATE:
-                server.limits_calculator.calculate_periodic_settings(
-                    params.get("account", "default_account")
+                account = params.get("account", "default_account")
+                settings = server.limits_calculator.calculate_periodic_settings(account)
+                print(
+                    f"      📊 fairshare {settings['fairshare']}, "
+                    f"allocation {settings['total_allocation']:.0f}Nh"
                 )
             # Remaining types (checkpoint, validate, config_reload, cleanup) are
             # bookkeeping-only and intentionally skipped in headless execution.
+            if action.expected_outcome:
+                print(f"      → {action.expected_outcome}")
             actions_run += 1
+
+    print(f"\n✅ {scenario.title} completed — {len(scenario.steps)} steps, {actions_run} actions")
 
     return {"steps": len(scenario.steps), "actions": actions_run}
 
@@ -300,6 +337,29 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
         server.database.save_state()
         return status_partial(request)
 
+    @router.post("/accounts/edit", response_class=HTMLResponse)
+    async def edit_account(
+        request: Request,
+        name: Annotated[str, Form()],
+        allocation: Annotated[Optional[str], Form()] = None,
+        parent: Annotated[Optional[str], Form()] = None,
+        description: Annotated[Optional[str], Form()] = None,
+    ):
+        # Blank fields are left unchanged; the account is created if missing.
+        name = name.strip()
+        if not server.database.get_account(name):
+            server.database.add_account(name, description or "Created via web UI", "emulator")
+        account_obj = server.database.get_account(name)
+        if description:
+            account_obj.description = description
+        if allocation:
+            with contextlib.suppress(ValueError):
+                server.database.set_account_allocation(name, int(allocation))
+        if parent:
+            server.database.set_account_parent(name, parent.strip())
+        server.database.save_state()
+        return status_partial(request)
+
     @router.post("/apply-settings", response_class=HTMLResponse)
     async def apply_settings(
         request: Request,
@@ -332,6 +392,17 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
         server.database.save_state()
         return status_partial(request)
 
+    @router.post("/qos/set", response_class=HTMLResponse)
+    async def qos_set(
+        request: Request,
+        account: Annotated[str, Form()],
+        qos: Annotated[str, Form()],
+    ):
+        # set_account_qos rejects values outside the cluster's QoS levels.
+        server.qos_manager.set_account_qos(account, qos)
+        server.database.save_state()
+        return status_partial(request)
+
     @router.post("/scenario/run", response_class=HTMLResponse)
     async def scenario_run(request: Request, name: Annotated[str, Form()] = "sequence"):
         result: dict[str, Any] = {"name": name}
@@ -340,18 +411,55 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
             result["ok"] = False
             result["error"] = f"Scenario '{name}' not found"
         else:
+            # Scenarios print a rich step-by-step log to stdout — capture it for the UI.
+            buffer = io.StringIO()
             try:
-                if definition is None:  # sequence uses the dedicated runner
-                    scenario = SequenceScenario(server.time_engine, server.database)
-                    result["outcome"] = scenario.run_complete_scenario(interactive=False)
-                else:
-                    result["title"] = definition.title
-                    result["outcome"] = _run_scenario_headless(server, definition)
+                with contextlib.redirect_stdout(buffer):
+                    if definition is None:  # sequence uses the dedicated runner
+                        scenario = SequenceScenario(server.time_engine, server.database)
+                        result["outcome"] = scenario.run_complete_scenario(interactive=False)
+                    else:
+                        result["title"] = definition.title
+                        outcome = _run_scenario_headless(server, definition)
+                        result["summary_line"] = (
+                            f"{outcome['steps']} steps, {outcome['actions']} actions executed"
+                        )
                 server.database.save_state()
                 result["ok"] = True
             except Exception as e:
                 result["ok"] = False
                 result["error"] = str(e)
+            result["log"] = buffer.getvalue().strip()
         return _templates.TemplateResponse("_result.html", {"request": request, "result": result})
+
+    @router.get("/control/{action}", response_class=HTMLResponse)
+    async def control_form(request: Request, action: str):
+        # Serve a control's form fresh so account dropdowns reflect current state.
+        accounts = sorted(a.name for a in server.database.list_accounts() if a.name != "root")
+        scenarios = [
+            {
+                "name": "sequence",
+                "description": (
+                    "Full periodic-limits sequence: Q1 setup, 3-month usage simulation, "
+                    "Q2 carryover with decay, threshold → slowdown/blocked transitions, "
+                    "admin allocation increase, hard-limit test, and Q3 15-day decay."
+                ),
+            }
+        ]
+        scenarios += [
+            {"name": s.name, "description": s.description}
+            for s in server.scenario_registry.list_scenarios()
+            if s.name != "sequence"
+        ]
+        return _templates.TemplateResponse(
+            "_control.html",
+            {"request": request, "action": action, "accounts": accounts, "scenarios": scenarios},
+        )
+
+    @router.get("/associations/{account}", response_class=HTMLResponse)
+    async def account_associations(request: Request, account: str):
+        ctx = _associations_context(server, request, account=account)
+        ctx["account"] = account
+        return _templates.TemplateResponse("_assoc_modal.html", ctx)
 
     app.include_router(router)

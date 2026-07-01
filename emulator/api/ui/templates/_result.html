@@ -1,19 +1,19 @@
 {% if result.ok %}
 <div class="result ok">
-  ✅ Scenario <strong>{{ result.title or result.name }}</strong> completed.
-  {% if result.outcome %}
-    <div class="hint">
-      {% if result.outcome.steps is defined %}
-        {{ result.outcome.steps }} steps, {{ result.outcome.actions }} actions executed.
-      {% elif result.outcome.summary is defined %}
-        {{ result.outcome.summary }}
-      {% endif %}
-    </div>
-  {% endif %}
-  <p class="hint">The Status panel will refresh shortly to show the effect.</p>
+  <span class="result-tag">✅ completed</span>
+  <strong>{{ result.title or result.name }}</strong>
+  {% if result.summary_line %} — {{ result.summary_line }}{% endif %}
 </div>
 {% else %}
 <div class="result err">
-  ❌ Scenario <strong>{{ result.name }}</strong> failed: {{ result.error }}
+  <span class="result-tag">❌ failed</span>
+  <strong>{{ result.name }}</strong> — {{ result.error }}
 </div>
+{% endif %}
+
+{% if result.log %}
+<pre class="console-log">{{ result.log }}</pre>
+{% endif %}
+{% if result.ok %}
+<p class="hint hint-block">The Status panel will refresh shortly to show the effect.</p>
 {% endif %}
