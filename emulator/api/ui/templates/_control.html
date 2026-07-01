@@ -94,9 +94,11 @@
   <form class="modal-form" hx-post="/ui/usage/inject" hx-target="#status" hx-swap="innerHTML"
         hx-on::after-request="{{ close_on_ok }}">
     <label class="field"><span>Account</span>{{ account_select() }}</label>
-    <label class="field"><span>User</span><input type="text" name="user" value="user1" required></label>
+    <label class="field"><span>User <span class="field-opt">— blank = account-level</span></span>
+      <input type="text" name="user" placeholder="e.g. alice, or leave blank"></label>
     <label class="field"><span>Node-hours</span><input type="number" step="any" name="node_hours" required autofocus></label>
-    <p class="modal-help">Record node-hours of usage for a user in the account at the current time (the user is created if missing).</p>
+    <p class="modal-help">Record node-hours of usage in the account at the current time. Name a
+      user (created if missing), or leave the user blank to inject account-level aggregate usage.</p>
     <div class="modal-actions">
       <button type="button" class="btn-ghost" data-close>Cancel</button>
       <button type="submit">Inject</button>

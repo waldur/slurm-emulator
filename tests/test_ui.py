@@ -146,6 +146,29 @@ def test_account_associations_modal(ui):
     assert "frank" in modal.text
 
 
+def test_associations_add_and_remove_user(ui):
+    ui.post("/ui/accounts", auth=AUTH, data={"name": "proj-assoc2", "allocation": 100})
+    # Add a user to the account via the modal endpoint.
+    added = ui.post("/ui/associations/proj-assoc2/add", auth=AUTH, data={"user": "grace"})
+    assert added.status_code == 200
+    assert "grace" in added.text
+    assert "Associations · proj-assoc2" in added.text
+
+    # Remove that user again.
+    removed = ui.post("/ui/associations/proj-assoc2/remove", auth=AUTH, data={"user": "grace"})
+    assert removed.status_code == 200
+    assert "grace" not in removed.text
+
+
+def test_inject_account_level_usage_without_user(ui):
+    ui.post("/ui/accounts", auth=AUTH, data={"name": "proj-agg", "allocation": 100})
+    # No user field → account-level aggregate usage.
+    resp = ui.post("/ui/usage/inject", auth=AUTH, data={"account": "proj-agg", "node_hours": 25})
+    assert resp.status_code == 200
+    assert "25" in resp.text  # usage recorded on the account
+    assert "aggregate" in resp.text  # aggregate user chip
+
+
 def test_inline_qos_set_from_status(ui):
     ui.post("/ui/accounts", auth=AUTH, data={"name": "proj-q", "allocation": 100})
     resp = ui.post("/ui/qos/set", auth=AUTH, data={"account": "proj-q", "qos": "blocked"})

@@ -6,7 +6,7 @@
   {% if associations %}
   <table class="data compact">
     <thead>
-      <tr><th>User</th><th>Partition</th><th>Parent</th><th>Limits</th></tr>
+      <tr><th>User</th><th>Partition</th><th>Parent</th><th>Limits</th><th></th></tr>
     </thead>
     <tbody>
       {% for a in associations %}
@@ -15,13 +15,31 @@
         <td class="muted">{{ a.partition }}</td>
         <td class="muted">{{ a.parent }}</td>
         <td class="muted">{{ a.limits }}</td>
+        <td>
+          {% if a.user_raw %}
+          <button class="row-act row-act-danger"
+                  hx-post="/ui/associations/{{ account }}/remove"
+                  hx-vals='{"user": "{{ a.user_raw }}"}'
+                  hx-target="#modal-mount" hx-swap="innerHTML"
+                  hx-confirm="Remove user {{ a.user_raw }} from {{ account }}?"
+                  title="Remove {{ a.user_raw }}">remove</button>
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
   {% else %}
-  <p class="modal-note">No associations for this account on the current cluster.</p>
+  <p class="modal-note">No associations for this account yet — add a user below.</p>
   {% endif %}
+
+  <form class="assoc-add" hx-post="/ui/associations/{{ account }}/add"
+        hx-target="#modal-mount" hx-swap="innerHTML"
+        hx-on::after-request="if(event.detail.successful) this.reset()">
+    <input type="text" name="user" placeholder="username to add" required>
+    <button type="submit">Add user</button>
+  </form>
+
   <div class="modal-actions">
     <button type="button" class="btn-ghost" data-close>Close</button>
   </div>

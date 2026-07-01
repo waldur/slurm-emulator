@@ -79,6 +79,7 @@ def _associations_context(
         {
             "account": a.account,
             "user": a.user or "(account)",
+            "user_raw": a.user,  # empty string for the account-level row
             "partition": a.partition or "—",
             "parent": a.parent or "—",
             "limits": ", ".join(f"{k}={v}" for k, v in a.limits.items()) or "—",
@@ -315,10 +316,11 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
     async def usage_inject(
         request: Request,
         account: Annotated[str, Form()],
-        user: Annotated[str, Form()],
         node_hours: Annotated[float, Form()],
+        user: Annotated[str, Form()] = "",
     ):
-        server.usage_simulator.inject_usage(account, user, node_hours)
+        # Blank user → account-level (aggregate) usage.
+        server.usage_simulator.inject_usage(account, user.strip() or "aggregate", node_hours)
         server.database.save_state()
         return status_partial(request)
 
@@ -456,10 +458,31 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
             {"request": request, "action": action, "accounts": accounts, "scenarios": scenarios},
         )
 
-    @router.get("/associations/{account}", response_class=HTMLResponse)
-    async def account_associations(request: Request, account: str):
+    def assoc_modal(request: Request, account: str) -> HTMLResponse:
         ctx = _associations_context(server, request, account=account)
         ctx["account"] = account
         return _templates.TemplateResponse("_assoc_modal.html", ctx)
+
+    @router.get("/associations/{account}", response_class=HTMLResponse)
+    async def account_associations(request: Request, account: str):
+        return assoc_modal(request, account)
+
+    @router.post("/associations/{account}/add", response_class=HTMLResponse)
+    async def add_account_user(request: Request, account: str, user: Annotated[str, Form()]):
+        user = user.strip()
+        if user:
+            if not server.database.get_user(user):
+                server.database.add_user(user, account)
+            if not server.database.get_association(user, account):
+                server.database.add_association(user, account)
+            server.database.save_state()
+        return assoc_modal(request, account)
+
+    @router.post("/associations/{account}/remove", response_class=HTMLResponse)
+    async def remove_account_user(request: Request, account: str, user: Annotated[str, Form()]):
+        if user:
+            server.database.delete_user_associations(user, account)
+            server.database.save_state()
+        return assoc_modal(request, account)
 
     app.include_router(router)

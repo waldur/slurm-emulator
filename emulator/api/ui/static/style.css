@@ -377,6 +377,7 @@ dialog.modal[open] { animation: modal-in .22s cubic-bezier(.2, .7, .2, 1); }
   font-family: var(--display); font-weight: 600; font-size: 10.5px;
   letter-spacing: 1.2px; text-transform: uppercase; color: var(--amber);
 }
+.field-opt { color: var(--ink-faint); font-weight: 400; text-transform: none; letter-spacing: .3px; }
 .field input, .field select {
   width: 100%; padding: 8px 10px;
   font-family: var(--mono); font-size: 13px; color: var(--ink);
@@ -436,6 +437,25 @@ dialog.modal[open] { animation: modal-in .22s cubic-bezier(.2, .7, .2, 1); }
   transition: background .12s ease, box-shadow .12s ease;
 }
 .row-act:hover { background: rgba(78, 242, 166, .12); box-shadow: var(--glow-green); }
+.row-act-danger { color: var(--red); border-color: var(--red-lo); }
+.row-act-danger:hover { background: rgba(255, 93, 84, .12); box-shadow: var(--glow-red); }
+
+/* add-user row inside the associations modal */
+.assoc-add { display: flex; gap: 8px; margin: 14px 0 4px; }
+.assoc-add input {
+  flex: 1; padding: 7px 10px; font-family: var(--mono); font-size: 12.5px; color: var(--ink);
+  background: var(--bg-2); border: 1px solid var(--line-hot); border-radius: var(--radius);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .5); caret-color: var(--green);
+}
+.assoc-add input::placeholder { color: var(--ink-faint); }
+.assoc-add input:focus { outline: none; border-color: var(--green); box-shadow: inset 0 1px 3px rgba(0,0,0,.5), var(--glow-green); }
+.assoc-add button {
+  font-family: var(--display); font-weight: 600; font-size: 11px; letter-spacing: 1px;
+  text-transform: uppercase; cursor: pointer; padding: 7px 14px; border-radius: var(--radius);
+  color: #04120c; background: linear-gradient(180deg, #66f7b3, var(--green)); border: 1px solid #2fae79;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.35), var(--glow-green);
+}
+.assoc-add button:hover { filter: brightness(1.12); }
 
 /* captured scenario stdout = terminal readout */
 .console-log {
