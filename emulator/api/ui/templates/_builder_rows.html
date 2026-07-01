@@ -2,15 +2,20 @@
 {% set i = loop.index0 %}
 <div class="builder-row">
   <span class="builder-idx">{{ loop.index }}</span>
-  <select class="builder-type" name="row-{{ i }}-type"
-          hx-post="/ui/scenario/build/rows" hx-include="closest form"
-          hx-target="#builder-rows" hx-swap="innerHTML" hx-trigger="change">
-    {% for key, label in action_labels.items() %}
-    <option value="{{ key }}"{% if key == a.type %} selected{% endif %}>{{ label }}</option>
-    {% endfor %}
-  </select>
+  <label class="bfield builder-type-field">
+    <span class="bfield-label">Action</span>
+    <select class="builder-type" name="row-{{ i }}-type"
+            hx-post="/ui/scenario/build/rows" hx-include="closest form"
+            hx-target="#builder-rows" hx-swap="innerHTML" hx-trigger="change">
+      {% for key, label in action_labels.items() %}
+      <option value="{{ key }}"{% if key == a.type %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
   <div class="builder-fields">
     {% for f in action_fields[a.type] %}
+    <label class="bfield">
+      <span class="bfield-label">{{ f.label }}</span>
       {% if f.kind == "unit" %}
       <select name="row-{{ i }}-unit">
         {% for u in units %}<option value="{{ u }}"{% if u == a.params.get('unit', 'months') %} selected{% endif %}>{{ u }}</option>{% endfor %}
@@ -28,6 +33,7 @@
       {% else %}
       <input type="text" name="row-{{ i }}-{{ f.key }}" value="{{ a.params.get(f.key, '') }}" placeholder="{{ f.ph }}">
       {% endif %}
+    </label>
     {% endfor %}
   </div>
   <div class="builder-ops">

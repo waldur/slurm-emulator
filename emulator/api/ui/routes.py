@@ -97,27 +97,33 @@ _ACTION_LABELS = {
 }
 _ACTION_FIELDS: dict[str, list[dict[str, str]]] = {
     "account_create": [
-        {"key": "name", "kind": "text", "ph": "account name"},
-        {"key": "allocation", "kind": "number", "ph": "allocation (Nh)"},
-        {"key": "description", "kind": "text", "ph": "description"},
+        {"key": "name", "kind": "text", "label": "Account name", "ph": "e.g. physics"},
+        {"key": "allocation", "kind": "number", "label": "Allocation (Nh)", "ph": "1000"},
+        {"key": "description", "kind": "text", "label": "Description", "ph": "optional"},
     ],
-    "account_delete": [{"key": "account", "kind": "account", "ph": "account"}],
+    "account_delete": [
+        {"key": "account", "kind": "account", "label": "Account to delete", "ph": "account"}
+    ],
     "usage_inject": [
-        {"key": "account", "kind": "account", "ph": "account"},
-        {"key": "user", "kind": "text", "ph": "user"},
-        {"key": "amount", "kind": "number", "ph": "node-hours"},
+        {"key": "account", "kind": "account", "label": "Account", "ph": "account"},
+        {"key": "user", "kind": "text", "label": "User", "ph": "e.g. alice"},
+        {"key": "amount", "kind": "number", "label": "Usage (node-hours)", "ph": "e.g. 500"},
     ],
     "time_advance": [
-        {"key": "amount", "kind": "number", "ph": "amount"},
-        {"key": "unit", "kind": "unit", "ph": ""},
+        {"key": "amount", "kind": "number", "label": "Amount", "ph": "e.g. 3"},
+        {"key": "unit", "kind": "unit", "label": "Unit", "ph": ""},
     ],
-    "time_set": [{"key": "time", "kind": "date", "ph": ""}],
+    "time_set": [{"key": "time", "kind": "date", "label": "Jump to date", "ph": ""}],
     "qos_set": [
-        {"key": "account", "kind": "account", "ph": "account"},
-        {"key": "qos", "kind": "qos", "ph": ""},
+        {"key": "account", "kind": "account", "label": "Account", "ph": "account"},
+        {"key": "qos", "kind": "qos", "label": "Set QoS to", "ph": ""},
     ],
-    "qos_check": [{"key": "account", "kind": "account", "ph": "account"}],
-    "limits_calculate": [{"key": "account", "kind": "account", "ph": "account"}],
+    "qos_check": [
+        {"key": "account", "kind": "account", "label": "Account to check", "ph": "account"}
+    ],
+    "limits_calculate": [
+        {"key": "account", "kind": "account", "label": "Account", "ph": "account"}
+    ],
 }
 
 
