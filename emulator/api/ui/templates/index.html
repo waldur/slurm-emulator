@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block subtitle %}v{{ version }}{% endblock %}
+{% block content %}
+<div class="grid">
+
+  <section class="panel panel-wide">
+    <div class="panel-head">
+      <h2>Status</h2>
+      <span class="hint">auto-refreshes every 5s</span>
+    </div>
+    <div id="status"
+         hx-get="/ui/status"
+         hx-trigger="load, every 5s"
+         hx-swap="innerHTML">
+      {% include "_status.html" %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Controls</h2>
+      <span class="hint">each action instantly refreshes the Status panel above</span>
+    </div>
+
+    <form class="ctl" hx-post="/ui/time/advance" hx-target="#status" hx-swap="innerHTML">
+      <span class="ctl-label">Advance time</span>
+      <input type="number" name="days" value="0" title="days" placeholder="d">
+      <input type="number" name="months" value="0" title="months" placeholder="mo">
+      <input type="number" name="quarters" value="0" title="quarters" placeholder="q">
+      <button type="submit">Go</button>
+      <small class="ctl-help">Move the clock forward by days / months / quarters — crossing a
+        quarter triggers a period transition and usage decay.</small>
+    </form>
+
+    <form class="ctl" hx-post="/ui/time/set" hx-target="#status" hx-swap="innerHTML">
+      <span class="ctl-label">Set date</span>
+      <input type="date" name="date" required>
+      <button type="submit">Set</button>
+      <small class="ctl-help">Jump the emulator clock to a specific calendar date.</small>
+    </form>
+
+    <form class="ctl" hx-post="/ui/accounts" hx-target="#status" hx-swap="innerHTML">
+      <span class="ctl-label">New account</span>
+      <input type="text" name="name" placeholder="name" required>
+      <input type="number" name="allocation" value="0" title="allocation (Nh)" placeholder="Nh">
+      <input type="hidden" name="description" value="Created via web UI">
+      <button type="submit">Create</button>
+      <small class="ctl-help">Create a SLURM account with an optional node-hour allocation
+        (the budget usage is measured against).</small>
+    </form>
+
+    <form class="ctl" hx-post="/ui/usage/inject" hx-target="#status" hx-swap="innerHTML">
+      <span class="ctl-label">Inject usage</span>
+      <input type="text" name="account" placeholder="account" required>
+      <input type="text" name="user" value="user1" placeholder="user" required>
+      <input type="number" step="any" name="node_hours" placeholder="Nh" required>
+      <button type="submit">Inject</button>
+      <small class="ctl-help">Record node-hours of usage for a user in an account at the current
+        time — the account/user are created if missing.</small>
+    </form>
+
+    <form class="ctl" hx-post="/ui/apply-settings" hx-target="#status" hx-swap="innerHTML">
+      <span class="ctl-label">Periodic settings</span>
+      <input type="text" name="account" placeholder="account" required>
+      <input type="number" name="fairshare" placeholder="fairshare">
+      <input type="number" name="grp_tres_mins_billing" placeholder="GrpTRESMins">
+      <button type="submit">Apply</button>
+      <small class="ctl-help">Set an account's fairshare weight and its GrpTRESMins:billing limit
+        (the per-period budget Slurm enforces).</small>
+    </form>
+
+    <form class="ctl" hx-post="/ui/qos/downscale" hx-target="#status" hx-swap="innerHTML">
+      <span class="ctl-label">QoS</span>
+      <input type="text" name="account" placeholder="account" required>
+      <select name="qos">
+        <option value="slowdown">slowdown</option>
+        <option value="blocked">blocked</option>
+      </select>
+      <button type="submit">Down</button>
+      <button type="submit" class="ghost"
+              hx-post="/ui/qos/restore" hx-target="#status" hx-swap="innerHTML">Restore</button>
+      <small class="ctl-help"><strong>Down</strong>: force the account's QoS to slowdown/blocked
+        (throttle or stop new jobs). <strong>Restore</strong>: return it to normal.</small>
+    </form>
+
+    <form class="ctl" hx-post="/ui/scenario/run" hx-target="#scenario-result" hx-swap="innerHTML">
+      <span class="ctl-label">Scenario</span>
+      <select name="name" class="grow">
+        <option value="sequence">sequence</option>
+        {% for s in scenarios %}
+          {% if s.name != "sequence" %}<option value="{{ s.name }}">{{ s.name }}</option>{% endif %}
+        {% endfor %}
+      </select>
+      <button type="submit">Run</button>
+      <small class="ctl-help">Run a predefined test scenario (creates accounts, injects usage,
+        advances time, checks QoS) against the live state.</small>
+    </form>
+    <div id="scenario-result"></div>
+  </section>
+
+  <section class="panel panel-wide">
+    <div class="panel-head">
+      <h2>Cluster configuration</h2>
+      <button class="link" hx-get="/ui/config" hx-target="#config" hx-swap="innerHTML">refresh</button>
+    </div>
+    <p class="hint">Clusters, partitions, QoS definitions and TRES billing weights.</p>
+    <div id="config" hx-get="/ui/config" hx-trigger="load" hx-swap="innerHTML"></div>
+  </section>
+
+  <section class="panel panel-wide">
+    <div class="panel-head">
+      <h2>Recent jobs</h2>
+      <button class="link" hx-get="/ui/jobs" hx-target="#jobs" hx-swap="innerHTML">refresh</button>
+    </div>
+    <div id="jobs" hx-get="/ui/jobs" hx-trigger="load" hx-swap="innerHTML"></div>
+  </section>
+
+</div>
+{% endblock %}

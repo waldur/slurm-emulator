@@ -1,0 +1,47 @@
+<div class="status-meta">
+  <div><span class="k">Time</span><span class="v">{{ current_time }}</span></div>
+  <div><span class="k">Period</span><span class="v">{{ current_period }}</span></div>
+  <div><span class="k">Cluster</span><span class="v">{{ cluster }}</span></div>
+  <div><span class="k">Clusters</span><span class="v">{{ clusters | join(", ") }}</span></div>
+</div>
+
+{% if accounts %}
+<table class="data">
+  <thead>
+    <tr>
+      <th>Account</th><th>Parent</th><th>Users</th><th>Usage (Nh)</th><th>Allocation</th><th>Used %</th>
+      <th>QoS</th><th>Threshold</th><th>Fairshare</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in accounts %}
+    <tr>
+      <td class="name">{{ a.name }}</td>
+      <td class="muted">{{ a.parent }}</td>
+      <td>
+        {% if a.users %}
+          {% for u in a.users %}<span class="chip">{{ u }}</span>{% endfor %}
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td>{{ a.usage }}</td>
+      <td>{{ a.allocation }}</td>
+      <td>
+        <div class="bar"><span style="width: {{ [a.percentage, 100] | min }}%"></span></div>
+        {{ a.percentage }}%
+      </td>
+      <td><span class="badge badge-{{ a.qos }}">{{ a.qos }}</span></td>
+      <td><span class="badge badge-{{ a.threshold_status }}">{{ a.threshold_status }}</span></td>
+      <td>{{ a.fairshare }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<div class="assoc-toggle">
+  <button class="link" hx-get="/ui/associations" hx-target="#assoc-detail" hx-swap="innerHTML">
+    ▸ show associations
+  </button>
+  <div id="assoc-detail"></div>
+</div>
+{% else %}
+<p class="empty">No accounts yet — create one from the Controls panel.</p>
+{% endif %}

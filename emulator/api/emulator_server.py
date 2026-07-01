@@ -14,6 +14,48 @@ from emulator.core.time_engine import TimeEngine
 from emulator.core.usage_simulator import UsageSimulator
 from emulator.periodic_limits.calculator import PeriodicLimitsCalculator
 from emulator.periodic_limits.qos_manager import QoSManager
+from emulator.scenarios.scenario_registry import ScenarioRegistry
+
+
+def apply_settings_to_account(
+    server: "EmulatorServer",
+    resource_id: str,
+    *,
+    fairshare: Optional[int] = None,
+    grp_tres_mins: Optional[dict[str, int]] = None,
+    max_tres_mins: Optional[dict[str, int]] = None,
+    grp_tres: Optional[dict[str, int]] = None,
+    reset_raw_usage: bool = False,
+    billing_weights: Optional[dict[str, float]] = None,
+):
+    """Apply periodic settings to an account, creating it if needed.
+
+    Shared by the JSON API (``POST /api/apply-periodic-settings``) and the web
+    UI so the mutation logic lives in exactly one place.
+    """
+    if not server.database.get_account(resource_id):
+        server.database.add_account(resource_id, f"Account {resource_id}", "emulator")
+
+    account_obj = server.database.get_account(resource_id)
+
+    if fairshare is not None:
+        account_obj.fairshare = fairshare
+    if grp_tres_mins:
+        for tres_type, value in grp_tres_mins.items():
+            account_obj.limits[f"GrpTRESMins:{tres_type}"] = value
+    if max_tres_mins:
+        for tres_type, value in max_tres_mins.items():
+            account_obj.limits[f"MaxTRESMins:{tres_type}"] = value
+    if grp_tres:
+        for tres_type, value in grp_tres.items():
+            account_obj.limits[f"GrpTRES:{tres_type}"] = value
+    if reset_raw_usage:
+        server.database.reset_raw_usage(resource_id)
+    if billing_weights:
+        server.usage_simulator.billing_weights.update(billing_weights)
+
+    server.database.save_state()
+    return account_obj
 
 
 # Pydantic models for API requests/responses
@@ -61,6 +103,17 @@ class TokenRequest(BaseModel):
     lifespan: int = 1800
 
 
+class TimeSetRequest(BaseModel):
+    date: str  # ISO 8601, e.g. "2024-05-20" or "2024-05-20T00:00:00"
+
+
+class AccountCreateRequest(BaseModel):
+    name: str
+    description: str = "Created via API"
+    organization: str = "emulator"
+    allocation: Optional[int] = None
+
+
 class EmulatorServer:
     """FastAPI server for waldur-site-agent integration."""
 
@@ -73,12 +126,19 @@ class EmulatorServer:
         self.usage_simulator = UsageSimulator(self.time_engine, self.database)
         self.limits_calculator = PeriodicLimitsCalculator(self.database, self.time_engine)
         self.qos_manager = QoSManager(self.database, self.time_engine)
+        self.scenario_registry = ScenarioRegistry()
 
         # Load existing state
         self.database.load_state()
 
         # Setup routes
         self._setup_routes()
+
+        # Mount the web dashboard. Imported lazily to break the circular import
+        # (the UI package imports helpers from this module).
+        from emulator.api.ui import mount_ui  # noqa: PLC0415
+
+        mount_ui(self.app, self)
 
     def _setup_routes(self):
         """Setup API routes."""
@@ -97,42 +157,17 @@ class EmulatorServer:
             """Apply periodic settings to account (from Waldur Mastermind)."""
             try:
                 resource_id = request.resource_id
-                cluster = request.cluster
 
-                # Ensure account exists
-                if not self.database.get_account(resource_id):
-                    self.database.add_account(resource_id, f"Account {resource_id}", "emulator")
-
-                account_obj = self.database.get_account(resource_id)
-
-                # Apply fairshare
-                if request.fairshare is not None:
-                    account_obj.fairshare = request.fairshare
-
-                # Apply GrpTRESMins limits
-                if request.grp_tres_mins:
-                    for tres_type, value in request.grp_tres_mins.items():
-                        account_obj.limits[f"GrpTRESMins:{tres_type}"] = value
-
-                # Apply MaxTRESMins limits
-                if request.max_tres_mins:
-                    for tres_type, value in request.max_tres_mins.items():
-                        account_obj.limits[f"MaxTRESMins:{tres_type}"] = value
-
-                # Apply GrpTRES limits (concurrent resource limits)
-                if request.grp_tres:
-                    for tres_type, value in request.grp_tres.items():
-                        account_obj.limits[f"GrpTRES:{tres_type}"] = value
-
-                # Reset raw usage if requested
-                if request.reset_raw_usage:
-                    self.database.reset_raw_usage(resource_id)
-
-                # Update billing weights if provided
-                if request.billing_weights:
-                    self.usage_simulator.billing_weights.update(request.billing_weights)
-
-                self.database.save_state()
+                apply_settings_to_account(
+                    self,
+                    resource_id,
+                    fairshare=request.fairshare,
+                    grp_tres_mins=request.grp_tres_mins,
+                    max_tres_mins=request.max_tres_mins,
+                    grp_tres=request.grp_tres,
+                    reset_raw_usage=bool(request.reset_raw_usage),
+                    billing_weights=request.billing_weights,
+                )
 
                 print(f"🔧 Applied periodic settings to {resource_id}")
                 if request.fairshare:
@@ -385,6 +420,36 @@ class EmulatorServer:
                 "old_period": old_period,
                 "new_period": new_period,
             }
+
+        @self.app.post("/api/time/set")
+        async def set_time(request: TimeSetRequest):
+            """Jump emulator time to a specific date (ISO 8601)."""
+            try:
+                target = datetime.fromisoformat(request.date)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid date: {e}") from e
+
+            old_period = self.time_engine.get_current_quarter()
+            self.time_engine.set_time(target)
+            return {
+                "status": "success",
+                "new_time": self.time_engine.get_current_time(),
+                "old_period": old_period,
+                "new_period": self.time_engine.get_current_quarter(),
+            }
+
+        @self.app.post("/api/accounts")
+        async def create_account(request: AccountCreateRequest):
+            """Create an account (sacctmgr add account stand-in)."""
+            if self.database.get_account(request.name):
+                raise HTTPException(
+                    status_code=400, detail=f"Account '{request.name}' already exists"
+                )
+            self.database.add_account(request.name, request.description, request.organization)
+            if request.allocation is not None:
+                self.database.get_account(request.name).allocation = request.allocation
+            self.database.save_state()
+            return {"status": "success", "account": request.name}
 
     def _parse_billing_period(self, billing_period: str) -> str:
         """Parse billing period string to quarter format."""

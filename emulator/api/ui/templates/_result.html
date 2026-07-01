@@ -1,0 +1,19 @@
+{% if result.ok %}
+<div class="result ok">
+  ✅ Scenario <strong>{{ result.title or result.name }}</strong> completed.
+  {% if result.outcome %}
+    <div class="hint">
+      {% if result.outcome.steps is defined %}
+        {{ result.outcome.steps }} steps, {{ result.outcome.actions }} actions executed.
+      {% elif result.outcome.summary is defined %}
+        {{ result.outcome.summary }}
+      {% endif %}
+    </div>
+  {% endif %}
+  <p class="hint">The Status panel will refresh shortly to show the effect.</p>
+</div>
+{% else %}
+<div class="result err">
+  ❌ Scenario <strong>{{ result.name }}</strong> failed: {{ result.error }}
+</div>
+{% endif %}
