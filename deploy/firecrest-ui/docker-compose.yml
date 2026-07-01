@@ -42,6 +42,29 @@ services:
       timeout: 3s
       retries: 20
 
+  # --- A second, independent cluster (own container => own state) ---
+  slurm2:
+    image: opennode/slurm-emulator:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    hostname: slurm2
+    environment:
+      SLURM_EMULATOR_ENABLE_SSH: "1"
+      SLURM_EMULATOR_SSH_PORT: "22"
+      SLURM_EMULATOR_FS_ROOT: "/"
+      SLURM_EMULATOR_JOB_CLOCK: "wall"
+      SLURM_EMULATOR_JOB_RUN_DELAY: "2"
+      SLURM_EMULATOR_JOB_RUN_DURATION: "8"
+    ports:
+      - "${HOST_IP:-127.0.0.1}:6821:6820"
+      - "${HOST_IP:-127.0.0.1}:2223:22"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen(u.Request('http://localhost:6820/slurm/v0.0.46/ping/', headers={'X-SLURM-USER-TOKEN': 'x'}), timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   # --- OIDC identity provider (realm kcrealm, user fireuser/password) ---
   keycloak:
     image: quay.io/keycloak/keycloak:26.0.7
@@ -100,6 +123,8 @@ services:
       keycloak:
         condition: service_healthy
       slurm:
+        condition: service_healthy
+      slurm2:
         condition: service_healthy
     ports:
       - "${HOST_IP:-127.0.0.1}:8000:5000"

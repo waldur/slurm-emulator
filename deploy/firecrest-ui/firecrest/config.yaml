@@ -82,3 +82,53 @@ clusters:
           - "localhost"
         wait_timeout: 43200
         inbound_transfer_limit: 5368709120
+
+  # Second, independent cluster (its own emulator container / state).
+  - name: "cluster-emulator-2"
+    ssh:
+      host: "slurm2"
+      port: 22
+      max_clients: 100
+      timeout:
+        connection: 5
+        login: 5
+        command_execution: 10
+        idle_timeout: 60
+        keep_alive: 5
+    scheduler:
+      type: "slurm"
+      connection_mode: "hybrid"
+      version: "26.11.0"
+      api_url: "http://slurm2:6820"
+      api_version: "0.0.46"
+      timeout: 10
+    service_account:
+      client_id: "firecrest-health-check"
+      secret: "secret_file:/run/secrets/service_account_client_secret"
+    probing:
+      interval_check: 120
+      startup_grace_period: 300
+      services:
+        scheduler:
+          timeout: 20
+        filesystem:
+          timeout: 20
+        ssh:
+          timeout: 5
+    file_systems:
+      - path: "/home"
+        data_type: "users"
+        default_work_dir: true
+    data_operation:
+      max_ops_file_size: 5242880 # 5M
+      datatransfer_jobs_directives:
+        - "#SBATCH --nodes=1"
+        - "#SBATCH --time=0-00:15:00"
+      data_transfer:
+        service_type: "streamer"
+        host: "0.0.0.0"
+        port_range: [5665, 5666]
+        public_ips:
+          - "localhost"
+        wait_timeout: 43200
+        inbound_transfer_limit: 5368709120

@@ -41,8 +41,14 @@ Then open **http://localhost:3000**, click login, and sign in as:
 | firecrest-ui | http://localhost:3000 | the web UI |
 | firecrest API | http://localhost:8000 | OpenAPI at `/docs` |
 | keycloak | http://keycloak:8080/auth | realm `kcrealm`, admin `admin`/`admin2` |
-| slurm-emulator (slurmrestd) | http://localhost:6820 | `v0.0.46` |
-| slurm-emulator (SSH) | localhost:2222 | filesystem plane |
+| slurm-emulator (`cluster-emulator`) | slurmrestd http://localhost:6820, SSH localhost:2222 | `v0.0.46` |
+| slurm-emulator #2 (`cluster-emulator-2`) | slurmrestd http://localhost:6821, SSH localhost:2223 | independent container/state |
+
+Two clusters are wired to show FireCREST's multi-cluster support: `cluster-emulator`
+(service `slurm`) and `cluster-emulator-2` (service `slurm2`). Each is its own
+container with independent state, addressed by name in the API
+(`/compute/{system}/...`) and the UI's "HPC Clusters" nav. Drop the `slurm2`
+service + its `clusters:` entry in `firecrest/config.yaml` for a single-cluster setup.
 
 ## What works
 
