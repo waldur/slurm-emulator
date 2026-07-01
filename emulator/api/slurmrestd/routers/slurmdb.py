@@ -116,12 +116,11 @@ def _user_assocs(state: RequestState, name: str) -> list[Association]:
 
 
 def _assoc_is_default(state: RequestState, assoc: Association) -> bool:
-    """Whether this row is the user's default-account association.
+    """Whether this row is the user's default-account association (ASSOC.is_default).
 
-    FireCREST reads ``is_default`` per ``?user=`` association to pick the
-    default account. Account-level rows (user == "") stay default; when a
-    user has no recorded default_account we fall back to True so the common
-    single-account case keeps working.
+    Account-level rows (user == "") stay default; when a user has no recorded
+    default_account we fall back to True so the common single-account case
+    keeps working.
     """
     if not assoc.user:
         return True

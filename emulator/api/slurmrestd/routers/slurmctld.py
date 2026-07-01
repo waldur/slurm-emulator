@@ -69,7 +69,7 @@ def _submit_int(value: object, default: Optional[int]) -> Optional[int]:
 
 
 def _env_to_dict(value: object) -> dict[str, str]:
-    """FireCREST sends ``environment`` as a ``KEY=VALUE`` list (>=0.0.39); accept dicts too."""
+    """Job ``environment`` is a ``KEY=VALUE`` list in data_parser >=0.0.39; accept dicts too."""
     if isinstance(value, dict):
         return {str(k): str(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -94,8 +94,9 @@ async def ping(
         {
             "hostname": "localhost",
             "responding": True,
-            # FireCREST's scheduler health check reads ping["pinged"] == "UP";
-            # real slurm exposes the same state under "responding".
+            # "pinged" is the deprecated alias real slurm emitted through
+            # data_parser v0.0.44 (dropped for "responding" in v0.0.46); kept
+            # so older-dialect clients still read a ping result.
             "pinged": "UP",
             "latency": 123,
             "primary": "primary",
@@ -161,11 +162,11 @@ async def submit_job(
 ):
     """Job submission endpoint (openapi_job_submit).
 
-    FireCREST posts ``{"job": {...}}`` with the batch ``script`` inside the
-    job body for data_parser >= 0.0.41 (v0.0.46 qualifies); it also tolerates
-    the pre-0.0.41 sibling ``script``. We honour both. The response mirrors
-    OPENAPI_JOB_SUBMIT_RESPONSE (parsers.c:12959): top-level ``job_id`` /
-    ``step_id`` / ``job_submit_user_msg`` — FireCREST reads only ``job_id``.
+    Accepts ``{"job": {...}}`` with the batch ``script`` inside the job body
+    (data_parser >= 0.0.41, incl. v0.0.46) as well as the pre-0.0.41 sibling
+    ``script``. The response mirrors OPENAPI_JOB_SUBMIT_RESPONSE
+    (parsers.c:12959): top-level ``job_id`` / ``step_id`` /
+    ``job_submit_user_msg``.
     """
     body = await _json_body(request)
     job_desc = body.get("job")
@@ -178,9 +179,8 @@ async def submit_job(
     db = state.database
     user = job_desc.get("user_name") or getattr(request.state, "slurm_user", "root")
     user_rec = db.get_user(user)
-    # Real jobs always carry an account (the user's default association).
-    # Fall back to the user's default, then "root", so the account is never
-    # empty — FireCREST's UI builds job-detail URLs from it.
+    # A slurm job always has an account (the user's default association);
+    # fall back to the user's default, then "root", so it is never empty.
     account = job_desc.get("account") or (user_rec.default_account if user_rec else "") or "root"
 
     jid = db.allocate_job_id()
@@ -208,10 +208,12 @@ async def submit_job(
     db.add_job(job)
     state.commit()
 
+    # STEP_ID serializes to a string; a batch submission's step is "batch"
+    # (STEP_NAMES), matching real slurm's job-submit response.
     return _respond(
         request,
         state,
-        {"job_id": jid, "step_id": "BATCH", "job_submit_user_msg": ""},
+        {"job_id": jid, "step_id": "batch", "job_submit_user_msg": ""},
     )
 
 

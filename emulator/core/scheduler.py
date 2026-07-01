@@ -11,9 +11,9 @@ the job also shows up in the accounting (slurmdb / sacct) view.
 
 Two clocks, selected by ``SLURM_EMULATOR_JOB_CLOCK``:
 
-* ``wall`` (default) — transitions track real wall-clock time, so a
-  FireCREST poll loop watches PENDING -> RUNNING -> COMPLETED without
-  anyone advancing the emulator clock. Delays are short by default.
+* ``wall`` (default) — transitions track real wall-clock time, so a client
+  polling job status watches PENDING -> RUNNING -> COMPLETED without anyone
+  advancing the emulator clock. Delays are short by default.
 * ``time`` — transitions track the emulator's simulated clock, advanced
   via the time-travel API/CLI. Deterministic for scenario tests.
 

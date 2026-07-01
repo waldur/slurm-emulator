@@ -1,11 +1,9 @@
-"""Thin SSH front-end exposing the emulator's filesystem + Slurm CLI.
+"""Thin SSH front-end emulating a cluster login node.
 
-FireCREST reaches a cluster over SSH for *all* filesystem operations, for
-job stdout/stderr/script retrieval (``get_job_metadata``) and for
-submit-by-path — even when the scheduler itself is driven over slurmrestd.
-``HPCCluster.ssh`` is a required config field on every FireCREST cluster,
-so the emulator has to answer SSH for FireCREST to boot and serve those
-endpoints.
+HPC clients reach a cluster over SSH for filesystem operations, for job
+stdout/stderr/script retrieval and for submit-by-path, alongside the
+slurmrestd REST API. This serves that login-node role so the emulator can
+stand in for a full cluster.
 
 This is NOT a real sshd. For each SSH ``exec`` request we either:
 
@@ -13,15 +11,13 @@ This is NOT a real sshd. For each SSH ``exec`` request we either:
   ``scancel``/``sbatch``/``squeue``/``scontrol``/``id``) to the emulator's
   command layer, sharing the same JSON state as the REST plane; or
 * run the command line for real via ``bash -c`` in a per-user sandbox home
-  — real GNU coreutils produce exactly the output FireCREST parses. On macOS
-  (BSD coreutils), Homebrew's GNU tools are auto-detected and preferred so
-  GNU-style flags still work (see ``_command_env`` / ``_gnu_gnubin_dirs``).
+  — real GNU coreutils produce standard GNU output. On macOS (BSD coreutils),
+  Homebrew's GNU tools are auto-detected and preferred so GNU-style flags
+  still work (see ``_command_env`` / ``_gnu_gnubin_dirs``).
 
 Security: shell commands run as the emulator's own OS user, confined only
 by the sandbox working directory. This is a dev/test tool — do not expose
-it to untrusted clients. In the docker-compose e2e setup the emulator and
-FireCREST share a home volume so absolute paths (e.g. ``/home/user``)
-resolve identically on both sides.
+it to untrusted clients.
 """
 
 from __future__ import annotations
@@ -77,7 +73,7 @@ def _user_home(user: str) -> Path:
 
 # --- GNU/BSD coreutils portability ---
 #
-# FireCREST builds GNU-style command lines (stat -c, ls --full-time, date -d,
+# HPC clients build GNU-style command lines (stat -c, ls --full-time, date -d,
 # GNU tar/sed flags, cksum/sha*sum). Linux has these natively. macOS ships BSD
 # variants that reject those flags, so on Darwin we prefer Homebrew's GNU tools
 # by prepending their `gnubin` dirs to PATH — transparent, and covers commands
@@ -268,10 +264,10 @@ def _run_shell(user: str, command: str) -> tuple[str, str, int]:
 async def _run_shell_async(user: str, command: str, process) -> tuple[str, str, int]:
     """Run a shell command, streaming the SSH channel's stdin into it.
 
-    FireCREST uploads small files with ``base64 -d > path`` and streams the
-    content over stdin, so the channel's stdin must reach the subprocess or the
-    file lands empty. Commands that read no stdin still finish normally — we
-    stop pumping once the process exits.
+    Clients upload small files with ``base64 -d > path``, streaming the content
+    over stdin, so the channel's stdin must reach the subprocess or the file
+    lands empty. Commands that read no stdin still finish normally — we stop
+    pumping once the process exits.
     """
     home = _user_home(user)
     env = _command_env(user)
@@ -369,9 +365,8 @@ def _server_factory():  # pragma: no cover - needs asyncssh
             self._conn = conn
 
         def begin_auth(self, username: str) -> bool:
-            # False => no authentication required. FireCREST still offers a
-            # key/password; the server simply accepts the connection. Set
-            # SLURM_EMULATOR_SSH_ACCEPT_ALL=0 is a no-op here (dev default).
+            # False => no authentication required; the client may still offer a
+            # key/password, the server just accepts the connection (dev tool).
             return False
 
     return _EmulatorSSHServer()
@@ -412,7 +407,7 @@ def main() -> None:
     port = int(os.environ.get("SLURM_EMULATOR_SSH_PORT", "2222"))
     if not gnu_coreutils_available():
         print(
-            "warning: GNU coreutils not found on macOS — FireCREST sends GNU-style "
+            "warning: GNU coreutils not found on macOS — HPC clients send GNU-style "
             "commands (stat -c, ls --full-time, tar ...) that BSD tools reject. "
             "Install with: brew install coreutils gnu-tar findutils gnu-sed grep"
         )

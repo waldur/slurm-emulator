@@ -301,10 +301,10 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
 def ctld_job_to_dict(job: Job) -> dict[str, Any]:
     """JOB_INFO subset for /slurm/.../jobs (active job view).
 
-    Reflects the submitted job description (name/partition/qos/cwd/…) and
-    carries the fields FireCREST's ``SlurmJob`` model reads: nested
-    ``job_resources.nodes.count``, ``time_limit`` and ``priority`` as
-    ``*_NO_VAL`` structs.
+    Field names/shapes follow the v0.0.46 JOB_INFO parser
+    (parsers.c PARSER_ARRAY(JOB_INFO)): ``job_resources`` (with
+    ``nodes.count``), ``exit_code``/``derived_exit_code`` (PROCESS_EXIT_CODE),
+    ``time_limit``/``priority``/``suspend_time`` as ``*_NO_VAL`` structs, etc.
     """
 
     def ts(value) -> dict[str, Any]:
@@ -329,8 +329,7 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         "job_state": [job.state],
         "state_reason": "None",
         "state_description": "",
-        # Real JOB_INFO carries exit_code/derived_exit_code (PROCESS_EXIT_CODE);
-        # FireCREST's SlurmJob builds its required `status` from exit_code.
+        # JOB_INFO carries exit_code/derived_exit_code as PROCESS_EXIT_CODE.
         "exit_code": exit_code,
         "derived_exit_code": exit_code,
         "cluster": job.cluster,
@@ -346,14 +345,11 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         # None -> UNLIMITED (infinite), matching a job with no --time.
         "time_limit": uint_no_val(time_limit, infinite=(time_limit is None)),
         "submit_time": ts(job.submit_time),
-        # FireCREST's SlurmJob only builds its required `time` when both
-        # start_time and end_time are non-null. Pending/running jobs have no
-        # real start/end yet, so fall back to submit_time (real slurm likewise
-        # reports estimated start/end for pending jobs).
+        # Real slurm reports an estimated start (and end) for pending jobs, so
+        # fall back to submit_time rather than leaving these unset.
         "start_time": ts(job.start_time or job.submit_time),
         "end_time": ts(job.end_time or job.start_time or job.submit_time),
-        # FireCREST's SlurmJob folds suspend_time into time.suspended and
-        # requires the key present (unset NO_VAL = not suspended).
+        # TIMESTAMP_NO_VAL; unset means the job was never suspended.
         "suspend_time": uint_no_val(),
         "standard_input": job.standard_input or "/dev/null",
         "standard_output": job.standard_output or "",
@@ -437,7 +433,7 @@ def node_to_dict(name: str, now_ts: int) -> dict[str, Any]:
         "boot_time": uint_no_val(now_ts),
         "last_busy": uint_no_val(now_ts),
         "slurmd_start_time": uint_no_val(now_ts),
-        # FireCREST's SlurmNode.weight is a plain int (not a NO_VAL struct).
+        # PARSER_ARRAY(NODE) serializes weight as UINT32 (a plain int).
         "weight": 1,
         "tres": f"cpu={_NODE_CPUS},mem={mem_mb}M,billing={_NODE_CPUS},gres/gpu={_NODE_GPUS}",
         "tres_used": "",

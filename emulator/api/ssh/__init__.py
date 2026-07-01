@@ -1,1 +1,1 @@
-"""Thin SSH front-end for the SLURM emulator (FireCREST filesystem plane)."""
+"""Thin SSH front-end emulating a cluster login node (filesystem + Slurm CLI)."""
