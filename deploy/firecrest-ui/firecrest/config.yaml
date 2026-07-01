@@ -42,8 +42,12 @@ clusters:
         idle_timeout: 60
         keep_alive: 5
     scheduler:
+      # hybrid: normal job ops go over slurmrestd (fast), but submit-by-path
+      # (remote-file jobs) and get_job_metadata (stdout/stderr/script) fall
+      # back to SSH sbatch/scontrol. Pure "rest" leaves the SSH scheduler
+      # client unwired, so those two operations 501.
       type: "slurm"
-      connection_mode: "rest"
+      connection_mode: "hybrid"
       version: "26.11.0"
       api_url: "http://slurm:6820"
       api_version: "0.0.46"
