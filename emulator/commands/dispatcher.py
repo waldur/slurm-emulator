@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import ClassVar, Optional
 
 from emulator import __version__
+from emulator.api.slurmrestd.schemas import PARTITION_RANGES
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacctmgr import SacctmgrEmulator
 from emulator.commands.sshare import SshareEmulator
@@ -110,12 +111,16 @@ class SlurmEmulator:
         if args and args[0] == "-V":
             return f"slurm-emulator {__version__}"
 
-        # Return basic cluster info. This topology must stay in sync with
-        # the REST emulation (emulator/api/slurmrestd/schemas.py:
-        # PARTITION_RANGES).
-        return """PARTITION AVAIL  TIMELIMIT  NODES  STATE NODELIST
-debug*       up   infinite      4   idle node[001-004]
-compute      up   infinite     96   idle node[005-100]"""
+        # Derive from the same topology the REST emulation serves
+        # (schemas.PARTITION_RANGES), so both views agree and honour
+        # SLURM_EMULATOR_PARTITIONS.
+        lines = ["PARTITION AVAIL  TIMELIMIT  NODES  STATE NODELIST"]
+        for idx, (name, (first, last)) in enumerate(PARTITION_RANGES.items()):
+            count = last - first + 1
+            nodelist = f"node[{first:03d}-{last:03d}]" if count > 1 else f"node{first:03d}"
+            partition = f"{name}*" if idx == 0 else name
+            lines.append(f"{partition:12} up   infinite  {count:5}   idle {nodelist}")
+        return "\n".join(lines)
 
     def _handle_scancel(self, args: list[str]) -> str:
         """Handle scancel command."""

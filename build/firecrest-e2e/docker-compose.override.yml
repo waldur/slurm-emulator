@@ -1,0 +1,38 @@
+# Overlay for FireCREST v2's docker-compose.yml that swaps the real Slurm
+# cluster service for the slurm-emulator (slurmrestd :6820 + SSH :2222).
+#
+# Usage (from a firecrest-v2 checkout, with this repo built as an image):
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f /path/to/slurm-emulator/build/firecrest-e2e/docker-compose.override.yml \
+#     up
+#
+# The service key MUST match the Slurm service name in FireCREST's
+# docker-compose.yml (it is `slurm` at time of writing — confirm in your
+# checkout and rename below if it differs). Keycloak/OpenFGA/MinIO come from
+# FireCREST's own compose unchanged.
+services:
+  slurm:
+    image: opennode/slurm-emulator:latest
+    # Or build from this repo instead of pulling:
+    # build:
+    #   context: /path/to/slurm-emulator
+    environment:
+      SLURM_EMULATOR_ENABLE_SSH: "1"
+      # FS_ROOT=/ so absolute paths (e.g. /home/user) sent over SSH resolve
+      # against the emulator container's real filesystem.
+      SLURM_EMULATOR_FS_ROOT: "/"
+      SLURM_EMULATOR_JOB_CLOCK: "wall"
+      SLURM_EMULATOR_JOB_RUN_DELAY: "2"
+      SLURM_EMULATOR_JOB_RUN_DURATION: "8"
+      # Accept any forwarded OIDC token as X-SLURM-USER-TOKEN (no JWKS needed).
+    ports:
+      - "6820:6820"
+      - "2222:22"
+    # Real Slurm's healthcheck is `scontrol ping`; use the REST ping instead.
+    # ping is auth-protected (mirrors real slurmrestd); send a dummy token.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen(u.Request('http://localhost:6820/slurm/v0.0.46/ping/', headers={'X-SLURM-USER-TOKEN': 'x'}), timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

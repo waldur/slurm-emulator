@@ -57,7 +57,11 @@ class TestNodesPartitions:
 
 
 class TestCtldJobs:
-    def test_list_jobs(self, restd, auth_headers, state_env):
+    def test_list_jobs(self, restd, auth_headers, state_env, monkeypatch):
+        # Deterministic clock: reads advance jobs on the simulated clock
+        # (default 2024-01-01), so a job seeded RUNNING at 2024-03-15 stays
+        # RUNNING and this exercises serialization, not the lifecycle.
+        monkeypatch.setenv("SLURM_EMULATOR_JOB_CLOCK", "time")
         _seed_job()
         body = restd.get("/slurm/v0.0.46/jobs/", headers=auth_headers).json()
         assert len(body["jobs"]) == 1
@@ -67,7 +71,8 @@ class TestCtldJobs:
         assert job["user_name"] == "alice"
         assert "last_backfill" in body
 
-    def test_jobs_state(self, restd, auth_headers, state_env):
+    def test_jobs_state(self, restd, auth_headers, state_env, monkeypatch):
+        monkeypatch.setenv("SLURM_EMULATOR_JOB_CLOCK", "time")
         _seed_job()
         jobs = restd.get("/slurm/v0.0.46/jobs/state/", headers=auth_headers).json()["jobs"]
         assert jobs == [{"job_id": 42, "state": ["RUNNING"]}]

@@ -11,6 +11,7 @@ Waldur's parsers touch, plus enough context to look real.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 
 from emulator.commands.sacct import (
@@ -141,7 +142,9 @@ def _lineage(assoc: Association, account: Optional[Account]) -> str:
     return path
 
 
-def assoc_to_dict(assoc: Association, account: Optional[Account]) -> dict[str, Any]:
+def assoc_to_dict(
+    assoc: Association, account: Optional[Account], is_default: bool = True
+) -> dict[str, Any]:
     # Account-level limits live on the Account record; user-level on the
     # Association. Merge with the association taking precedence.
     limits: dict[str, int] = {}
@@ -159,7 +162,7 @@ def assoc_to_dict(assoc: Association, account: Optional[Account]) -> dict[str, A
         "cluster": assoc.cluster,
         "partition": assoc.partition or "",
         "parent_account": assoc.parent or "",
-        "is_default": True,
+        "is_default": is_default,
         "lineage": _lineage(assoc, account),
         # account.qos holds a CSV QoS list (sacctmgr "qos=a,b" semantics);
         # the REST payload renders it as a list of names.
@@ -296,40 +299,106 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
 
 
 def ctld_job_to_dict(job: Job) -> dict[str, Any]:
-    """JOB_INFO subset for /slurm/.../jobs (active job view)."""
+    """JOB_INFO subset for /slurm/.../jobs (active job view).
+
+    Field names/shapes follow the v0.0.46 JOB_INFO parser
+    (parsers.c PARSER_ARRAY(JOB_INFO)): ``job_resources`` (with
+    ``nodes.count``), ``exit_code``/``derived_exit_code`` (PROCESS_EXIT_CODE),
+    ``time_limit``/``priority``/``suspend_time`` as ``*_NO_VAL`` structs, etc.
+    """
 
     def ts(value) -> dict[str, Any]:
         return uint_no_val(int(value.timestamp())) if value else uint_no_val()
 
+    node_count = getattr(job, "node_count", 1) or 1
+    total_cpus = _NODE_CPUS * node_count
+    time_limit = getattr(job, "time_limit", None)
+    failed = job.state.startswith(_FAILED_STATES)
+    exit_code = {
+        "status": ["ERROR"] if failed else ["SUCCESS"],
+        "return_code": uint_no_val(1 if failed else 0),
+    }
+
     return {
         "job_id": int(job.job_id) if str(job.job_id).isdigit() else 0,
-        "name": f"job_{job.job_id}",
+        "name": job.name or f"job_{job.job_id}",
         "account": job.account,
         "user_name": job.user,
         "group_name": job.user,
-        "partition": "compute",
+        "partition": job.partition or "compute",
         "job_state": [job.state],
         "state_reason": "None",
+        "state_description": "",
+        # JOB_INFO carries exit_code/derived_exit_code as PROCESS_EXIT_CODE.
+        "exit_code": exit_code,
+        "derived_exit_code": exit_code,
         "cluster": job.cluster,
-        "qos": "normal",
+        "qos": job.qos or "normal",
+        "priority": uint_no_val(getattr(job, "priority", 1)),
         "nodes": "node001",
-        "node_count": uint_no_val(1),
-        "cpus": uint_no_val(_NODE_CPUS),
+        "node_count": uint_no_val(node_count),
+        "cpus": uint_no_val(total_cpus),
+        "job_resources": {
+            "nodes": {"count": node_count, "list": "node001", "allocation": []},
+            "cpus": total_cpus,
+        },
+        # None -> UNLIMITED (infinite), matching a job with no --time.
+        "time_limit": uint_no_val(time_limit, infinite=(time_limit is None)),
         "submit_time": ts(job.submit_time),
-        "start_time": ts(job.start_time),
-        "end_time": ts(job.end_time),
-        "standard_input": "/dev/null",
-        "standard_output": "",
-        "standard_error": "",
-        "current_working_directory": f"/home/{job.user}",
+        # Real slurm reports an estimated start (and end) for pending jobs, so
+        # fall back to submit_time rather than leaving these unset.
+        "start_time": ts(job.start_time or job.submit_time),
+        "end_time": ts(job.end_time or job.start_time or job.submit_time),
+        # TIMESTAMP_NO_VAL; unset means the job was never suspended.
+        "suspend_time": uint_no_val(),
+        "standard_input": job.standard_input or "/dev/null",
+        "standard_output": job.standard_output or "",
+        "standard_error": job.standard_error or "",
+        "current_working_directory": job.working_directory or f"/home/{job.user}",
     }
 
 
-# Static cluster topology — must stay consistent with the sinfo
-# emulation (dispatcher.py:_handle_sinfo): debug* node[001-004],
-# compute node[005-100]. Node specs match the usage simulator's
-# standard node (sacct.py:_NODE_CPUS/_NODE_MEM_GB/_NODE_GPUS).
-PARTITION_RANGES = {"debug": (1, 4), "compute": (5, 100)}
+# Cluster topology. Defaults to debug* node[001-004], compute node[005-100]
+# (node specs match the usage simulator's standard node —
+# sacct.py:_NODE_CPUS/_NODE_MEM_GB/_NODE_GPUS). Override per instance with the
+# SLURM_EMULATOR_PARTITIONS env var so several emulators can look different: it
+# accepts either counts (e.g. gpu:8,compute:32 — auto contiguous ranges) or
+# explicit node ranges (e.g. debug:1-4,compute:5-100). dispatcher.py's sinfo
+# derives its output from PARTITION_RANGES, so both views stay in sync.
+_DEFAULT_PARTITIONS = "debug:1-4,compute:5-100"
+
+
+def _parse_partition_ranges(spec: str) -> dict[str, tuple[int, int]]:
+    """Parse ``name:first-last`` or ``name:count`` (counts get contiguous ranges)."""
+    ranges: dict[str, tuple[int, int]] = {}
+    nxt = 1
+    for part in spec.split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        name, _, rng = part.partition(":")
+        name, rng = name.strip(), rng.strip()
+        if not name:
+            continue
+        if "-" in rng:
+            a, b = rng.split("-", 1)
+            first, last = int(a), int(b)
+        else:
+            first, last = nxt, nxt + int(rng) - 1
+        ranges[name] = (first, last)
+        nxt = last + 1
+    return ranges
+
+
+def _load_partition_ranges() -> dict[str, tuple[int, int]]:
+    spec = os.environ.get("SLURM_EMULATOR_PARTITIONS", "").strip()
+    try:
+        return _parse_partition_ranges(spec) or _parse_partition_ranges(_DEFAULT_PARTITIONS)
+    except (ValueError, IndexError):
+        return _parse_partition_ranges(_DEFAULT_PARTITIONS)
+
+
+PARTITION_RANGES = _load_partition_ranges()
 
 
 def _node_names(partition: str) -> list[str]:
@@ -364,7 +433,8 @@ def node_to_dict(name: str, now_ts: int) -> dict[str, Any]:
         "boot_time": uint_no_val(now_ts),
         "last_busy": uint_no_val(now_ts),
         "slurmd_start_time": uint_no_val(now_ts),
-        "weight": uint_no_val(1),
+        # PARSER_ARRAY(NODE) serializes weight as UINT32 (a plain int).
+        "weight": 1,
         "tres": f"cpu={_NODE_CPUS},mem={mem_mb}M,billing={_NODE_CPUS},gres/gpu={_NODE_GPUS}",
         "tres_used": "",
         "reason": "",
