@@ -147,14 +147,16 @@
   {{ head("Run scenario") }}
   <form class="modal-form" hx-post="/ui/scenario/run" hx-target="#scenario-result" hx-swap="innerHTML">
     <label class="field"><span>Scenario</span>
-      <select name="name" autofocus data-desc-target="#scenario-desc">
+      <select name="name" autofocus
+              hx-get="/ui/scenario/steps" hx-target="#scenario-steps"
+              hx-trigger="load, change" hx-include="this">
         {% for s in scenarios %}
-        <option value="{{ s.name }}" data-desc="{{ s.description }}">{{ s.name }}</option>
+        <option value="{{ s.name }}">{{ s.name }}</option>
         {% endfor %}
       </select>
     </label>
-    <p id="scenario-desc" class="scenario-desc">{{ scenarios[0].description if scenarios else "" }}</p>
-    <p class="modal-help">The step-by-step log appears below when you run it.</p>
+    <div id="scenario-steps" class="scenario-steps-box"></div>
+    <p class="modal-help">Review the planned steps above, then run — the step-by-step log appears below.</p>
     <div id="scenario-result"></div>
     <div class="modal-actions">
       <button type="button" class="btn-ghost" data-close>Close</button>

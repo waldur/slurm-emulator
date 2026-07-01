@@ -181,12 +181,22 @@ def test_inline_qos_set_from_status(ui):
     assert 'hx-post="/ui/qos/set"' in status.text
 
 
-def test_scenario_form_shows_descriptions(ui):
+def test_scenario_form_loads_steps_preview(ui):
     form = ui.get("/ui/control/scenario", auth=AUTH)
     assert form.status_code == 200
-    assert "data-desc" in form.text
-    assert 'id="scenario-desc"' in form.text
-    assert "periodic-limits sequence" in form.text  # sequence description present
+    assert 'hx-get="/ui/scenario/steps"' in form.text
+    assert 'id="scenario-steps"' in form.text
+
+
+def test_scenario_steps_preview(ui):
+    seq = ui.get("/ui/scenario/steps", auth=AUTH, params={"name": "sequence"})
+    assert seq.status_code == 200
+    assert "periodic-limits sequence" in seq.text  # description
+    assert "Q1" in seq.text  # step names present
+    # A registry scenario enumerates its real steps.
+    reg = ui.get("/ui/scenario/steps", auth=AUTH, params={"name": "traditional_max_tres_mins"})
+    assert reg.status_code == 200
+    assert "setup_traditional" in reg.text
 
 
 def test_registry_scenario_log_covers_all_actions(ui):

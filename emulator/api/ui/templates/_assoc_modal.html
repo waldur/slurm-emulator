@@ -11,7 +11,10 @@
     <tbody>
       {% for a in associations %}
       <tr>
-        <td class="name">{{ a.user }}</td>
+        <td class="name">
+          {% if a.user_raw %}{{ a.user }}
+          {% else %}<span class="assoc-root">account root</span>{% endif %}
+        </td>
         <td class="muted">{{ a.partition }}</td>
         <td class="muted">{{ a.parent }}</td>
         <td class="muted">{{ a.limits }}</td>
@@ -29,6 +32,8 @@
       {% endfor %}
     </tbody>
   </table>
+  <p class="assoc-hint"><strong>account root</strong> is the account's own association — it holds the
+    parent link and can't be removed. The other rows are its users.</p>
   {% else %}
   <p class="modal-note">No associations for this account yet — add a user below.</p>
   {% endif %}

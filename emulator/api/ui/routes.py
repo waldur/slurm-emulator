@@ -31,6 +31,51 @@ if TYPE_CHECKING:
 _UI_DIR = Path(__file__).parent
 _templates = Jinja2Templates(directory=str(_UI_DIR / "templates"))
 
+# The built-in sequence scenario isn't a registry ScenarioDefinition, so its
+# description and high-level steps are described here for the UI preview.
+_SEQUENCE_DESC = (
+    "Full periodic-limits sequence: Q1 setup, 3-month usage simulation, "
+    "Q2 carryover with decay, threshold → slowdown/blocked transitions, "
+    "admin allocation increase, hard-limit test, and Q3 15-day decay."
+)
+_SEQUENCE_STEPS = [
+    {
+        "name": "Initial Q1 2024 setup",
+        "description": "1000Nh quarterly allocation with 20% grace; set fairshare, GrpTRESMins and QoS threshold.",
+        "actions": [],
+    },
+    {
+        "name": "Q1 usage simulation",
+        "description": "Inject ~500Nh over three months across two users.",
+        "actions": [],
+    },
+    {
+        "name": "Q2 transition with carryover",
+        "description": "Apply 15-day decay carryover to compute the new total allocation.",
+        "actions": [],
+    },
+    {
+        "name": "Q2 heavy usage — threshold testing",
+        "description": "Push usage past the threshold → QoS normal → slowdown.",
+        "actions": [],
+    },
+    {
+        "name": "Admin allocation increase",
+        "description": "Raise the allocation → QoS slowdown → normal.",
+        "actions": [],
+    },
+    {
+        "name": "Hard-limit testing",
+        "description": "Exceed the grace limit → QoS → blocked.",
+        "actions": [],
+    },
+    {
+        "name": "Q3 transition with 15-day decay",
+        "description": "Decay previous usage, restore QoS, reset raw usage.",
+        "actions": [],
+    },
+]
+
 
 def _account_rows(server: EmulatorServer, cluster: str) -> list[dict[str, Any]]:
     """Build per-account status rows, mirroring GET /api/status plus thresholds."""
@@ -434,20 +479,35 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
             result["log"] = buffer.getvalue().strip()
         return _templates.TemplateResponse("_result.html", {"request": request, "result": result})
 
+    @router.get("/scenario/steps", response_class=HTMLResponse)
+    async def scenario_steps(request: Request, name: str = "sequence"):
+        # Preview the planned steps of a scenario before running it.
+        if name == "sequence":
+            ctx = {"request": request, "description": _SEQUENCE_DESC, "steps": _SEQUENCE_STEPS}
+        else:
+            definition = server.scenario_registry.get_scenario(name)
+            if definition is None:
+                ctx = {"request": request, "description": "", "steps": []}
+            else:
+                ctx = {
+                    "request": request,
+                    "description": definition.description,
+                    "steps": [
+                        {
+                            "name": step.name,
+                            "description": step.description,
+                            "actions": [a.description for a in step.actions],
+                        }
+                        for step in definition.steps
+                    ],
+                }
+        return _templates.TemplateResponse("_scenario_steps.html", ctx)
+
     @router.get("/control/{action}", response_class=HTMLResponse)
     async def control_form(request: Request, action: str):
         # Serve a control's form fresh so account dropdowns reflect current state.
         accounts = sorted(a.name for a in server.database.list_accounts() if a.name != "root")
-        scenarios = [
-            {
-                "name": "sequence",
-                "description": (
-                    "Full periodic-limits sequence: Q1 setup, 3-month usage simulation, "
-                    "Q2 carryover with decay, threshold → slowdown/blocked transitions, "
-                    "admin allocation increase, hard-limit test, and Q3 15-day decay."
-                ),
-            }
-        ]
+        scenarios = [{"name": "sequence", "description": _SEQUENCE_DESC}]
         scenarios += [
             {"name": s.name, "description": s.description}
             for s in server.scenario_registry.list_scenarios()
