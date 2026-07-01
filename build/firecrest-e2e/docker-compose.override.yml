@@ -30,8 +30,9 @@ services:
       - "6820:6820"
       - "2222:22"
     # Real Slurm's healthcheck is `scontrol ping`; use the REST ping instead.
+    # ping is auth-protected (mirrors real slurmrestd); send a dummy token.
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://localhost:6820/slurm/v0.0.46/ping/', timeout=2)"]
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen(u.Request('http://localhost:6820/slurm/v0.0.46/ping/', headers={'X-SLURM-USER-TOKEN': 'x'}), timeout=2)"]
       interval: 5s
       timeout: 3s
       retries: 10

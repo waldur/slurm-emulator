@@ -24,6 +24,10 @@ ssh_credentials:
   keys:
     fireuser:
       private_key: "secret_file:/run/secrets/ssh_private_key_fireuser"
+    # The health checker connects as the service account user (firesrv).
+    # The emulator accepts any key, so reuse the same private key file.
+    firesrv:
+      private_key: "secret_file:/run/secrets/ssh_private_key_fireuser"
 
 clusters:
   - name: "cluster-emulator"

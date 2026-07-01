@@ -36,7 +36,8 @@ services:
       - "${HOST_IP:-127.0.0.1}:6820:6820"
       - "${HOST_IP:-127.0.0.1}:2222:22"
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://localhost:6820/slurm/v0.0.46/ping/', timeout=2)"]
+      # ping is auth-protected (mirrors real slurmrestd); send a dummy token.
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen(u.Request('http://localhost:6820/slurm/v0.0.46/ping/', headers={'X-SLURM-USER-TOKEN': 'x'}), timeout=2)"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -107,9 +108,19 @@ services:
   firecrest-ui:
     image: ${FIRECREST_UI_IMAGE:-ghcr.io/eth-cscs/firecrest-ui:latest}
     environment:
+      APP_VERSION: "local"
       ENVIRONMENT: development
       NODE_ENV: production
+      SERVICE_NAME: "firecrest-web-ui"
       LOGGING_LEVEL: debug
+      # Branding
+      APP_NAME: "FireCREST (emulator)"
+      COMPANY_NAME: "slurm-emulator"
+      LOGO_PATH: "logo.svg"
+      UI_HOSTNAME: "localhost:3000"
+      SUPPORT_URL: "https://github.com/eth-cscs/firecrest-ui"
+      DOC_URL: "https://eth-cscs.github.io/firecrest-v2/"
+      REPO_URL: "https://github.com/eth-cscs/firecrest-ui"
       # API (server-side, over the compose network)
       FIRECREST_API_BASE_URL: "http://firecrest:5000"
       # OIDC (issuer must resolve from browser AND this container — see README)
@@ -121,10 +132,9 @@ services:
       # Session (dev over http)
       SESSION_SECRET: "${SESSION_SECRET:-dev-session-secret}"
       SESSION_FILE_SECRET: "${SESSION_FILE_SECRET:-dev-file-secret}"
+      SESSION_FILE_DIR_PATH: "./sessions"
+      REDIS_ACTIVE: "false"
       COOKIE_SECURE: "false"
-      UI_HOSTNAME: "localhost:3000"
-      APP_NAME: "FireCREST (emulator)"
-      COMPANY_NAME: "slurm-emulator"
     depends_on:
       - firecrest
       - keycloak

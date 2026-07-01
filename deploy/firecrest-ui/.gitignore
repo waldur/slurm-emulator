@@ -4,3 +4,5 @@ secrets/
 upstream-docker-compose.yml
 upstream-local-env.yaml
 ui-env_example
+*.png
+sessions/
