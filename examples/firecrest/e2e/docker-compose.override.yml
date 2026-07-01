@@ -4,7 +4,7 @@
 # Usage (from a firecrest-v2 checkout, with this repo built as an image):
 #   docker compose \
 #     -f docker-compose.yml \
-#     -f /path/to/slurm-emulator/build/firecrest-e2e/docker-compose.override.yml \
+#     -f /path/to/slurm-emulator/examples/firecrest/e2e/docker-compose.override.yml \
 #     up
 #
 # The service key MUST match the Slurm service name in FireCREST's

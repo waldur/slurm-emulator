@@ -323,12 +323,12 @@ so they also appear in the accounting (`/slurmdb` / `sacct`) view. Configurable 
 ### Running FireCREST v2 against the emulator
 The emulator can stand in for a real cluster for eth-cscs/firecrest-v2 (scheduler
 plane over slurmrestd + a thin SSH filesystem plane). See
-`docs/firecrest-conformance.md` for the coverage matrix, `build/firecrest-e2e/` for
+`examples/firecrest/conformance.md` for the coverage matrix, `examples/firecrest/e2e/` for
 a docker-compose overlay, and these harnesses:
 - `uv run --extra dev pytest tests/test_firecrest_contract.py` — envelope/field contract
 - `FIRECREST_SRC=/path/to/firecrest-v2 uv run --extra dev pytest tests/firecrest/` — drives
   FireCREST's own `SlurmRestClient` against the emulator (skipped without `FIRECREST_SRC`)
-- `bash scripts/firecrest_e2e.sh` — full-stack docker-compose smoke
+- `bash examples/firecrest/e2e/run.sh` — full-stack docker-compose smoke
 
 ### Configuration
 ```yaml

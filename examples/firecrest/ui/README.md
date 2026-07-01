@@ -26,7 +26,7 @@ firecrest-ui (Remix, :3000)
 ## Quick start
 
 ```bash
-cd deploy/firecrest-ui
+cd examples/firecrest/ui
 ./up.sh                 # clones firecrest-v2, writes dev secrets, builds & starts
 ```
 
