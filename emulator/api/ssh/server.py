@@ -185,6 +185,9 @@ def _sbatch(emu: SlurmEmulator, user: str, args: list[str]) -> tuple[str, str, i
     name = _flag_value(args, "-J", "--job-name") or "batch"
     partition = _flag_value(args, "-p", "--partition") or "compute"
     account = _flag_value(args, "-A", "--account") or ""
+    if not account:
+        urec = emu.database.get_user(user)
+        account = (urec.default_account if urec else "") or "root"
     script_path = next((a for a in args if not a.startswith("-")), "")
 
     jid = emu.database.allocate_job_id()

@@ -178,7 +178,10 @@ async def submit_job(
     db = state.database
     user = job_desc.get("user_name") or getattr(request.state, "slurm_user", "root")
     user_rec = db.get_user(user)
-    account = job_desc.get("account") or (user_rec.default_account if user_rec else "") or ""
+    # Real jobs always carry an account (the user's default association).
+    # Fall back to the user's default, then "root", so the account is never
+    # empty — FireCREST's UI builds job-detail URLs from it.
+    account = job_desc.get("account") or (user_rec.default_account if user_rec else "") or "root"
 
     jid = db.allocate_job_id()
     job = Job(
