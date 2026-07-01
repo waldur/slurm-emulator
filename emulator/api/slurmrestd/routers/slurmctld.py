@@ -58,14 +58,17 @@ async def _json_body(request: Request) -> dict[str, Any]:
 
 def _submit_int(value: object, default: Optional[int]) -> Optional[int]:
     """Read an int from a submit field that may be plain, a NO_VAL struct, or a string."""
-    if value is None:
-        return default
     if isinstance(value, dict):
-        return int(value.get("number", default)) if value.get("set") else default
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
+        if not value.get("set"):
+            return default
+        number = value.get("number", default)
+        return int(number) if isinstance(number, (int, float, str)) else default
+    if isinstance(value, (int, float, str)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+    return default
 
 
 def _env_to_dict(value: object) -> dict[str, str]:
@@ -177,7 +180,7 @@ async def submit_job(
     script = body.get("script") or job_desc.get("script") or ""
 
     db = state.database
-    user = job_desc.get("user_name") or getattr(request.state, "slurm_user", "root")
+    user = str(job_desc.get("user_name") or getattr(request.state, "slurm_user", "root") or "root")
     user_rec = db.get_user(user)
     # A slurm job always has an account (the user's default association);
     # fall back to the user's default, then "root", so it is never empty.

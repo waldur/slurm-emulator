@@ -285,24 +285,29 @@ async def _run_shell_async(user: str, command: str, process) -> tuple[str, str, 
     except OSError as exc:
         return "", f"{exc}\n", 1
 
+    # All three streams are PIPEs above; guard narrows the Optional types.
+    child_stdin, child_stdout, child_stderr = proc.stdin, proc.stdout, proc.stderr
+    if child_stdin is None or child_stdout is None or child_stderr is None:  # pragma: no cover
+        return "", "failed to open command pipes\n", 1
+
     async def pump_stdin() -> None:
         try:
             while True:
                 data = await process.stdin.read(65536)
                 if not data:  # SSH client sent EOF
                     break
-                proc.stdin.write(data if isinstance(data, bytes) else data.encode())
-                await proc.stdin.drain()
+                child_stdin.write(data if isinstance(data, bytes) else data.encode())
+                await child_stdin.drain()
         except Exception:  # channel closed / process gone — stop feeding
             pass
         finally:
             with contextlib.suppress(Exception):
-                proc.stdin.close()
+                child_stdin.close()
 
     stdin_task = asyncio.create_task(pump_stdin())
     try:
         out_b, err_b = await asyncio.wait_for(
-            asyncio.gather(proc.stdout.read(), proc.stderr.read()),
+            asyncio.gather(child_stdout.read(), child_stderr.read()),
             timeout=_SHELL_TIMEOUT,
         )
         await proc.wait()
