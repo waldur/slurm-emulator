@@ -12,15 +12,16 @@
 #   SLURM_SERVICE    FireCREST's Slurm service name in its compose (default: slurm)
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 FIRECREST_REPO="${FIRECREST_REPO:-https://github.com/eth-cscs/firecrest-v2}"
 FIRECREST_REF="${FIRECREST_REF:-master}"
 WORKDIR="${WORKDIR:-$(mktemp -d)}"
 SLURM_SERVICE="${SLURM_SERVICE:-slurm}"
-OVERLAY="${HERE}/build/firecrest-e2e/docker-compose.override.yml"
+OVERLAY="${SCRIPT_DIR}/docker-compose.override.yml"
 
 echo ">> Building slurm-emulator image (opennode/slurm-emulator:latest)"
-docker build -t opennode/slurm-emulator:latest "${HERE}"
+docker build -t opennode/slurm-emulator:latest "${REPO_ROOT}"
 
 echo ">> Cloning FireCREST (${FIRECREST_REF}) into ${WORKDIR}"
 if [ ! -d "${WORKDIR}/.git" ]; then
@@ -56,6 +57,6 @@ curl -fsS -H 'X-SLURM-USER-TOKEN: x' -H 'Content-Type: application/json' \
     -d '{"job":{"name":"e2e","partition":"compute","current_working_directory":"/home/root","script":"#!/bin/bash\necho hi"}}'
 echo
 
-echo ">> FireCREST is up. Point its config at build/firecrest-e2e/f7t-api-config.emulator.yaml"
+echo ">> FireCREST is up. Point its config at examples/firecrest/e2e/f7t-api-config.emulator.yaml"
 echo "   and exercise its public API (compute + filesystem) against the emulator."
 echo "   Stack will be torn down on exit."

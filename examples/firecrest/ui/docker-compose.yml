@@ -11,6 +11,10 @@
 # is required so the issuer URL resolves identically in the browser and in the
 # UI/API containers.
 
+# Fixed project name so the persisted volumes are stable regardless of the
+# directory this compose file lives in.
+name: firecrest-ui
+
 secrets:
   service_account_client_secret:
     file: ./secrets/service_account_client_secret
@@ -29,7 +33,7 @@ services:
   # --- The cluster: slurm-emulator (slurmrestd + SSH filesystem plane) ---
   slurm:
     build:
-      context: ../..
+      context: ../../..
       dockerfile: Dockerfile
     image: opennode/slurm-emulator:latest
     hostname: slurm
@@ -62,7 +66,7 @@ services:
   slurm2:
     image: opennode/slurm-emulator:latest
     build:
-      context: ../..
+      context: ../../..
       dockerfile: Dockerfile
     hostname: slurm2
     environment:

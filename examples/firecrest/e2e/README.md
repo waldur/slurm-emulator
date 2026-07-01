@@ -5,13 +5,13 @@ Slurm cluster — the emulator answers both the **scheduler plane** (slurmrestd 
 `:6820`) and the **SSH filesystem plane** (`:22`). FireCREST's own
 Keycloak/OpenFGA/MinIO come from its compose unchanged.
 
-See `../../docs/firecrest-conformance.md` for what is and isn't covered.
+See `../conformance.md` for what is and isn't covered.
 
 ## Quick start
 
 ```bash
 # from this repo root
-bash scripts/firecrest_e2e.sh
+bash examples/firecrest/e2e/run.sh
 ```
 
 This builds `opennode/slurm-emulator:latest`, clones FireCREST, brings the stack

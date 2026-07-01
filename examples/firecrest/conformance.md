@@ -80,6 +80,6 @@ by the sandbox working directory (`SLURM_EMULATOR_FS_ROOT`). Dev/test only.
 2. **Real-client conformance** — `tests/firecrest/test_real_client.py`. Imports
    FireCREST's own `SlurmRestClient` from a checkout (`FIRECREST_SRC=/path/to/firecrest-v2`)
    and drives it against a live emulator. Skipped when `FIRECREST_SRC` is unset.
-3. **Docker-compose e2e** — `build/firecrest-e2e/`. Swaps FireCREST's real `slurm`
+3. **Docker-compose e2e** — `examples/firecrest/e2e/`. Swaps FireCREST's real `slurm`
    service for the emulator image (slurmrestd + ssh) and reuses its
-   Keycloak/OpenFGA/MinIO. `bash scripts/firecrest_e2e.sh`.
+   Keycloak/OpenFGA/MinIO. `bash examples/firecrest/e2e/run.sh`.
