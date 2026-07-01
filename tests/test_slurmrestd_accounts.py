@@ -61,6 +61,28 @@ class TestAccounts:
         ).json()["associations"]
         assert assocs[0]["parent_account"] == "proj1"
 
+    def test_account_names_are_case_insensitive(self, restd, auth_headers):
+        # Real slurmdbd folds account names to lower case (xstrtolower via
+        # slurm_addto_char_list). An account created as MixedCase is stored
+        # lower-cased, and an associations query with any case must find it.
+        restd.post(
+            "/slurmdb/v0.0.46/accounts/",
+            headers=auth_headers,
+            json={"accounts": [ACCOUNT, {"name": "2026_00A", "parent_account": "proj1"}]},
+        )
+        stored = restd.get("/slurmdb/v0.0.46/account/2026_00A", headers=auth_headers)
+        assert stored.json()["accounts"][0]["name"] == "2026_00a"
+
+        assocs = restd.get(
+            "/slurmdb/v0.0.46/associations/",
+            headers=auth_headers,
+            params={"account": "2026_00A"},
+        ).json()["associations"]
+        account_rows = [a for a in assocs if not a.get("user")]
+        assert account_rows
+        assert account_rows[0]["account"] == "2026_00a"
+        assert account_rows[0]["parent_account"] == "proj1"
+
     def test_unknown_account_warns_found_nothing(self, restd, auth_headers):
         response = restd.get("/slurmdb/v0.0.46/account/nope", headers=auth_headers)
         assert response.status_code == 200
