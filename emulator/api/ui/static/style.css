@@ -101,6 +101,17 @@ body {
   animation: caret-blink 1.1s steps(1) infinite;
 }
 .readout { display: flex; align-items: center; gap: 16px; }
+.topbar-action {
+  font-family: var(--display); font-weight: 700; font-size: 12px; letter-spacing: 1.5px;
+  text-transform: uppercase; cursor: pointer; padding: 8px 16px; border-radius: var(--radius);
+  color: #04120c; background: linear-gradient(180deg, #66f7b3, var(--green));
+  border: 1px solid #2fae79;
+  box-shadow: 0 1px 0 #0c2b1f, inset 0 1px 0 rgba(255, 255, 255, .35), var(--glow-green);
+  transition: transform .08s ease, filter .12s ease;
+}
+.topbar-action:hover { filter: brightness(1.12); }
+.topbar-action:active { transform: translateY(1px); }
+@media (max-width: 620px) { .topbar-action { display: none; } }
 .readout-status {
   font-size: 11px; letter-spacing: 1.5px; color: var(--green);
   text-shadow: var(--glow-green);

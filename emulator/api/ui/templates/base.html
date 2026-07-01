@@ -22,6 +22,10 @@
       <span class="tagline">time-travel control console</span>
     </div>
     <div class="readout">
+      <button class="topbar-action" data-open="modal"
+              hx-get="/ui/control/scenario" hx-target="#modal-mount" hx-swap="innerHTML">
+        ▶ Run scenario
+      </button>
       <span class="readout-status" aria-hidden="true">● SYSTEM ONLINE</span>
       <span class="brand-sub">{% block subtitle %}{% endblock %}</span>
     </div>
