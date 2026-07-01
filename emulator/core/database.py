@@ -609,6 +609,30 @@ class SlurmDatabase:
 
         return jobs
 
+    def bootstrap_default_qos(self) -> bool:
+        """Seed a standard set of usable QoS classes when none are defined.
+
+        Idempotent — does nothing if any QoS already exists. Includes the
+        periodic-limits operational classes (``normal``/``slowdown``/``blocked``)
+        plus common HPC classes so accounts can be assigned meaningful QoS out
+        of the box. Returns True if it seeded anything.
+        """
+        if self.qos_list:
+            return False
+        defaults = [
+            QOS(name="normal", max_wall="7-00:00:00"),
+            QOS(name="high", max_jobs=20, max_wall="1-00:00:00"),
+            QOS(name="low", max_wall="14-00:00:00"),
+            QOS(name="long", max_jobs=10, max_submit=20, max_wall="30-00:00:00"),
+            QOS(name="gpu", grp_tres="gres/gpu=8", max_wall="2-00:00:00"),
+            QOS(name="debug", max_jobs=2, max_submit=4, max_wall="00:30:00"),
+            QOS(name="slowdown", flags="DenyOnLimit", max_wall="7-00:00:00"),
+            QOS(name="blocked", flags="DenyOnLimit", max_jobs=0, max_submit=0),
+        ]
+        for qos in defaults:
+            self.qos_list[qos.name] = qos
+        return True
+
     # --- State persistence ---
 
     def save_state(self) -> None:

@@ -1,0 +1,20 @@
+{% if associations %}
+<table class="data compact">
+  <thead>
+    <tr><th>Account</th><th>User</th><th>Partition</th><th>Parent</th><th>Limits</th></tr>
+  </thead>
+  <tbody>
+    {% for a in associations %}
+    <tr>
+      <td class="name">{{ a.account }}</td>
+      <td>{{ a.user }}</td>
+      <td class="muted">{{ a.partition }}</td>
+      <td class="muted">{{ a.parent }}</td>
+      <td class="muted">{{ a.limits }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No associations on this cluster.</p>
+{% endif %}

@@ -31,8 +31,13 @@ class QoSManager:
         return account_obj.qos if account_obj else "normal"
 
     def set_account_qos(self, account: str, qos: str, cluster: Optional[str] = None) -> bool:
-        """Set QoS for account."""
-        if qos not in self.qos_levels:
+        """Set QoS for account.
+
+        Accepts the operational levels (normal/slowdown/blocked) as well as any
+        QoS class defined in the database (e.g. bootstrapped classes like
+        ``high``/``gpu``/``debug``).
+        """
+        if qos not in self.qos_levels and qos not in self.database.qos_list:
             return False
 
         account_obj = self.database.get_account(account)

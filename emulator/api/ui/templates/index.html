@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block subtitle %}v{{ version }}{% endblock %}
+{% block content %}
+<div class="grid">
+
+  <section class="panel panel-wide" data-panel>
+    <div class="panel-head">
+      <h2>Status</h2>
+      <div class="head-tools">
+        <span class="hint">auto-refreshes every 5s</span>
+        <span class="collapse-btn" aria-hidden="true">▾</span>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div id="status" hx-get="/ui/status" hx-trigger="load, every 5s" hx-swap="innerHTML">
+        {% include "_status.html" %}
+      </div>
+    </div>
+  </section>
+
+  <section class="panel panel-wide" data-panel>
+    <div class="panel-head">
+      <h2>Controls</h2>
+      <div class="head-tools">
+        <span class="hint">click an action</span>
+        <span class="collapse-btn" aria-hidden="true">▾</span>
+      </div>
+    </div>
+    <div class="panel-body">
+      {% set groups = [
+        ("Time travel", [
+          ("advance", "Advance time", "days · months · quarters"),
+          ("setdate", "Set date", "jump to a calendar date"),
+        ]),
+        ("Accounts", [
+          ("account", "New account", "create with allocation"),
+          ("editaccount", "Edit account", "allocation · parent · desc"),
+        ]),
+        ("Usage & limits", [
+          ("usage", "Inject usage", "record node-hours"),
+          ("settings", "Periodic settings", "fairshare · limits"),
+          ("qos", "QoS control", "downscale · restore"),
+        ]),
+      ] %}
+      {% for group_title, actions in groups %}
+      <div class="action-group">
+        <h3 class="action-group-title">{{ group_title }}</h3>
+        <div class="action-grid">
+          {% for key, title, sub in actions %}
+          <button class="action" data-open="modal"
+                  hx-get="/ui/control/{{ key }}" hx-target="#modal-mount" hx-swap="innerHTML">
+            <span class="action-title">{{ title }}</span>
+            <span class="action-sub">{{ sub }}</span>
+          </button>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel panel-wide" data-panel>
+    <div class="panel-head">
+      <h2>Cluster configuration</h2>
+      <div class="head-tools">
+        <button class="link" hx-get="/ui/config" hx-target="#config" hx-swap="innerHTML">refresh</button>
+        <span class="collapse-btn" aria-hidden="true">▾</span>
+      </div>
+    </div>
+    <div class="panel-body">
+      <p class="hint hint-block">Clusters, partitions, QoS definitions and TRES billing weights.</p>
+      <div id="config" hx-get="/ui/config" hx-trigger="load" hx-swap="innerHTML"></div>
+    </div>
+  </section>
+
+  <section class="panel panel-wide" data-panel>
+    <div class="panel-head">
+      <h2>Recent jobs</h2>
+      <div class="head-tools">
+        <button class="link" hx-get="/ui/jobs" hx-target="#jobs" hx-swap="innerHTML">refresh</button>
+        <span class="collapse-btn" aria-hidden="true">▾</span>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div id="jobs" hx-get="/ui/jobs" hx-trigger="load" hx-swap="innerHTML"></div>
+    </div>
+  </section>
+
+</div>
+
+{# One shared modal; its body is loaded per action via HTMX #}
+<dialog id="modal" class="modal">
+  <div id="modal-mount"><div class="modal-loading">loading…</div></div>
+</dialog>
+{% endblock %}

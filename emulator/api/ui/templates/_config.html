@@ -1,0 +1,80 @@
+<div class="config-grid">
+
+  <div class="config-block">
+    <h3>Clusters</h3>
+    <table class="data compact">
+      <thead><tr><th>Name</th><th>Control</th><th>Classification</th><th>RPC</th></tr></thead>
+      <tbody>
+        {% for c in clusters %}
+        <tr>
+          <td class="name">{{ c.name }}</td>
+          <td class="muted">{{ c.control }}</td>
+          <td class="muted">{{ c.classification or "—" }}</td>
+          <td class="muted">{{ c.rpc_version }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">No clusters.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="config-block">
+    <h3>Partitions</h3>
+    <table class="data compact">
+      <thead><tr><th>Name</th><th>Nodes</th><th>Range</th><th>State</th></tr></thead>
+      <tbody>
+        {% for p in partitions %}
+        <tr>
+          <td class="name">{{ p.name }}</td>
+          <td>{{ p.nodes }}</td>
+          <td class="muted">{{ p.range }}</td>
+          <td><span class="badge badge-normal">UP</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="hint">Node spec: {{ node_spec.cpus }} CPUs · {{ node_spec.mem_gb }} GB RAM ·
+      {{ node_spec.gpus }} GPUs per node.</p>
+  </div>
+
+  <div class="config-block">
+    <h3>QoS definitions</h3>
+    <table class="data compact">
+      <thead>
+        <tr><th>Name</th><th>Flags</th><th>GrpTRES</th><th>MaxJobs</th><th>MaxSubmit</th><th>MaxWall</th></tr>
+      </thead>
+      <tbody>
+        {% for q in qos %}
+        <tr>
+          <td class="name">{{ q.name }}</td>
+          <td class="muted">{{ q.flags }}</td>
+          <td class="muted">{{ q.grp_tres }}</td>
+          <td>{{ q.max_jobs }}</td>
+          <td>{{ q.max_submit }}</td>
+          <td class="muted">{{ q.max_wall }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">No QoS defined (add via <code>sacctmgr add qos</code>).</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="config-block">
+    <h3>TRES billing weights</h3>
+    <table class="data compact">
+      <thead><tr><th>TRES</th><th>Weight</th><th>Meaning</th></tr></thead>
+      <tbody>
+        {% for tres, weight in billing_weights.items() %}
+        <tr>
+          <td class="name">{{ tres }}</td>
+          <td>{{ weight }}</td>
+          <td class="muted">{{ (1 / weight) | round(0, "floor") | int }} {{ tres }} = 1 billing unit</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</div>

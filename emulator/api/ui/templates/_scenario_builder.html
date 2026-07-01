@@ -1,0 +1,32 @@
+<div class="modal-head">
+  <h3>Build scenario</h3>
+  <button class="modal-x" data-close aria-label="Close">✕</button>
+</div>
+<div class="modal-form">
+  <label class="field"><span>Load from <span class="field-opt">— prefills the steps below</span></span>
+    <select hx-get="/ui/scenario/build" hx-target="#modal-mount" hx-swap="innerHTML"
+            hx-trigger="change" name="name">
+      <option value="">— blank —</option>
+      {% for s in scenarios %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+    </select>
+  </label>
+
+  <form>
+    <div id="builder-rows">{% include "_builder_rows.html" %}</div>
+    <div class="builder-tools">
+      <button type="button" class="btn-ghost" title="Add an action"
+              hx-post="/ui/scenario/build/rows" hx-vals='{"op": "add"}'
+              hx-include="closest form" hx-target="#builder-rows" hx-swap="innerHTML">+ Add action</button>
+      <button type="button" class="builder-run"
+              hx-post="/ui/scenario/build/run" hx-include="closest form"
+              hx-target="#builder-result" hx-swap="innerHTML">▶ Run</button>
+    </div>
+  </form>
+
+  <datalist id="builder-accounts">{% for a in accounts %}<option value="{{ a }}">{% endfor %}</datalist>
+  <div id="builder-result"></div>
+
+  <div class="modal-actions">
+    <button type="button" class="btn-ghost" data-close>Close</button>
+  </div>
+</div>
