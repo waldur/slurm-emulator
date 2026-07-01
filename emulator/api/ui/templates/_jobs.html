@@ -1,0 +1,21 @@
+{% if jobs %}
+<table class="data">
+  <thead>
+    <tr><th>Job ID</th><th>Account</th><th>User</th><th>State</th><th>Node-hours</th><th>Submitted</th></tr>
+  </thead>
+  <tbody>
+    {% for j in jobs %}
+    <tr>
+      <td class="name">{{ j.job_id }}</td>
+      <td>{{ j.account }}</td>
+      <td>{{ j.user }}</td>
+      <td><span class="badge badge-{{ j.state | lower }}">{{ j.state }}</span></td>
+      <td>{{ "%.2f" | format(j.node_hours) }}</td>
+      <td>{{ j.submit_time }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No jobs recorded.</p>
+{% endif %}

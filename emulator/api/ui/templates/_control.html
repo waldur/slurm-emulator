@@ -1,0 +1,176 @@
+{#
+  Control form loaded into the shared modal. `action` selects which form.
+  Account fields are dropdowns populated from the live account list.
+  close_on_ok closes the modal after a successful mutation; the Status panel
+  updates live via its own hx-target.
+#}
+{% set close_on_ok = "if(event.detail.successful) this.closest('dialog').close()" %}
+
+{% macro account_select(name="account", blank=False, blank_label="— keep —", extra=None) %}
+  <select name="{{ name }}"{% if not blank %} required{% endif %}>
+    {% if blank %}<option value="">{{ blank_label }}</option>{% endif %}
+    {% if extra %}{% for e in extra %}<option value="{{ e }}">{{ e }}</option>{% endfor %}{% endif %}
+    {% for a in accounts %}<option value="{{ a }}">{{ a }}</option>{% endfor %}
+  </select>
+{% endmacro %}
+
+{% macro head(title) %}
+  <div class="modal-head">
+    <h3>{{ title }}</h3>
+    <button class="modal-x" data-close aria-label="Close">✕</button>
+  </div>
+{% endmacro %}
+
+{% macro needs_account_notice(title) %}
+  {{ head(title) }}
+  <div class="modal-form">
+    <p class="modal-note">No accounts exist yet. Create one with <strong>New account</strong> first.</p>
+    <div class="modal-actions"><button type="button" class="btn-ghost" data-close>Close</button></div>
+  </div>
+{% endmacro %}
+
+{% if action == "advance" %}
+  {{ head("Advance time") }}
+  <form class="modal-form" hx-post="/ui/time/advance" hx-target="#status" hx-swap="innerHTML"
+        hx-on::after-request="{{ close_on_ok }}">
+    <div class="field-row">
+      <label class="field"><span>Days</span><input type="number" name="days" value="0" autofocus></label>
+      <label class="field"><span>Months</span><input type="number" name="months" value="0"></label>
+      <label class="field"><span>Quarters</span><input type="number" name="quarters" value="0"></label>
+    </div>
+    <p class="modal-help">Move the clock forward — crossing a quarter triggers a period transition and usage decay.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" data-close>Cancel</button>
+      <button type="submit">Advance</button>
+    </div>
+  </form>
+
+{% elif action == "setdate" %}
+  {{ head("Set date") }}
+  <form class="modal-form" hx-post="/ui/time/set" hx-target="#status" hx-swap="innerHTML"
+        hx-on::after-request="{{ close_on_ok }}">
+    <label class="field"><span>Date</span><input type="date" name="date" required autofocus></label>
+    <p class="modal-help">Jump the emulator clock to a specific calendar date.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" data-close>Cancel</button>
+      <button type="submit">Set</button>
+    </div>
+  </form>
+
+{% elif action == "account" %}
+  {{ head("New account") }}
+  <form class="modal-form" hx-post="/ui/accounts" hx-target="#status" hx-swap="innerHTML"
+        hx-on::after-request="{{ close_on_ok }}">
+    <label class="field"><span>Name</span><input type="text" name="name" placeholder="e.g. physics" required autofocus></label>
+    <label class="field"><span>Description</span><input type="text" name="description" value="Created via web UI"></label>
+    <label class="field"><span>Allocation (Nh)</span><input type="number" name="allocation" value="0"></label>
+    <p class="modal-help">Create a SLURM account with an optional node-hour allocation (the budget usage is measured against).</p>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" data-close>Cancel</button>
+      <button type="submit">Create</button>
+    </div>
+  </form>
+
+{% elif action == "editaccount" %}
+  {% if not accounts %}{{ needs_account_notice("Edit account") }}{% else %}
+  {{ head("Edit account") }}
+  <form class="modal-form" hx-post="/ui/accounts/edit" hx-target="#status" hx-swap="innerHTML"
+        hx-on::after-request="{{ close_on_ok }}">
+    <label class="field"><span>Account</span>{{ account_select() }}</label>
+    <label class="field"><span>Allocation (Nh)</span><input type="number" name="allocation" placeholder="leave blank to keep"></label>
+    <label class="field"><span>Parent account</span>{{ account_select(name="parent", blank=True, extra=["root"]) }}</label>
+    <label class="field"><span>Description</span><input type="text" name="description" placeholder="leave blank to keep"></label>
+    <p class="modal-help">Update an existing account. Blank fields are left unchanged.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" data-close>Cancel</button>
+      <button type="submit">Save</button>
+    </div>
+  </form>
+  {% endif %}
+
+{% elif action == "usage" %}
+  {% if not accounts %}{{ needs_account_notice("Inject usage") }}{% else %}
+  {{ head("Inject usage") }}
+  <form class="modal-form" hx-post="/ui/usage/inject" hx-target="#status" hx-swap="innerHTML"
+        hx-on::after-request="{{ close_on_ok }}">
+    <label class="field"><span>Account</span>{{ account_select() }}</label>
+    <label class="field"><span>User <span class="field-opt">— blank = account-level</span></span>
+      <input type="text" name="user" placeholder="e.g. alice, or leave blank"></label>
+    <label class="field"><span>Node-hours</span><input type="number" step="any" name="node_hours" required autofocus></label>
+    <p class="modal-help">Record node-hours of usage in the account at the current time. Name a
+      user (created if missing), or leave the user blank to inject account-level aggregate usage.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" data-close>Cancel</button>
+      <button type="submit">Inject</button>
+    </div>
+  </form>
+  {% endif %}
+
+{% elif action == "settings" %}
+  {% if not accounts %}{{ needs_account_notice("Periodic settings") }}{% else %}
+  {{ head("Periodic settings") }}
+  <form class="modal-form" hx-post="/ui/apply-settings" hx-target="#status" hx-swap="innerHTML"
+        hx-on::after-request="{{ close_on_ok }}">
+    <label class="field"><span>Account</span>{{ account_select() }}</label>
+    <label class="field"><span>Fairshare</span><input type="number" name="fairshare" placeholder="leave blank to keep"></label>
+    <label class="field"><span>GrpTRESMins:billing</span><input type="number" name="grp_tres_mins_billing" placeholder="leave blank to keep"></label>
+    <p class="modal-help">Set an account's fairshare weight and its GrpTRESMins:billing limit (the per-period budget Slurm enforces).</p>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" data-close>Cancel</button>
+      <button type="submit">Apply</button>
+    </div>
+  </form>
+  {% endif %}
+
+{% elif action == "qos" %}
+  {% if not accounts %}{{ needs_account_notice("QoS control") }}{% else %}
+  {{ head("QoS control") }}
+  <form class="modal-form" hx-target="#status" hx-swap="innerHTML" hx-on::after-request="{{ close_on_ok }}">
+    <label class="field"><span>Account</span>{{ account_select() }}</label>
+    <label class="field"><span>Downscale to</span>
+      <select name="qos">
+        <option value="slowdown">slowdown</option>
+        <option value="blocked">blocked</option>
+      </select>
+    </label>
+    <p class="modal-help"><strong>Downscale</strong> forces the account's QoS to slowdown/blocked (throttle or stop new jobs).
+      <strong>Restore</strong> returns it to normal.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" data-close>Cancel</button>
+      <button type="submit" class="btn-warn" hx-post="/ui/qos/restore">Restore normal</button>
+      <button type="submit" hx-post="/ui/qos/downscale">Downscale</button>
+    </div>
+  </form>
+  {% endif %}
+
+{% elif action == "scenario" %}
+  {{ head("Run scenario") }}
+  <form class="modal-form" hx-post="/ui/scenario/run" hx-target="#scenario-result" hx-swap="innerHTML">
+    <label class="field"><span>Scenario</span>
+      <select name="name" autofocus
+              hx-get="/ui/scenario/steps" hx-target="#scenario-steps"
+              hx-trigger="load, change" hx-include="this">
+        {% for s in scenarios %}
+        <option value="{{ s.name }}">{{ s.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div id="scenario-steps" class="scenario-steps-box"></div>
+    <p class="modal-help">Review the planned steps above, then run — the step-by-step log appears below.</p>
+    <div id="scenario-result"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" data-close>Close</button>
+      <button type="button" class="btn-warn" title="Adjust the steps before running"
+              hx-get="/ui/scenario/build" hx-include="closest form"
+              hx-target="#modal-mount" hx-swap="innerHTML">✎ Edit steps</button>
+      <button type="submit">Run</button>
+    </div>
+  </form>
+
+{% else %}
+  {{ head("Unknown control") }}
+  <div class="modal-form">
+    <p class="modal-note">No control named “{{ action }}”.</p>
+    <div class="modal-actions"><button type="button" class="btn-ghost" data-close>Close</button></div>
+  </div>
+{% endif %}

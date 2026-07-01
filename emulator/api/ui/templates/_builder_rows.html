@@ -1,0 +1,51 @@
+{% for a in actions %}
+{% set i = loop.index0 %}
+<div class="builder-row">
+  <span class="builder-idx">{{ loop.index }}</span>
+  <label class="bfield builder-type-field">
+    <span class="bfield-label">Action</span>
+    <select class="builder-type" name="row-{{ i }}-type"
+            hx-post="/ui/scenario/build/rows" hx-include="closest form"
+            hx-target="#builder-rows" hx-swap="innerHTML" hx-trigger="change">
+      {% for key, label in action_labels.items() %}
+      <option value="{{ key }}"{% if key == a.type %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="builder-fields">
+    {% for f in action_fields[a.type] %}
+    <label class="bfield">
+      <span class="bfield-label">{{ f.label }}</span>
+      {% if f.kind == "unit" %}
+      <select name="row-{{ i }}-unit">
+        {% for u in units %}<option value="{{ u }}"{% if u == a.params.get('unit', 'months') %} selected{% endif %}>{{ u }}</option>{% endfor %}
+      </select>
+      {% elif f.kind == "qos" %}
+      <select name="row-{{ i }}-qos">
+        {% for q in qos_options %}<option value="{{ q }}"{% if q == a.params.get('qos') %} selected{% endif %}>{{ q }}</option>{% endfor %}
+      </select>
+      {% elif f.kind == "date" %}
+      <input type="date" name="row-{{ i }}-{{ f.key }}" value="{{ a.params.get(f.key, '') }}">
+      {% elif f.kind == "number" %}
+      <input type="number" step="any" name="row-{{ i }}-{{ f.key }}" value="{{ a.params.get(f.key, '') }}" placeholder="{{ f.ph }}">
+      {% elif f.kind == "account" %}
+      <input type="text" name="row-{{ i }}-{{ f.key }}" value="{{ a.params.get(f.key, '') }}" placeholder="{{ f.ph }}" list="builder-accounts">
+      {% else %}
+      <input type="text" name="row-{{ i }}-{{ f.key }}" value="{{ a.params.get(f.key, '') }}" placeholder="{{ f.ph }}">
+      {% endif %}
+    </label>
+    {% endfor %}
+  </div>
+  <div class="builder-ops">
+    <button type="button" class="row-act" title="Move up"
+            hx-post="/ui/scenario/build/rows" hx-vals='{"op": "up", "idx": {{ i }}}'
+            hx-include="closest form" hx-target="#builder-rows" hx-swap="innerHTML">↑</button>
+    <button type="button" class="row-act" title="Move down"
+            hx-post="/ui/scenario/build/rows" hx-vals='{"op": "down", "idx": {{ i }}}'
+            hx-include="closest form" hx-target="#builder-rows" hx-swap="innerHTML">↓</button>
+    <button type="button" class="row-act row-act-danger" title="Remove"
+            hx-post="/ui/scenario/build/rows" hx-vals='{"op": "remove", "idx": {{ i }}}'
+            hx-include="closest form" hx-target="#builder-rows" hx-swap="innerHTML">✕</button>
+  </div>
+</div>
+{% endfor %}

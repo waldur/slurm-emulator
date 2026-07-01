@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SLURM Emulator — Dashboard</title>
+  <link rel="icon" href="/ui/static/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/ui/static/style.css">
+  <script src="/ui/static/htmx.min.js" defer></script>
+</head>
+<body>
+  <div class="crt" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand-cluster">
+      <span class="led" aria-hidden="true"></span>
+      <span class="brand">SLURM<span class="brand-sep">//</span>EMULATOR</span>
+      <span class="tagline">time-travel control console</span>
+    </div>
+    <div class="readout">
+      <button class="topbar-action" data-open="modal"
+              hx-get="/ui/control/scenario" hx-target="#modal-mount" hx-swap="innerHTML">
+        ▶ Run scenario
+      </button>
+      <span class="readout-status" aria-hidden="true">● SYSTEM ONLINE</span>
+      <span class="brand-sub">{% block subtitle %}{% endblock %}</span>
+    </div>
+  </header>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <script>
+    // Delegated handlers: open/close modals, collapse panels. No dependencies.
+    document.addEventListener("click", function (e) {
+      const opener = e.target.closest("[data-open]");
+      if (opener) {
+        const dlg = document.getElementById(opener.getAttribute("data-open"));
+        // HTMX loads the modal body in parallel; just open the shell here.
+        if (dlg && typeof dlg.showModal === "function" && !dlg.open) dlg.showModal();
+        return;
+      }
+      const closer = e.target.closest("[data-close]");
+      if (closer) {
+        const dlg = closer.closest("dialog");
+        if (dlg) dlg.close();
+        return;
+      }
+      // Toggle collapse when clicking a panel header, but ignore its action links.
+      const head = e.target.closest(".panel-head");
+      if (head && !e.target.closest("button.link, a")) {
+        const panel = head.closest("[data-panel]");
+        if (panel) panel.classList.toggle("is-collapsed");
+      }
+    });
+    // Click the backdrop (outside the inner card) to close a modal.
+    document.addEventListener("click", function (e) {
+      if (e.target.tagName === "DIALOG") e.target.close();
+    });
+    // Show the description of the selected option (e.g. scenario picker).
+    document.addEventListener("change", function (e) {
+      const sel = e.target.closest("select[data-desc-target]");
+      if (!sel) return;
+      const target = document.querySelector(sel.getAttribute("data-desc-target"));
+      const opt = sel.options[sel.selectedIndex];
+      if (target && opt) target.textContent = opt.getAttribute("data-desc") || "";
+    });
+  </script>
+</body>
+</html>

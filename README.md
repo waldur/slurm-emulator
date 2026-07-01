@@ -11,6 +11,7 @@ A comprehensive SLURM command emulator with time manipulation capabilities for t
 - 🎯 **QoS Management** - Threshold-based QoS switching (normal → slowdown → blocked)
 - 📊 **Periodic Limits** - Quarterly allocation with carryover logic
 - 🎬 **Scenario Runner** - Complete SLURM_PERIODIC_LIMITS_SEQUENCE.md validation
+- 🖥️ **Web Dashboard** - Browser console to view status and drive the emulator ([docs](docs/web-ui.md))
 - 🔌 **API Integration** - REST API for waldur-site-agent integration
 - 💾 **State Management** - Checkpoint/restore functionality for testing
 
@@ -136,6 +137,29 @@ JobID           JobName  Partition    Account  AllocCPUS      State ExitCode
 slurm-emulator> sacct --accounts=test-account -S 2024-01-01 --format=Account,ReqTRES,Elapsed,User --noheader --parsable2
 test-account|cpu=64,mem=512G,node=1,billing=64,gres/gpu=4|08:00:00|user1
 ```
+
+## Web Dashboard
+
+A lightweight, browser-based control console is mounted on the API server at
+**`http://localhost:8080/ui/`**. It shows live status (time/period, accounts,
+usage, QoS, jobs, cluster config) and provides full control — advance/set time,
+create/edit accounts, inject usage, apply periodic settings, inline QoS editing,
+add/remove account users, and a **scenario editor** to build/adjust and run
+scenarios. It shares the same in-memory state as the CLI and JSON API.
+
+```bash
+# Start the server (Basic-auth credentials via env vars)
+SLURM_EMULATOR_UI_USER=admin SLURM_EMULATOR_UI_PASSWORD=secret \
+  uv run uvicorn emulator.api.emulator_server:app --host 0.0.0.0 --port 8080
+# then open http://localhost:8080/ui/
+```
+
+All `/ui` routes are protected by HTTP Basic auth
+(`SLURM_EMULATOR_UI_USER` / `SLURM_EMULATOR_UI_PASSWORD`, default `admin`/`admin`
+with a startup warning). See **[docs/web-ui.md](docs/web-ui.md)** for a full
+walkthrough with screenshots.
+
+![SLURM Emulator dashboard](docs/screenshots/01-dashboard.png)
 
 ## API Integration
 

@@ -1,0 +1,16 @@
+{% if description %}<p class="scenario-desc">{{ description }}</p>{% endif %}
+{% if steps %}
+<ol class="scenario-steps">
+  {% for s in steps %}
+  <li>
+    <div class="step-name">{{ s.name }}</div>
+    {% if s.description %}<div class="step-desc">{{ s.description }}</div>{% endif %}
+    {% if s.actions %}
+    <ul class="step-actions">
+      {% for act in s.actions %}<li>{{ act }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ol>
+{% endif %}
