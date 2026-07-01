@@ -51,13 +51,15 @@ class TestVersionRejection:
         assert "Unable to find requested URL endpoint" in response.text
         assert response.headers.get("connection") == "Close"
 
-    def test_unregistered_endpoint_rejected(self, restd, auth_headers):
-        # Job submission is deliberately not implemented. The path
-        # matches GET/DELETE /job/{job_id}, so POST rejects with the
-        # unknown-method plain-text error.
+    def test_job_submit_registered(self, restd, auth_headers, state_env):
+        # Job submission is implemented (FireCREST needs POST /job/submit).
+        # Response mirrors OPENAPI_JOB_SUBMIT_RESPONSE: top-level job_id.
         response = restd.post("/slurm/v0.0.46/job/submit", headers=auth_headers, json={"job": {}})
-        assert response.status_code == 405
-        assert response.headers["content-type"].startswith("text/plain")
+        assert response.status_code == 200
+        body = response.json()
+        assert isinstance(body["job_id"], int)
+        assert "meta" in body
+        assert body["errors"] == []
 
     def test_unknown_method_on_known_path(self, restd, auth_headers):
         response = restd.post("/slurm/v0.0.46/partitions/", headers=auth_headers)

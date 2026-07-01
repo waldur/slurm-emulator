@@ -141,7 +141,9 @@ def _lineage(assoc: Association, account: Optional[Account]) -> str:
     return path
 
 
-def assoc_to_dict(assoc: Association, account: Optional[Account]) -> dict[str, Any]:
+def assoc_to_dict(
+    assoc: Association, account: Optional[Account], is_default: bool = True
+) -> dict[str, Any]:
     # Account-level limits live on the Account record; user-level on the
     # Association. Merge with the association taking precedence.
     limits: dict[str, int] = {}
@@ -159,7 +161,7 @@ def assoc_to_dict(assoc: Association, account: Optional[Account]) -> dict[str, A
         "cluster": assoc.cluster,
         "partition": assoc.partition or "",
         "parent_account": assoc.parent or "",
-        "is_default": True,
+        "is_default": is_default,
         "lineage": _lineage(assoc, account),
         # account.qos holds a CSV QoS list (sacctmgr "qos=a,b" semantics);
         # the REST payload renders it as a list of names.
@@ -296,32 +298,50 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
 
 
 def ctld_job_to_dict(job: Job) -> dict[str, Any]:
-    """JOB_INFO subset for /slurm/.../jobs (active job view)."""
+    """JOB_INFO subset for /slurm/.../jobs (active job view).
+
+    Reflects the submitted job description (name/partition/qos/cwd/…) and
+    carries the fields FireCREST's ``SlurmJob`` model reads: nested
+    ``job_resources.nodes.count``, ``time_limit`` and ``priority`` as
+    ``*_NO_VAL`` structs.
+    """
 
     def ts(value) -> dict[str, Any]:
         return uint_no_val(int(value.timestamp())) if value else uint_no_val()
 
+    node_count = getattr(job, "node_count", 1) or 1
+    total_cpus = _NODE_CPUS * node_count
+    time_limit = getattr(job, "time_limit", None)
+
     return {
         "job_id": int(job.job_id) if str(job.job_id).isdigit() else 0,
-        "name": f"job_{job.job_id}",
+        "name": job.name or f"job_{job.job_id}",
         "account": job.account,
         "user_name": job.user,
         "group_name": job.user,
-        "partition": "compute",
+        "partition": job.partition or "compute",
         "job_state": [job.state],
         "state_reason": "None",
+        "state_description": "",
         "cluster": job.cluster,
-        "qos": "normal",
+        "qos": job.qos or "normal",
+        "priority": uint_no_val(getattr(job, "priority", 1)),
         "nodes": "node001",
-        "node_count": uint_no_val(1),
-        "cpus": uint_no_val(_NODE_CPUS),
+        "node_count": uint_no_val(node_count),
+        "cpus": uint_no_val(total_cpus),
+        "job_resources": {
+            "nodes": {"count": node_count, "list": "node001", "allocation": []},
+            "cpus": total_cpus,
+        },
+        # None -> UNLIMITED (infinite), matching a job with no --time.
+        "time_limit": uint_no_val(time_limit, infinite=(time_limit is None)),
         "submit_time": ts(job.submit_time),
         "start_time": ts(job.start_time),
         "end_time": ts(job.end_time),
-        "standard_input": "/dev/null",
-        "standard_output": "",
-        "standard_error": "",
-        "current_working_directory": f"/home/{job.user}",
+        "standard_input": job.standard_input or "/dev/null",
+        "standard_output": job.standard_output or "",
+        "standard_error": job.standard_error or "",
+        "current_working_directory": job.working_directory or f"/home/{job.user}",
     }
 
 

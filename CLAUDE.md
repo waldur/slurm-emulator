@@ -67,6 +67,8 @@ Use these commands:
 - **Interactive CLI**: `uv run slurm-emulator`
 - **API Server**: `uv run uvicorn emulator.api.emulator_server:app --host 0.0.0.0 --port 8080`
 - **slurmrestd API**: `uv run slurmrestd-emulator` (Slurm 26.11 REST API v0.0.46 on port 6820)
+- **SSH filesystem plane**: `uv run --extra ssh slurm-ssh-emulator` (asyncssh server on port 2222;
+  filesystem ops + Slurm CLI dispatch; for running FireCREST v2 against the emulator)
 - **Direct commands**: `uv run sacctmgr`, `uv run sacct`, `uv run sinfo`
 
 ### Testing and Quality
@@ -168,6 +170,13 @@ This approach ensures code quality while keeping development velocity for an emu
 
 - **CLI Interface** (`emulator/cli/main.py`) - Interactive time travel interface
 - **API Server** (`emulator/api/emulator_server.py`) - REST API for waldur-site-agent
+- **Web UI** (`emulator/api/ui/`) - Lightweight HTMX + Jinja2 dashboard mounted on the API
+  server at `http://localhost:8080/ui/`. Shows status (time/period, accounts, usage, QoS,
+  jobs) and provides full control (advance/set time, inject usage, create accounts, apply
+  periodic settings, downscale/restore QoS, run the sequence scenario). Shares the same
+  in-memory managers and JSON state as the CLI/API. Protected by HTTP Basic auth via
+  `SLURM_EMULATOR_UI_USER` / `SLURM_EMULATOR_UI_PASSWORD` (default `admin`/`admin` with a
+  startup warning; put behind TLS if exposed beyond localhost)
 - **slurmrestd Emulation** (`emulator/api/slurmrestd/`) - Slurm 26.11 REST API (v0.0.46) on
   port 6820: `/slurmdb` CRUD + `/slurm` controller read paths, real response envelopes,
   JWT-style auth (`X-SLURM-USER-TOKEN`, optional `SLURM_EMULATOR_JWT_KEY` verification).
@@ -292,14 +301,34 @@ print('Current quarter:', te.get_current_quarter())
 - `POST /api/downscale-resource` - QoS management
 - `GET /api/status` - System status
 - `POST /api/token` - Mint a JWT for the slurmrestd API (scontrol token stand-in)
+- `POST /api/time/set` - Jump emulator time to a specific date (ISO 8601)
+- `POST /api/accounts` - Create an account (sacctmgr add account stand-in)
 
 ### slurmrestd Endpoints (port 6820)
 - `/slurmdb/v0.0.46/...` - accounts, users, associations, qos, tres, clusters, jobs
   (one job per usage record, matching `sacct` output)
-- `/slurm/v0.0.46/...` - jobs (+ `DELETE /job/{id}` = scancel), nodes, partitions,
-  shares, ping, diag
+- `/slurm/v0.0.46/...` - jobs (+ `POST /job/submit` = sbatch, `DELETE /job/{id}` = scancel),
+  nodes, partitions, shares, ping, diag
 - Auth header required: `X-SLURM-USER-TOKEN` (any token accepted unless
   `SLURM_EMULATOR_JWT_KEY` is set)
+
+### Job lifecycle (submitted jobs)
+Jobs created via `POST /slurm/v0.0.46/job/submit` (or `sbatch` over SSH) advance
+PENDING → RUNNING → COMPLETED lazily on read, and emit a usage record on completion
+so they also appear in the accounting (`/slurmdb` / `sacct`) view. Configurable via env:
+- `SLURM_EMULATOR_JOB_CLOCK` = `wall` (default, real-time) or `time` (simulated clock)
+- `SLURM_EMULATOR_JOB_RUN_DELAY` (default 2s to RUNNING), `SLURM_EMULATOR_JOB_RUN_DURATION`
+  (default 8s to COMPLETED)
+
+### Running FireCREST v2 against the emulator
+The emulator can stand in for a real cluster for eth-cscs/firecrest-v2 (scheduler
+plane over slurmrestd + a thin SSH filesystem plane). See
+`docs/firecrest-conformance.md` for the coverage matrix, `build/firecrest-e2e/` for
+a docker-compose overlay, and these harnesses:
+- `uv run --extra dev pytest tests/test_firecrest_contract.py` — envelope/field contract
+- `FIRECREST_SRC=/path/to/firecrest-v2 uv run --extra dev pytest tests/firecrest/` — drives
+  FireCREST's own `SlurmRestClient` against the emulator (skipped without `FIRECREST_SRC`)
+- `bash scripts/firecrest_e2e.sh` — full-stack docker-compose smoke
 
 ### Configuration
 ```yaml

@@ -33,9 +33,14 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
     "pydantic>=2.0.0",
+    "jinja2>=3.1.6",
+    "python-multipart>=0.0.20",
 ]
 
 [project.optional-dependencies]
+ssh = [
+    "asyncssh>=2.14.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -51,6 +56,7 @@ dev = [
 [project.scripts]
 slurm-emulator = "emulator.cli.main:main"
 slurmrestd-emulator = "emulator.api.slurmrestd.app:main"
+slurm-ssh-emulator = "emulator.api.ssh.server:main"
 sacctmgr = "emulator.commands.dispatcher:sacctmgr_main"
 sacct = "emulator.commands.dispatcher:sacct_main"
 sshare = "emulator.commands.dispatcher:sshare_main"
