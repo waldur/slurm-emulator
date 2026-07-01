@@ -176,7 +176,9 @@ This approach ensures code quality while keeping development velocity for an emu
   periodic settings, downscale/restore QoS, run the sequence scenario). Shares the same
   in-memory managers and JSON state as the CLI/API. Protected by HTTP Basic auth via
   `SLURM_EMULATOR_UI_USER` / `SLURM_EMULATOR_UI_PASSWORD` (default `admin`/`admin` with a
-  startup warning; put behind TLS if exposed beyond localhost)
+  startup warning; put behind TLS if exposed beyond localhost). Screenshots and a
+  feature walkthrough live in `docs/web-ui.md`. Also includes inline QoS editing,
+  per-account association add/remove, and a scenario editor (build/adjust steps)
 - **slurmrestd Emulation** (`emulator/api/slurmrestd/`) - Slurm 26.11 REST API (v0.0.46) on
   port 6820: `/slurmdb` CRUD + `/slurm` controller read paths, real response envelopes,
   JWT-style auth (`X-SLURM-USER-TOKEN`, optional `SLURM_EMULATOR_JWT_KEY` verification).
