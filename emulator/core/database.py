@@ -10,6 +10,22 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+def fold_account(name: Optional[str]) -> Optional[str]:
+    """Canonicalise an account name to lower case, as real Slurm does.
+
+    sacctmgr parses every account name and account condition through
+    ``slurm_addto_char_list`` (account_functions.c:113 for the
+    ``name=``/``account=`` condition, :204 for the added account), which
+    is ``slurm_addto_char_list_with_case(..., true)`` and calls
+    ``xstrtolower(name)`` before storing it (slurm_protocol_defs.c:523-525,
+    537-539). So ``sacctmgr add account 2026_00A`` is stored and reported
+    as ``2026_00a`` and a mixed-case query still matches. Every account-name
+    key and lookup in this emulator routes through here to reproduce that.
+    ``None`` and ``""`` pass through unchanged (blank parent / no filter).
+    """
+    return name.lower() if name else name
+
+
 class ClusterClassification(str, Enum):
     """SLURM cluster classification types."""
 
@@ -49,6 +65,16 @@ class Account:
     limits: dict[str, int] = field(default_factory=dict)
     last_period: Optional[str] = None
     allocation: int = 1000  # Base allocation in node-hours
+
+    def __post_init__(self) -> None:
+        """Fold the (case-insensitive) account and parent names to lower case.
+
+        Canonicalise on construction so every code path — direct
+        construction, state reload, command handlers — sees the same stored
+        form real Slurm keeps.
+        """
+        self.name = fold_account(self.name)
+        self.parent = fold_account(self.parent)
 
 
 @dataclass
@@ -93,6 +119,16 @@ class Association:
     # ``assoc->parent_acct`` is NULL for user rows (see
     # as_mysql_assoc.c:2116-2126) so ParentName prints blank for them.
     parent: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Fold the account and parent account names to lower case.
+
+        The account (and parent account) an association points at are
+        case-insensitive; the user name is not, so only the account names
+        are folded — a mixed-case account then matches its stored row.
+        """
+        self.account = fold_account(self.account)
+        self.parent = fold_account(self.parent)
 
 
 @dataclass
@@ -272,6 +308,7 @@ class SlurmDatabase:
         carries its ``parent_acct``. We create that row on the current cluster so
         ``show assoc`` / ``show account withassoc`` can report the parent.
         """
+        name = fold_account(name)
         self.accounts[name] = Account(
             name=name,
             description=description,
@@ -288,6 +325,8 @@ class SlurmDatabase:
     ) -> None:
         """Reparent an account: update the record and its account-level association."""
         cl = cluster or self.current_cluster
+        name = fold_account(name)
+        parent = fold_account(parent)
         account = self.accounts.get(name)
         if account is not None:
             account.parent = parent
@@ -297,15 +336,16 @@ class SlurmDatabase:
             assoc.parent = parent
 
     def get_account(self, name: str) -> Optional[Account]:
-        """Get account by name (global)."""
-        return self.accounts.get(name)
+        """Get account by name (global, case-insensitive)."""
+        return self.accounts.get(fold_account(name))
 
     def list_accounts(self) -> list[Account]:
         """List all accounts (global)."""
         return list(self.accounts.values())
 
     def delete_account(self, name: str) -> None:
-        """Delete account (global)."""
+        """Delete account (global, case-insensitive)."""
+        name = fold_account(name)
         if name in self.accounts:
             del self.accounts[name]
 
@@ -328,9 +368,13 @@ class SlurmDatabase:
         cluster: Optional[str] = None,
         partition: Optional[str] = None,
     ) -> str:
-        """Generate unique key for association."""
+        """Generate unique key for association.
+
+        The account component is folded to lower case so account-name case
+        never splits a row across two keys — the user name is left as-is.
+        """
         cl = cluster or self.current_cluster
-        return f"{user}:{account}:{cl}:{partition or ''}"
+        return f"{user}:{fold_account(account)}:{cl}:{partition or ''}"
 
     def add_association(
         self,
@@ -384,6 +428,7 @@ class SlurmDatabase:
         With multiple ``Partitions=`` this returns one entry per partition.
         """
         cl = cluster or self.current_cluster
+        account = fold_account(account)
         return [
             a
             for a in self.associations.values()
@@ -393,6 +438,7 @@ class SlurmDatabase:
     def list_account_users(self, account: str, cluster: Optional[str] = None) -> list[str]:
         """List users associated with account (deduplicated across partitions)."""
         cl = cluster or self.current_cluster
+        account = fold_account(account)
         users: list[str] = []
         seen: set[str] = set()
         for assoc in self.associations.values():
@@ -429,6 +475,7 @@ class SlurmDatabase:
         all partition-scoped associations for that pair.
         """
         cl = cluster or self.current_cluster
+        account = fold_account(account)
         keys = [
             k
             for k, a in self.associations.items()
@@ -650,6 +697,9 @@ class SlurmDatabase:
                         name = key.split("@", 1)[0]
                     else:
                         name = key
+                    # Account names are case-insensitive: key by the folded
+                    # name so lookups match regardless of the stored case.
+                    name = fold_account(name)
                     # Avoid duplicates — first one wins
                     if name not in self.accounts:
                         self.accounts[name] = Account(**data)

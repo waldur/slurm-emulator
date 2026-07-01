@@ -221,3 +221,80 @@ class TestAddExistingAccountIsNotAnError:
         em = _emulator(tmp_path)
         em.handle_command(["modify", "account", "where", "name=p-proj", "set", "parent=c-ghost"])
         assert em.exit_code == 1
+
+
+class TestAccountNameCaseInsensitivity:
+    """Account names are case-insensitive and stored lower-cased.
+
+    Real Slurm folds every account name and condition to lower case:
+    sacctmgr adds them to the acct list via ``slurm_addto_char_list``
+    (account_functions.c:113,204), which normalises with ``xstrtolower``
+    (slurm_protocol_defs.c:523-525,537-539). So ``add account 2026_00A``
+    is stored and reported as ``2026_00a``, and ``show assoc
+    account=2026_00A`` still finds it. The emulator must reproduce this so
+    the Waldur site agent's ``get_account_parent`` — which reads the
+    account back and compares names — is exercised against the same
+    mixed-case mismatch that bit it in production.
+    """
+
+    def test_add_account_is_stored_lower_cased(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["add", "account", "2026_00A", "parent=c-org"])
+        # Looked up by any case, the stored name is folded.
+        account = em.database.get_account("2026_00A")
+        assert account is not None
+        assert account.name == "2026_00a"
+        assert em.database.get_account("2026_00a") is account
+
+    def test_show_assoc_matches_mixed_case_query_and_reports_lower(self, tmp_path):
+        # The exact production scenario: the account exists as 2026_00a, the
+        # agent queries with the Waldur-supplied mixed case, and the row must
+        # come back — reported in Slurm's stored (lower) form.
+        em = _emulator(tmp_path)
+        em.handle_command(["add", "account", "2026_00A", "parent=c-org"])
+        out = em.handle_command(
+            ["show", "assoc", "account=2026_00A", "format=Account,ParentName,User", "-n", "-P"]
+        )
+        # Account column is the folded name; the query still matched.
+        assert "2026_00a|c-org|" in out.splitlines()
+
+    def test_reparent_by_mixed_case_name(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["add", "account", "2026_00A", "parent=c-org"])
+        em.handle_command(["add", "account", "c-new", "parent=root"])
+        out = em.handle_command(
+            ["modify", "account", "where", "name=2026_00A", "set", "parent=c-new"]
+        )
+        assert "Modified account associations" in out
+        assert em.exit_code == 0
+        assert em.database.get_account("2026_00a").parent == "c-new"
+
+    def test_reparent_to_same_parent_mixed_case_is_noop(self, tmp_path):
+        # Parent 'C-ORG' differs from stored 'c-org' only in case: real Slurm
+        # folds it and sees no change, printing "Nothing modified" / exit 1.
+        # This is the precise loop the agent hit — a spurious reparent that
+        # errored because the parent was already correct.
+        em = _emulator(tmp_path)
+        em.handle_command(["add", "account", "2026_00A", "parent=c-org"])
+        out = em.handle_command(
+            ["modify", "account", "where", "name=2026_00A", "set", "parent=C-ORG"]
+        )
+        assert out == "  Nothing modified"
+        assert em.exit_code == 1
+
+    def test_add_user_under_mixed_case_account(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["add", "account", "2026_00A", "parent=c-org"])
+        em.handle_command(["add", "user", "bob", "account=2026_00A"])
+        # The user association resolves regardless of the case queried.
+        assert "bob" in em.database.list_account_users("2026_00a")
+        assert "bob" in em.database.list_account_users("2026_00A")
+
+    def test_readding_with_different_case_is_not_a_new_account(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["add", "account", "2026_00a", "parent=c-org"])
+        out = em.handle_command(["add", "account", "2026_00A", "parent=c-org"])
+        # Case-insensitive uniqueness: the second add is a no-op, not a dup.
+        assert out == " Data has not changed since time specified"
+        assert em.exit_code == 0
+        assert sum(1 for a in em.database.list_accounts() if a.name == "2026_00a") == 1

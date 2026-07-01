@@ -36,7 +36,13 @@ from emulator.commands.print_fields import (
     render_table,
     resolve_format,
 )
-from emulator.core.database import QOS, Association, ClusterClassification, SlurmDatabase
+from emulator.core.database import (
+    QOS,
+    Association,
+    ClusterClassification,
+    SlurmDatabase,
+    fold_account,
+)
 from emulator.core.time_engine import TimeEngine
 
 # Field registry mirroring the prefix-match chain in
@@ -527,6 +533,9 @@ class SacctmgrEmulator:
             # Real sacctmgr strips quotes from the parent value (strip_quotes,
             # association_functions.c:512) before resolving the account.
             parent_value = parent_value.strip("\"'")
+            # Parent is an account name — fold so a case-only "change" is
+            # correctly seen as a no-op against the stored lower-cased parent.
+            parent_value = fold_account(parent_value)
             if not account:
                 return self._nothing_modified()
             if self.database.get_account(parent_value) is None:
@@ -924,7 +933,8 @@ class SacctmgrEmulator:
         user_filter = None
         for arg in args:
             if arg.startswith("account="):
-                account_filter = arg.split("=", 1)[1]
+                # Case-insensitive account filter (see _show_association).
+                account_filter = fold_account(arg.split("=", 1)[1])
             elif arg.startswith("user="):
                 user_filter = arg.split("=", 1)[1]
 
@@ -1043,7 +1053,10 @@ class SacctmgrEmulator:
             if arg.startswith("user="):
                 user = arg.split("=", 1)[1]
             elif arg.startswith("account="):
-                account = arg.split("=", 1)[1]
+                # Account filters are case-insensitive (folded to match the
+                # stored lower-cased rows), so ``account=2026_00A`` finds
+                # ``2026_00a`` — the mismatch real Slurm papers over.
+                account = fold_account(arg.split("=", 1)[1])
 
         fields = self._resolve(_ASSOC_DEFAULT, args)
 
