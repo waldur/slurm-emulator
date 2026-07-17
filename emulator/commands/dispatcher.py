@@ -4,13 +4,13 @@ import sys
 from pathlib import Path
 from typing import ClassVar, Optional
 
-from emulator import __version__
 from emulator.api.slurmrestd.schemas import PARTITION_RANGES
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacctmgr import SacctmgrEmulator
 from emulator.commands.sshare import SshareEmulator
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
+from emulator.slurm_version import get_selected_release
 
 
 class SlurmEmulator:
@@ -109,7 +109,7 @@ class SlurmEmulator:
     def _handle_sinfo(self, args: list[str]) -> str:
         """Handle sinfo command."""
         if args and args[0] == "-V":
-            return f"slurm-emulator {__version__}"
+            return f"slurm {get_selected_release().release}"
 
         # Derive from the same topology the REST emulation serves
         # (schemas.PARTITION_RANGES), so both views agree and honour

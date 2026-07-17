@@ -90,6 +90,13 @@ and container recreation**. `docker compose down -v` wipes them for a clean slat
   the `firecrest` service builds from the cloned firecrest-v2 (`FIRECREST_V2_DIR`).
 - **api_version.** The emulator serves `v0.0.46`; `firecrest/config.yaml` sets
   `scheduler.api_version: "0.0.46"` accordingly (upstream demo uses `0.0.42`).
+- **Older Slurm releases.** This stack stays pinned to the default release
+  (Slurm 26.11, `v0.0.46`). To test against e.g. 25.05, set
+  `SLURM_EMULATOR_SLURM_VERSION=25.05` on the emulator containers, set
+  `scheduler.version: "25.05.0"` and `api_version: "0.0.44"` in
+  `firecrest/config.yaml`, and change the healthcheck ping URL to a version
+  inside that release's window (25.05 serves `v0.0.42`–`v0.0.44`; older
+  releases don't serve `v0.0.46`).
 
 ## Files
 

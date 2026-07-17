@@ -234,9 +234,36 @@ uv run slurmrestd-emulator
 - `/openapi.json`, `/openapi`, `/openapi/v3` — generated self-description.
 
 Responses use the real envelope (`meta`/`errors`/`warnings`, payload
-keys and field names from the v0.0.46 data parser). Unsupported URL
-versions (e.g. `v0.0.45`), unknown paths, and auth failures reject
-with slurmrestd's plain-text errors and exit statuses.
+keys and field names from the v0.0.46 data parser). URL versions
+outside the served window (see below), unknown paths, and auth
+failures reject with slurmrestd's plain-text errors and exit statuses.
+
+### Emulating other Slurm releases (upgrade testing)
+
+Set `SLURM_EMULATOR_SLURM_VERSION` to pick the emulated Slurm release
+at startup (`26.11` and `26.11.0` both work; unknown values fail
+startup):
+
+```bash
+SLURM_EMULATOR_SLURM_VERSION=25.05 uv run slurmrestd-emulator
+```
+
+| Release | Newest API version | Served versions |
+|---|---|---|
+| 24.11 | v0.0.43 | v0.0.41–v0.0.43 |
+| 25.05 | v0.0.44 | v0.0.42–v0.0.44 |
+| 25.11 | v0.0.45 | v0.0.43–v0.0.45 |
+| 26.11 (default) | v0.0.46 | v0.0.44–v0.0.46 |
+
+Like real slurmrestd, each release serves its newest API version plus
+the two prior; anything outside the window gets the plain-text 404.
+The selection also drives the `meta` envelope, `/conf`, OpenAPI
+`info.version`, CLI `--version` output, and the `rpc_version` of new
+clusters (values already in state files are preserved). Typical
+upgrade test: run a client pinned to `api_version 0.0.44` against
+`25.05`, restart the emulator as `26.11`, and confirm the client
+still works — v0.0.44 stays in 26.11's window. The release registry
+lives in `emulator/slurm_version.py`.
 
 ### Authentication
 
@@ -265,7 +292,14 @@ last-writer-wins. Note the control API on 8080 loads state once at
 startup, so it can serve stale reads after REST/CLI writes.
 
 The Docker image runs both servers (ports 8080 and 6820) via
-`scripts/docker-entrypoint.sh`.
+`scripts/docker-entrypoint.sh`. Pass configuration as environment
+variables, e.g. to emulate an older Slurm release:
+
+```bash
+docker run -p 8080:8080 -p 6820:6820 \
+  -e SLURM_EMULATOR_SLURM_VERSION=25.05 \
+  opennode/slurm-emulator:latest
+```
 
 ## Waldur Site Agent Integration
 

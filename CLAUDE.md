@@ -182,7 +182,9 @@ This approach ensures code quality while keeping development velocity for an emu
 - **slurmrestd Emulation** (`emulator/api/slurmrestd/`) - Slurm 26.11 REST API (v0.0.46) on
   port 6820: `/slurmdb` CRUD + `/slurm` controller read paths, real response envelopes,
   JWT-style auth (`X-SLURM-USER-TOKEN`, optional `SLURM_EMULATOR_JWT_KEY` verification).
-  Shares state with the CLI commands via the JSON state files
+  `SLURM_EMULATOR_SLURM_VERSION` selects the emulated release (24.11–26.11, default 26.11);
+  each release serves its newest API version plus the two prior (registry in
+  `emulator/slurm_version.py`). Shares state with the CLI commands via the JSON state files
   (`SLURM_EMULATOR_STATE_FILE` / `SLURM_EMULATOR_TIME_FILE` overrides)
 - **Scenario Runner** (`emulator/scenarios/sequence_scenario.py`) - Complete test scenarios
 
@@ -313,6 +315,9 @@ print('Current quarter:', te.get_current_quarter())
   nodes, partitions, shares, ping, diag
 - Auth header required: `X-SLURM-USER-TOKEN` (any token accepted unless
   `SLURM_EMULATOR_JWT_KEY` is set)
+- `SLURM_EMULATOR_SLURM_VERSION` picks the emulated release at startup (default 26.11 =
+  v0.0.46). Each release serves its newest API version plus the two prior, e.g. 26.11
+  serves v0.0.44–v0.0.46, 25.05 serves v0.0.42–v0.0.44; versions outside the window 404
 
 ### Job lifecycle (submitted jobs)
 Jobs created via `POST /slurm/v0.0.46/job/submit` (or `sbatch` over SSH) advance

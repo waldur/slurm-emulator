@@ -1,4 +1,4 @@
-"""/slurm/v0.0.46 endpoints (openapi/slurmctld plugin emulation).
+"""/slurm/{version} endpoints (openapi/slurmctld plugin emulation).
 
 Read paths plus DELETE /job/{job_id} (the scancel equivalent).
 Nodes/partitions are served from the static topology in schemas.py —
@@ -33,6 +33,7 @@ from emulator.api.slurmrestd.schemas import (
 from emulator.api.slurmrestd.state import StateDep
 from emulator.core.database import Job, SlurmDatabase
 from emulator.core.scheduler import advance_job_states, job_clock_now
+from emulator.slurm_version import get_selected_release
 
 router = APIRouter(
     prefix="/slurm/{version}",
@@ -140,7 +141,7 @@ async def conf(
 ):
     config = {
         "cluster_name": state.cluster,
-        "slurm_version": "26.11.0",
+        "slurm_version": get_selected_release().release,
         "accounting_storage_type": "accounting_storage/slurmdbd",
         "scheduler_type": "sched/backfill",
         "select_type": "select/cons_tres",

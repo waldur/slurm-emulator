@@ -33,11 +33,18 @@ class TestEnvelope:
 
 
 class TestVersionRejection:
-    def test_older_version_rejected(self, restd, auth_headers):
-        response = restd.get("/slurmdb/v0.0.45/accounts/", headers=auth_headers)
+    def test_version_below_window_rejected(self, restd, auth_headers):
+        # 26.11 serves v0.0.44-46 (current + 2 prior data_parser plugins);
+        # anything older is an unknown URL.
+        response = restd.get("/slurmdb/v0.0.40/accounts/", headers=auth_headers)
         assert response.status_code == 404
         assert response.headers["content-type"].startswith("text/plain")
         assert "Unable to find requested URL endpoint" in response.text
+
+    def test_prior_version_in_window_served(self, restd, auth_headers):
+        response = restd.get("/slurmdb/v0.0.45/accounts/", headers=auth_headers)
+        assert response.status_code == 200
+        assert response.json()["meta"]["plugin"]["data_parser"] == "data_parser/v0.0.45"
 
     def test_garbage_version_rejected(self, restd, auth_headers):
         response = restd.get("/slurmdb/v9.9.99/ping/", headers=auth_headers)

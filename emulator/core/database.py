@@ -9,6 +9,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Optional, overload
 
+from emulator.slurm_version import get_selected_release
+
 
 @overload
 def fold_account(name: str) -> str: ...
@@ -53,7 +55,7 @@ class Cluster:
     classification: ClusterClassification = ClusterClassification.NONE
     deleted: bool = False
     id: int = 0
-    rpc_version: int = 9600
+    rpc_version: int = field(default_factory=lambda: get_selected_release().rpc_version)
     flags: int = 0
     nodes: str = ""
     tres_str: str = ""
@@ -698,7 +700,7 @@ class SlurmDatabase:
                     for name, data in state["clusters"].items():
                         data.setdefault("deleted", False)
                         data.setdefault("id", 0)
-                        data.setdefault("rpc_version", 9600)
+                        data.setdefault("rpc_version", get_selected_release().rpc_version)
                         data.setdefault("flags", 0)
                         data.setdefault("nodes", "")
                         data.setdefault("tres_str", "")
