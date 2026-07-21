@@ -4,6 +4,11 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+- Correct the emulated Slurm release table: `26.11` was never a shipped release (SchedMD ships `X.05`/`X.11` twice yearly; `26.11` is still unreleased on SchedMD's `master`). Default release is now `26.05` (the newest actually-shipped version), with `24.11`/`25.05`/`25.11`/`26.05` carrying their real data_parser and RPC protocol version numbers, verified against SchedMD's per-tag `META` and `slurm_protocol_common.h`.
+
 ## [0.8.0] - 2026-07-01
 
 ### Added

@@ -1,4 +1,4 @@
-"""/slurmdb/v0.0.46 endpoints (openapi/slurmdbd plugin emulation).
+"""/slurmdb/v0.0.45 endpoints (openapi/slurmdbd plugin emulation).
 
 Endpoint set mirrors src/slurmrestd/plugins/openapi/slurmdbd/api.c.
 GET handlers never write state; POST/DELETE handlers call
@@ -634,7 +634,7 @@ async def post_users_association(
 
 
 def _limits_from_assoc_body(entry: dict[str, Any]) -> dict[str, int]:
-    """Map the v0.0.46 ``max`` subtree onto emulator limit keys."""
+    """Map the v0.0.45 ``max`` subtree onto emulator limit keys."""
     limits: dict[str, int] = {}
     max_tree = entry.get("max", {})
     tres_tree = max_tree.get("tres", {})

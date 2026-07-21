@@ -41,7 +41,7 @@ Then open **http://localhost:3000**, click login, and sign in as:
 | firecrest-ui | http://localhost:3000 | the web UI |
 | firecrest API | http://localhost:8000 | OpenAPI at `/docs` |
 | keycloak | http://keycloak:8080/auth | realm `kcrealm`, admin `admin`/`admin2` |
-| slurm-emulator (`cluster-emulator`) | slurmrestd http://localhost:6820, SSH localhost:2222 | `v0.0.46` |
+| slurm-emulator (`cluster-emulator`) | slurmrestd http://localhost:6820, SSH localhost:2222 | `v0.0.45` |
 | slurm-emulator #2 (`cluster-emulator-2`) | slurmrestd http://localhost:6821, SSH localhost:2223 | independent container/state |
 
 Two clusters are wired to show FireCREST's multi-cluster support: `cluster-emulator`
@@ -88,15 +88,15 @@ and container recreation**. `docker compose down -v` wipes them for a clean slat
   (see `.env.example`).
 - **API is built from source.** There is no reliable public API-only image, so
   the `firecrest` service builds from the cloned firecrest-v2 (`FIRECREST_V2_DIR`).
-- **api_version.** The emulator serves `v0.0.46`; `firecrest/config.yaml` sets
+- **api_version.** The emulator serves `v0.0.45`; `firecrest/config.yaml` sets
   `scheduler.api_version: "0.0.46"` accordingly (upstream demo uses `0.0.42`).
 - **Older Slurm releases.** This stack stays pinned to the default release
-  (Slurm 26.11, `v0.0.46`). To test against e.g. 25.05, set
+  (Slurm 26.05, `v0.0.45`). To test against e.g. 25.05, set
   `SLURM_EMULATOR_SLURM_VERSION=25.05` on the emulator containers, set
   `scheduler.version: "25.05.0"` and `api_version: "0.0.44"` in
   `firecrest/config.yaml`, and change the healthcheck ping URL to a version
-  inside that release's window (25.05 serves `v0.0.42`–`v0.0.44`; older
-  releases don't serve `v0.0.46`).
+  inside that release's window (25.05 serves `v0.0.41`–`v0.0.43`; older
+  releases don't serve `v0.0.45`).
 
 ## Files
 

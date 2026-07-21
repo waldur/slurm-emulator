@@ -36,15 +36,15 @@ Field-shape notes (verified by the contract test):
 - `job_state` is a list; `state.current` in accounting is a list.
 - `start_time`/`end_time`/`time_limit`/`priority` are `{set, infinite, number}` structs.
 - `job_resources.nodes.count` is present (FireCREST's `SlurmJob` reads it).
-- API version is `v0.0.46`; set FireCREST `scheduler.api_version: "0.0.46"` so the
+- API version is `v0.0.45`; set FireCREST `scheduler.api_version: "0.0.46"` so the
   request dialect matches (script inside the job body, `environment` as a list).
 
-The examples and harnesses stay pinned to the default release (Slurm 26.11,
-`v0.0.46`). To test FireCREST against an older release, e.g. 25.05: set
+The examples and harnesses stay pinned to the default release (Slurm 26.05,
+`v0.0.45`). To test FireCREST against an older release, e.g. 25.05: set
 `SLURM_EMULATOR_SLURM_VERSION=25.05` on the emulator container, set FireCREST
 `scheduler.version: "25.05.0"` and `api_version: "0.0.44"`, and point the
 healthcheck ping URL at a version inside that release's window (25.05 serves
-`v0.0.42`–`v0.0.44`; older releases don't serve `v0.0.46`).
+`v0.0.41`–`v0.0.43`; older releases don't serve `v0.0.45`).
 
 ## SSH plane (filesystem + job metadata)
 

@@ -21,7 +21,7 @@ def _client(monkeypatch, release):
 class TestEnvParsing:
     def test_default_is_26_11(self, monkeypatch):
         monkeypatch.delenv(ENV_VAR, raising=False)
-        assert get_selected_release().release == "26.11.0"
+        assert get_selected_release().release == "26.05.0"
 
     def test_short_and_full_forms_equal(self, monkeypatch):
         monkeypatch.setenv(ENV_VAR, "25.11")
@@ -57,37 +57,37 @@ class TestVersionReporting:
     def test_openapi_spec_uses_selected_api_version(self, state_env, monkeypatch, auth_headers):
         client = _client(monkeypatch, "25.05")
         spec = client.get("/openapi/v3", headers=auth_headers).json()
-        assert spec["info"]["version"] == "v0.0.44"
-        assert "/slurm/v0.0.44/ping/" in spec["paths"]
+        assert spec["info"]["version"] == "v0.0.43"
+        assert "/slurm/v0.0.43/ping/" in spec["paths"]
 
 
 class TestAcceptedWindow:
     def test_26_11_serves_two_prior_versions(self, state_env, monkeypatch, auth_headers):
-        client = _client(monkeypatch, "26.11")
-        for version in ("v0.0.44", "v0.0.45", "v0.0.46"):
+        client = _client(monkeypatch, "26.05")
+        for version in ("v0.0.43", "v0.0.44", "v0.0.45"):
             response = client.get(f"/slurm/{version}/ping/", headers=auth_headers)
             assert response.status_code == 200
             meta = response.json()["meta"]
             # data_parser echoes the requested plugin; the release does not.
             assert meta["plugin"]["data_parser"] == f"data_parser/{version}"
-            assert meta["slurm"]["release"] == "26.11.0"
+            assert meta["slurm"]["release"] == "26.05.0"
 
     def test_24_11_serves_its_own_window(self, state_env, monkeypatch, auth_headers):
         client = _client(monkeypatch, "24.11")
-        for version in ("v0.0.41", "v0.0.42", "v0.0.43"):
+        for version in ("v0.0.40", "v0.0.41", "v0.0.42"):
             response = client.get(f"/slurmdb/{version}/ping/", headers=auth_headers)
             assert response.status_code == 200
 
     def test_newer_than_release_rejected(self, state_env, monkeypatch, auth_headers):
         client = _client(monkeypatch, "24.11")
-        response = client.get("/slurm/v0.0.44/ping/", headers=auth_headers)
+        response = client.get("/slurm/v0.0.43/ping/", headers=auth_headers)
         assert response.status_code == 404
         assert response.headers["content-type"].startswith("text/plain")
         assert response.headers["connection"] == "Close"
 
     def test_below_window_rejected(self, state_env, monkeypatch, auth_headers):
-        client = _client(monkeypatch, "26.11")
-        response = client.get("/slurm/v0.0.43/ping/", headers=auth_headers)
+        client = _client(monkeypatch, "26.05")
+        response = client.get("/slurm/v0.0.42/ping/", headers=auth_headers)
         assert response.status_code == 404
 
 
@@ -95,17 +95,17 @@ class TestRpcVersion:
     def test_fresh_cluster_gets_release_rpc_version(self, state_env, monkeypatch):
         monkeypatch.setenv(ENV_VAR, "24.11")
         db = SlurmDatabase()
-        assert db.clusters["default"].rpc_version == 8832
+        assert db.clusters["default"].rpc_version == 10752
 
     def test_stored_rpc_version_survives_downgrade(self, state_env, monkeypatch):
         db = SlurmDatabase()
-        assert db.clusters["default"].rpc_version == 9600
+        assert db.clusters["default"].rpc_version == 11520
         db.save_state()
 
         monkeypatch.setenv(ENV_VAR, "24.11")
         db2 = SlurmDatabase()
         db2.load_state()
-        assert db2.clusters["default"].rpc_version == 9600
+        assert db2.clusters["default"].rpc_version == 11520
 
 
 class TestCliVersion:

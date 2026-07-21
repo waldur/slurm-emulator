@@ -1,6 +1,6 @@
 """sacctmgr command emulator.
 
-Output formatting and exit codes mirror real Slurm 26.11:
+Output formatting and exit codes mirror real Slurm 26.05:
 
 * list/show output defaults to fixed-width columns with a dashed
   underline (``src/common/print_fields.c``); ``-p``/``--parsable``

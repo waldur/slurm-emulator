@@ -32,9 +32,9 @@ DEFAULT_PORT = 6820
 def _build_openapi_spec(app: FastAPI) -> dict[str, Any]:
     """FastAPI auto-spec dressed up as the real self-description.
 
-    Real slurmrestd generates its spec at runtime (no v0.0.46 spec
-    file ships in the 26.11 tree), so we do the same rather than
-    vendoring the 15k-line v0.0.45 document.
+    Real slurmrestd generates its spec at runtime (no v0.0.45 spec
+    file ships in the 26.05 tree), so we do the same rather than
+    vendoring the 15k-line v0.0.44 document.
     """
     api_version = get_selected_release().api_version
     spec = app.openapi()

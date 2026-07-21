@@ -26,7 +26,7 @@ import pytest
 
 from emulator.core.database import SlurmDatabase
 
-V = "v0.0.46"
+V = "v0.0.45"
 
 
 def _no_val(field: dict) -> bool:

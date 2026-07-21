@@ -24,7 +24,7 @@ clusters:
     scheduler:
       type: "slurm"
       connection_mode: "rest"
-      version: "26.11.0"
+      version: "26.05.0"
       api_url: "http://slurm:6820"
       api_version: "0.0.46"
       timeout: 10

@@ -1,6 +1,6 @@
 """sacct command emulator for usage reporting.
 
-Output formatting and exit codes mirror real Slurm 26.11:
+Output formatting and exit codes mirror real Slurm 26.05:
 
 * default fields are ``JobID,JobName,Partition,Account,AllocCPUS,
   State,ExitCode`` (src/sacct/sacct.h:66) with the widths from the

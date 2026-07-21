@@ -212,8 +212,8 @@ curl -X POST "http://localhost:8080/api/time/advance?months=3"
 
 ## SLURM REST API Emulation (slurmrestd)
 
-The emulator also serves the Slurm 26.11 REST API (`slurmrestd`,
-data parser `v0.0.46`) on port 6820, backed by the same state as the
+The emulator also serves the Slurm 26.05 REST API (`slurmrestd`,
+data parser `v0.0.45`) on port 6820, backed by the same state as the
 CLI commands and the control API:
 
 ```bash
@@ -223,25 +223,25 @@ uv run slurmrestd-emulator
 
 ### Endpoint families
 
-- `/slurmdb/v0.0.46/...` — accounting: `accounts`, `users`,
+- `/slurmdb/v0.0.45/...` — accounting: `accounts`, `users`,
   `associations`, `qos`, `tres`, `clusters`, `jobs` (one job per usage
   record, matching `sacct` output), `ping`, `diag`, `config`. Write
   support (POST/DELETE) covers everything Waldur drives via `sacctmgr`.
-- `/slurm/v0.0.46/...` — controller read paths: `jobs` (+ `DELETE
+- `/slurm/v0.0.45/...` — controller read paths: `jobs` (+ `DELETE
   /job/{job_id}` as the `scancel` equivalent), `nodes`, `partitions`
   (static topology matching `sinfo`), `shares`, `ping`, `diag`, `conf`;
   `reservations`/`licenses` are empty stubs.
 - `/openapi.json`, `/openapi`, `/openapi/v3` — generated self-description.
 
 Responses use the real envelope (`meta`/`errors`/`warnings`, payload
-keys and field names from the v0.0.46 data parser). URL versions
+keys and field names from the v0.0.45 data parser). URL versions
 outside the served window (see below), unknown paths, and auth
 failures reject with slurmrestd's plain-text errors and exit statuses.
 
 ### Emulating other Slurm releases (upgrade testing)
 
 Set `SLURM_EMULATOR_SLURM_VERSION` to pick the emulated Slurm release
-at startup (`26.11` and `26.11.0` both work; unknown values fail
+at startup (`26.05` and `26.05.0` both work; unknown values fail
 startup):
 
 ```bash
@@ -250,10 +250,10 @@ SLURM_EMULATOR_SLURM_VERSION=25.05 uv run slurmrestd-emulator
 
 | Release | Newest API version | Served versions |
 |---|---|---|
-| 24.11 | v0.0.43 | v0.0.41–v0.0.43 |
-| 25.05 | v0.0.44 | v0.0.42–v0.0.44 |
-| 25.11 | v0.0.45 | v0.0.43–v0.0.45 |
-| 26.11 (default) | v0.0.46 | v0.0.44–v0.0.46 |
+| 24.11 | v0.0.42 | v0.0.40–v0.0.42 |
+| 25.05 | v0.0.43 | v0.0.41–v0.0.43 |
+| 25.11 | v0.0.44 | v0.0.42–v0.0.44 |
+| 26.05 (default) | v0.0.45 | v0.0.43–v0.0.45 |
 
 Like real slurmrestd, each release serves its newest API version plus
 the two prior; anything outside the window gets the plain-text 404.
@@ -261,8 +261,8 @@ The selection also drives the `meta` envelope, `/conf`, OpenAPI
 `info.version`, CLI `--version` output, and the `rpc_version` of new
 clusters (values already in state files are preserved). Typical
 upgrade test: run a client pinned to `api_version 0.0.44` against
-`25.05`, restart the emulator as `26.11`, and confirm the client
-still works — v0.0.44 stays in 26.11's window. The release registry
+`25.05`, restart the emulator as `26.05`, and confirm the client
+still works — v0.0.43 stays in 26.05's window. The release registry
 lives in `emulator/slurm_version.py`.
 
 ### Authentication
@@ -277,7 +277,7 @@ enforce real HS256 verification. Mint tokens via the control API
 curl -X POST http://localhost:8080/api/token \
   -H "Content-Type: application/json" -d '{"username": "alice"}'
 
-curl http://localhost:6820/slurmdb/v0.0.46/accounts/ \
+curl http://localhost:6820/slurmdb/v0.0.45/accounts/ \
   -H "X-SLURM-USER-TOKEN: <token>"
 ```
 

@@ -1,6 +1,6 @@
 """Byte-level output and exit-code parity tests for the sacctmgr emulator.
 
-Expected shapes come from real Slurm 26.11:
+Expected shapes come from real Slurm 26.05:
 - header/dash rows and column padding: src/common/print_fields.c:66-176
   (every column is followed by a space, including the last);
 - default field sets: src/sacctmgr/*_functions.c;

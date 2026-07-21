@@ -107,7 +107,7 @@ def emulator(tmp_path):
     )
     base = f"http://127.0.0.1:{port}"
     try:
-        _wait_ready(f"{base}/slurm/v0.0.46/ping/")
+        _wait_ready(f"{base}/slurm/v0.0.45/ping/")
         yield base
     finally:
         proc.terminate()
