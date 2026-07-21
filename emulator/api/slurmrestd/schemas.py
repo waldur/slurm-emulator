@@ -1,4 +1,4 @@
-"""Plain-dict serializers for v0.0.46 response objects.
+"""Plain-dict serializers for v0.0.45 response objects.
 
 Field names and paths are copied verbatim from the authoritative
 parser tables in /Users/ilja/workspace/slurm/src/plugins/data_parser/
@@ -301,7 +301,7 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
 def ctld_job_to_dict(job: Job) -> dict[str, Any]:
     """JOB_INFO subset for /slurm/.../jobs (active job view).
 
-    Field names/shapes follow the v0.0.46 JOB_INFO parser
+    Field names/shapes follow the v0.0.45 JOB_INFO parser
     (parsers.c PARSER_ARRAY(JOB_INFO)): ``job_resources`` (with
     ``nodes.count``), ``exit_code``/``derived_exit_code`` (PROCESS_EXIT_CODE),
     ``time_limit``/``priority``/``suspend_time`` as ``*_NO_VAL`` structs, etc.

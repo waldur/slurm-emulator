@@ -18,13 +18,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from emulator import __version__
 from emulator.api.slurmrestd.envelope import (
-    API_VERSION,
     ESLURM_REST_UNKNOWN_URL,
     ESLURM_REST_UNKNOWN_URL_METHOD,
     SlurmrestdRejectError,
     reject_response,
 )
 from emulator.api.slurmrestd.routers import slurmctld, slurmdb
+from emulator.slurm_version import get_selected_release
 
 DEFAULT_PORT = 6820
 
@@ -32,24 +32,26 @@ DEFAULT_PORT = 6820
 def _build_openapi_spec(app: FastAPI) -> dict[str, Any]:
     """FastAPI auto-spec dressed up as the real self-description.
 
-    Real slurmrestd generates its spec at runtime (no v0.0.46 spec
-    file ships in the 26.11 tree), so we do the same rather than
-    vendoring the 15k-line v0.0.45 document.
+    Real slurmrestd generates its spec at runtime (no v0.0.45 spec
+    file ships in the 26.05 tree), so we do the same rather than
+    vendoring the 15k-line v0.0.44 document.
     """
+    api_version = get_selected_release().api_version
     spec = app.openapi()
     spec["info"]["title"] = "Slurm REST API"
-    spec["info"]["version"] = API_VERSION
+    spec["info"]["version"] = api_version
     spec["paths"] = {
-        path.replace("{version}", API_VERSION): operations
+        path.replace("{version}", api_version): operations
         for path, operations in spec.get("paths", {}).items()
     }
     return spec
 
 
 def create_app() -> FastAPI:
+    release = get_selected_release()  # fail fast on an unsupported selection
     app = FastAPI(
         title="Slurm REST API",
-        version=f"{API_VERSION} (slurm-emulator {__version__})",
+        version=f"{release.api_version} (slurm-emulator {__version__})",
         openapi_url=None,  # served manually at the real slurmrestd paths
         docs_url=None,
         redoc_url=None,

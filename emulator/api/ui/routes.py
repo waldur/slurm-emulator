@@ -30,6 +30,7 @@ from emulator.scenarios.scenario_registry import (
     ScenarioType,
 )
 from emulator.scenarios.sequence_scenario import SequenceScenario
+from emulator.slurm_version import get_selected_release
 
 if TYPE_CHECKING:
     from emulator.api.emulator_server import EmulatorServer
@@ -443,6 +444,7 @@ def _config_context(server: EmulatorServer, request: Request) -> dict[str, Any]:
 
     return {
         "request": request,
+        "slurm_release": get_selected_release().release,
         "clusters": clusters,
         "partitions": partitions,
         "node_spec": {"cpus": _NODE_CPUS, "mem_gb": _NODE_MEM_GB, "gpus": _NODE_GPUS},

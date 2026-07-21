@@ -15,6 +15,7 @@ from emulator.core.usage_simulator import UsageSimulator
 from emulator.periodic_limits.calculator import PeriodicLimitsCalculator
 from emulator.periodic_limits.qos_manager import QoSManager
 from emulator.scenarios.scenario_registry import ScenarioRegistry
+from emulator.slurm_version import get_selected_release
 
 
 def apply_settings_to_account(
@@ -354,6 +355,7 @@ class EmulatorServer:
             return {
                 "status": "running",
                 "cluster": cl,
+                "slurm_release": get_selected_release().release,
                 "current_time": self.time_engine.get_current_time(),
                 "current_period": self.time_engine.get_current_quarter(),
                 "accounts": account_status,

@@ -1,6 +1,6 @@
 """Output and exit-code parity tests for the sacct emulator.
 
-Expected shapes come from real Slurm 26.11: default fields
+Expected shapes come from real Slurm 26.05: default fields
 (src/sacct/sacct.h:66), field widths (src/sacct/sacct.c:43-169),
 header/dash/truncation bytes (src/common/print_fields.c:66-176),
 elapsed format (secs2time_str, src/common/parse_time.c:849-874), and

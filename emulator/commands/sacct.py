@@ -1,6 +1,6 @@
 """sacct command emulator for usage reporting.
 
-Output formatting and exit codes mirror real Slurm 26.11:
+Output formatting and exit codes mirror real Slurm 26.05:
 
 * default fields are ``JobID,JobName,Partition,Account,AllocCPUS,
   State,ExitCode`` (src/sacct/sacct.h:66) with the widths from the
@@ -33,7 +33,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional
 
-from emulator import __version__
 from emulator.commands.print_fields import (
     FieldSpec,
     OutputMode,
@@ -44,6 +43,7 @@ from emulator.commands.print_fields import (
 )
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
+from emulator.slurm_version import get_selected_release
 
 # Subset of the real field table (src/sacct/sacct.c:43-169), in table
 # order so prefix matching resolves like options.c:1204-1208 (first
@@ -113,7 +113,7 @@ class SacctEmulator:
         config = self._parse_args(args)
 
         if config.version:
-            return f"slurm-emulator {__version__}"
+            return f"slurm {get_selected_release().release}"
 
         try:
             fields = resolve_format(parse_format_spec(config.format_spec), _REGISTRY)

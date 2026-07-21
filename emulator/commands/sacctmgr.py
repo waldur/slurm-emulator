@@ -1,6 +1,6 @@
 """sacctmgr command emulator.
 
-Output formatting and exit codes mirror real Slurm 26.11:
+Output formatting and exit codes mirror real Slurm 26.05:
 
 * list/show output defaults to fixed-width columns with a dashed
   underline (``src/common/print_fields.c``); ``-p``/``--parsable``
@@ -26,7 +26,6 @@ compatibility (real sacctmgr has no ``-M``).
 
 from typing import Optional
 
-from emulator import __version__
 from emulator.commands.print_fields import (
     FieldSpec,
     OutputMode,
@@ -44,6 +43,7 @@ from emulator.core.database import (
     fold_account,
 )
 from emulator.core.time_engine import TimeEngine
+from emulator.slurm_version import get_selected_release
 
 # Field registry mirroring the prefix-match chain in
 # src/sacctmgr/common.c:219-891. Order matters: tokens resolve to the
@@ -202,6 +202,10 @@ class SacctmgrEmulator:
         if not args:
             return self._show_help()
 
+        # Case matters here: real sacctmgr's -V is version, -v verbose.
+        if args[0] in {"-V", "--version"}:
+            return f"slurm {get_selected_release().release}"
+
         command = args[0].lower()
 
         if command == "add":
@@ -214,8 +218,6 @@ class SacctmgrEmulator:
             return self._handle_list(args[1:])
         if command == "show":
             return self._handle_show(args[1:])
-        if command == "-V":
-            return f"slurm-emulator {__version__}"
         return self._fail(f" error: Unknown command: {command}")
 
     @staticmethod

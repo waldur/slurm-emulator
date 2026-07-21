@@ -66,7 +66,7 @@ Use these commands:
 
 - **Interactive CLI**: `uv run slurm-emulator`
 - **API Server**: `uv run uvicorn emulator.api.emulator_server:app --host 0.0.0.0 --port 8080`
-- **slurmrestd API**: `uv run slurmrestd-emulator` (Slurm 26.11 REST API v0.0.46 on port 6820)
+- **slurmrestd API**: `uv run slurmrestd-emulator` (Slurm 26.05 REST API v0.0.45 on port 6820)
 - **SSH filesystem plane**: `uv run --extra ssh slurm-ssh-emulator` (asyncssh server on port 2222;
   filesystem ops + Slurm CLI dispatch; for running FireCREST v2 against the emulator)
 - **Direct commands**: `uv run sacctmgr`, `uv run sacct`, `uv run sinfo`
@@ -179,10 +179,12 @@ This approach ensures code quality while keeping development velocity for an emu
   startup warning; put behind TLS if exposed beyond localhost). Screenshots and a
   feature walkthrough live in `docs/web-ui.md`. Also includes inline QoS editing,
   per-account association add/remove, and a scenario editor (build/adjust steps)
-- **slurmrestd Emulation** (`emulator/api/slurmrestd/`) - Slurm 26.11 REST API (v0.0.46) on
+- **slurmrestd Emulation** (`emulator/api/slurmrestd/`) - Slurm 26.05 REST API (v0.0.45) on
   port 6820: `/slurmdb` CRUD + `/slurm` controller read paths, real response envelopes,
   JWT-style auth (`X-SLURM-USER-TOKEN`, optional `SLURM_EMULATOR_JWT_KEY` verification).
-  Shares state with the CLI commands via the JSON state files
+  `SLURM_EMULATOR_SLURM_VERSION` selects the emulated release (24.11–26.05, default 26.05);
+  each release serves its newest API version plus the two prior (registry in
+  `emulator/slurm_version.py`). Shares state with the CLI commands via the JSON state files
   (`SLURM_EMULATOR_STATE_FILE` / `SLURM_EMULATOR_TIME_FILE` overrides)
 - **Scenario Runner** (`emulator/scenarios/sequence_scenario.py`) - Complete test scenarios
 
@@ -307,15 +309,18 @@ print('Current quarter:', te.get_current_quarter())
 - `POST /api/accounts` - Create an account (sacctmgr add account stand-in)
 
 ### slurmrestd Endpoints (port 6820)
-- `/slurmdb/v0.0.46/...` - accounts, users, associations, qos, tres, clusters, jobs
+- `/slurmdb/v0.0.45/...` - accounts, users, associations, qos, tres, clusters, jobs
   (one job per usage record, matching `sacct` output)
-- `/slurm/v0.0.46/...` - jobs (+ `POST /job/submit` = sbatch, `DELETE /job/{id}` = scancel),
+- `/slurm/v0.0.45/...` - jobs (+ `POST /job/submit` = sbatch, `DELETE /job/{id}` = scancel),
   nodes, partitions, shares, ping, diag
 - Auth header required: `X-SLURM-USER-TOKEN` (any token accepted unless
   `SLURM_EMULATOR_JWT_KEY` is set)
+- `SLURM_EMULATOR_SLURM_VERSION` picks the emulated release at startup (default 26.05 =
+  v0.0.45). Each release serves its newest API version plus the two prior, e.g. 26.05
+  serves v0.0.43–v0.0.45, 25.05 serves v0.0.41–v0.0.43; versions outside the window 404
 
 ### Job lifecycle (submitted jobs)
-Jobs created via `POST /slurm/v0.0.46/job/submit` (or `sbatch` over SSH) advance
+Jobs created via `POST /slurm/v0.0.45/job/submit` (or `sbatch` over SSH) advance
 PENDING → RUNNING → COMPLETED lazily on read, and emit a usage record on completion
 so they also appear in the accounting (`/slurmdb` / `sacct`) view. Configurable via env:
 - `SLURM_EMULATOR_JOB_CLOCK` = `wall` (default, real-time) or `time` (simulated clock)

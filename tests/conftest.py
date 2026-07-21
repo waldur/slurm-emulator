@@ -12,6 +12,7 @@ def state_env(tmp_path, monkeypatch):
     monkeypatch.setenv("SLURM_EMULATOR_STATE_FILE", str(tmp_path / "db.json"))
     monkeypatch.setenv("SLURM_EMULATOR_TIME_FILE", str(tmp_path / "time.json"))
     monkeypatch.delenv("SLURM_EMULATOR_JWT_KEY", raising=False)
+    monkeypatch.delenv("SLURM_EMULATOR_SLURM_VERSION", raising=False)
     return tmp_path
 
 

@@ -1,4 +1,4 @@
-"""Response envelope and error helpers mirroring slurmrestd v0.0.46.
+"""Response envelope and error helpers mirroring slurmrestd.
 
 Every JSON response carries the openapi_resp envelope — payload key
 first, then ``meta``/``errors``/``warnings`` (parsers.c:12898-12904).
@@ -14,10 +14,7 @@ from typing import Any, Optional
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-SLURM_RELEASE = "26.11.0"
-SLURM_VERSION = {"major": "26", "micro": "0", "minor": "11"}
-API_VERSION = "v0.0.46"
-DATA_PARSER = f"data_parser/{API_VERSION}"
+from emulator.slurm_version import get_selected_release
 
 SLURMDBD_PLUGIN = ("openapi/slurmdbd", "Slurm OpenAPI slurmdbd")
 SLURMCTLD_PLUGIN = ("openapi/slurmctld", "Slurm OpenAPI slurmctld")
@@ -87,10 +84,11 @@ def http_status_for(error_number: int) -> int:
 def validate_version(version: str) -> None:
     """Reject any URL version this build does not serve.
 
-    Real slurmrestd never registers paths for unloaded data_parser
-    plugins, so e.g. ``/slurmdb/v0.0.45/...`` is an unknown URL.
+    Real slurmrestd loads the current data_parser plugin plus the two
+    previous ones, so the selected release serves a three-version
+    window; anything outside it is an unknown URL.
     """
-    if version != API_VERSION:
+    if version not in get_selected_release().accepted_api_versions:
         raise SlurmrestdRejectError(ESLURM_REST_UNKNOWN_URL)
 
 
@@ -98,18 +96,22 @@ def build_meta(request: Request, plugin: tuple[str, str], cluster: str) -> dict[
     user = getattr(request.state, "slurm_user", "root")
     client = request.client
     source = f"[{client.host}]:{client.port}" if client else "[unknown]:0"
+    release = get_selected_release()
+    # Real slurmrestd reports the data_parser plugin that handled the
+    # request, i.e. the version segment from the URL.
+    requested = request.path_params.get("version", release.api_version)
     return {
         "plugin": {
             "type": plugin[0],
             "name": plugin[1],
-            "data_parser": DATA_PARSER,
+            "data_parser": f"data_parser/{requested}",
             "accounting_storage": "accounting_storage/slurmdbd",
         },
         "client": {"source": source, "user": user, "group": user},
         "command": [],
         "slurm": {
-            "version": dict(SLURM_VERSION),
-            "release": SLURM_RELEASE,
+            "version": release.version,
+            "release": release.release,
             "cluster": cluster,
         },
     }
