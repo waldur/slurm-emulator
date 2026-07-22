@@ -165,6 +165,40 @@ def _split_list_operator(key: str) -> tuple[str, str]:
     return key, ""
 
 
+def _set_qos_field(qos: QOS, key: str, value: str) -> bool:
+    """Apply a single ``key=value`` QoS attribute; return whether it was known.
+
+    Shared by ``add qos`` (which errors on an unknown key) and ``modify qos``
+    (which ignores one), so both accept the same field set. Keys are the
+    lower-cased sacctmgr option names (qos_functions.c ``_set_rec``).
+    """
+    if key == "flags":
+        qos.flags = value
+    elif key == "grptres":
+        qos.grp_tres = value
+    elif key == "maxjobs":
+        qos.max_jobs = int(value)
+    elif key == "maxsubmit":
+        qos.max_submit = int(value)
+    elif key == "maxwall":
+        qos.max_wall = value
+    elif key == "mintresperjob":
+        qos.min_tres_per_job = value
+    elif key in {"maxtres", "maxtresperjob"}:
+        qos.max_tres_per_job = value
+    elif key in {"maxtrespernode", "maxtrespn"}:
+        qos.max_tres_per_node = value
+    elif key in {"maxtresperuser", "maxtrespu"}:
+        qos.max_tres_per_user = value
+    elif key == "priority":
+        qos.priority = int(value)
+    elif key == "gracetime":
+        qos.grace_time = int(value)
+    else:
+        return False
+    return True
+
+
 def _apply_list_operator(current: list[str], operator: str, value: str) -> list[str]:
     """Apply a list operator to a CSV grant, preserving order and dropping dups.
 
@@ -872,20 +906,7 @@ class SacctmgrEmulator:
                     f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
                 )
             key, value = arg.split("=", 1)
-            key = key.lower()
-            if key == "flags":
-                qos.flags = value
-            elif key == "grptres":
-                qos.grp_tres = value
-            elif key == "maxjobs":
-                qos.max_jobs = int(value)
-            elif key == "maxsubmit":
-                qos.max_submit = int(value)
-            elif key == "maxwall":
-                qos.max_wall = value
-            elif key == "mintresperjob":
-                qos.min_tres_per_job = value
-            else:
+            if not _set_qos_field(qos, key.lower(), value):
                 return self._fail(
                     f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
                 )
@@ -920,19 +941,7 @@ class SacctmgrEmulator:
             if "=" not in arg:
                 return self._fail(f" Unknown option: {arg}")
             key, value = arg.split("=", 1)
-            key = key.lower()
-            if key == "flags":
-                qos.flags = value
-            elif key == "grptres":
-                qos.grp_tres = value
-            elif key == "maxjobs":
-                qos.max_jobs = int(value)
-            elif key == "maxsubmit":
-                qos.max_submit = int(value)
-            elif key == "maxwall":
-                qos.max_wall = value
-            elif key == "mintresperjob":
-                qos.min_tres_per_job = value
+            _set_qos_field(qos, key.lower(), value)
 
         return f" Modified qos...\n  {qos_name}"
 

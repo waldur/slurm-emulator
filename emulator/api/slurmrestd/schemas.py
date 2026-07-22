@@ -142,6 +142,22 @@ def _lineage(assoc: Association, account: Optional[Account]) -> str:
     return path
 
 
+def _assoc_qos_list(assoc: Association, account: Optional[Account]) -> list[str]:
+    if assoc.qos_list:
+        return list(assoc.qos_list)
+    if account and not assoc.user:
+        return [q for q in account.qos.split(",") if q]
+    return []
+
+
+def _assoc_default_qos(assoc: Association, account: Optional[Account]) -> str:
+    if assoc.def_qos:
+        return assoc.def_qos
+    if account:
+        return account.default_qos or account.qos.split(",")[0]
+    return "normal"
+
+
 def assoc_to_dict(
     assoc: Association, account: Optional[Account], is_default: bool = True
 ) -> dict[str, Any]:
@@ -164,14 +180,13 @@ def assoc_to_dict(
         "parent_account": assoc.parent or "",
         "is_default": is_default,
         "lineage": _lineage(assoc, account),
-        # account.qos holds a CSV QoS list (sacctmgr "qos=a,b" semantics);
-        # the REST payload renders it as a list of names.
-        "qos": ([q for q in account.qos.split(",") if q] if account and not assoc.user else []),
+        # A per-association grant (slurmdb_assoc_rec_t.qos_list) wins; otherwise
+        # an account-level row renders the account QoS list, and a user row with
+        # no grant renders nothing of its own.
+        "qos": _assoc_qos_list(assoc, account),
         "shares_raw": account.fairshare if account else 1,
         "comment": "",
-        "default": {
-            "qos": (account.default_qos or account.qos.split(",")[0]) if account else "normal"
-        },
+        "default": {"qos": _assoc_default_qos(assoc, account)},
         "flags": [],
         "max": {
             "jobs": {"active": uint_no_val(), "total": uint_no_val()},
@@ -191,18 +206,54 @@ def assoc_to_dict(
     }
 
 
+def _parse_slurm_duration_to_minutes(value: str) -> Optional[int]:
+    """Convert a SLURM duration to whole minutes.
+
+    Accepts ``minutes``, ``MM:SS``, ``HH:MM:SS`` and ``[days-]HH[:MM[:SS]]``
+    (slurm_time_str2mins). Returns None for empty / UNLIMITED / INFINITE.
+    Partial minutes from a seconds component round up. Falls back to the
+    digits-only reading if the shape is unrecognised.
+    """
+    v = value.strip()
+    if not v or v.upper() in {"UNLIMITED", "INFINITE"}:
+        return None
+    has_days = "-" in v
+    days = 0
+    if has_days:
+        day_str, _, v = v.partition("-")
+        try:
+            days = int(day_str)
+        except ValueError:
+            days = 0
+    try:
+        nums = [int(p) for p in v.split(":")]
+    except ValueError:
+        digits = "".join(ch for ch in value if ch.isdigit())
+        return int(digits) if digits else None
+    if has_days:
+        # after a days- prefix the remainder counts hours, then minutes, seconds
+        hours = nums[0] if len(nums) > 0 else 0
+        minutes = nums[1] if len(nums) > 1 else 0
+        seconds = nums[2] if len(nums) > 2 else 0
+    elif len(nums) == 1:
+        hours, minutes, seconds = 0, nums[0], 0
+    elif len(nums) == 2:
+        hours, minutes, seconds = 0, nums[0], nums[1]  # MM:SS
+    else:
+        hours, minutes, seconds = nums[0], nums[1], nums[2]  # HH:MM:SS
+    return days * 1440 + hours * 60 + minutes + (seconds + 59) // 60
+
+
 def qos_to_dict(qos: QOS, qos_id: int) -> dict[str, Any]:
-    max_wall = uint_no_val()
-    if qos.max_wall:
-        digits = "".join(ch for ch in qos.max_wall if ch.isdigit())
-        if digits:
-            max_wall = uint_no_val(int(digits))
+    minutes = _parse_slurm_duration_to_minutes(qos.max_wall) if qos.max_wall else None
+    max_wall = uint_no_val(minutes)
     return {
         "name": qos.name,
         "description": qos.name,
         "id": qos_id,
         "flags": [f for f in qos.flags.split(",") if f] if qos.flags else [],
-        "priority": uint_no_val(0),
+        "priority": uint_no_val(qos.priority if qos.priority >= 0 else None),
+        "grace_time": uint_no_val(qos.grace_time if qos.grace_time >= 0 else None),
         "usage_factor": {"set": True, "infinite": False, "number": 1.0},
         "usage_threshold": {"set": False, "infinite": False, "number": 0.0},
         "limits": {
@@ -211,7 +262,12 @@ def qos_to_dict(qos: QOS, qos_id: int) -> dict[str, Any]:
                 "tres": {
                     "total": tres_list_from_str(qos.grp_tres),
                     "minutes": {"total": [], "per": {"job": []}},
-                    "per": {"job": [], "user": [], "account": [], "node": []},
+                    "per": {
+                        "job": tres_list_from_str(qos.max_tres_per_job),
+                        "user": tres_list_from_str(qos.max_tres_per_user),
+                        "account": [],
+                        "node": tres_list_from_str(qos.max_tres_per_node),
+                    },
                 },
                 "wall_clock": {"per": {"job": max_wall, "qos": uint_no_val()}},
                 "jobs": {

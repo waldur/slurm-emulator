@@ -666,15 +666,28 @@ def _upsert_association(state: RequestState, entry: dict[str, Any]) -> bool:
         state.database.add_user(user, account)
 
     if user:
+        qos_body = entry.get("qos")
+        qos_list = [str(q) for q in qos_body] if isinstance(qos_body, list) and qos_body else None
+        default_qos = (entry.get("default") or {}).get("qos")
         existing = state.database.get_association(
             user, account, cluster=cluster, partition=partition
         )
         if existing is not None:
-            # Re-POST updates the row; absent limits stay untouched.
+            # Re-POST updates the row; absent fields stay untouched.
             existing.limits.update(limits)
+            if qos_list is not None:
+                existing.qos_list = qos_list
+            if default_qos:
+                existing.def_qos = str(default_qos)
         else:
             state.database.add_association(
-                user, account, limits=limits, cluster=cluster, partition=partition
+                user,
+                account,
+                limits=limits,
+                cluster=cluster,
+                partition=partition,
+                qos_list=qos_list,
+                def_qos=str(default_qos) if default_qos else "",
             )
     else:
         # Account-level association: created by add_account; apply

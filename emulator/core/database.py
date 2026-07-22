@@ -95,7 +95,7 @@ class User:
 
 @dataclass
 class QOS:
-    """SLURM Quality of Service."""
+    """SLURM Quality of Service (subset of slurmdb_qos_rec_t)."""
 
     name: str
     flags: str = ""
@@ -104,6 +104,14 @@ class QOS:
     max_submit: int = -1
     max_wall: str = ""
     min_tres_per_job: str = ""
+    # slurmdb_qos_rec_t: priority (slurmdb.h:1202), grace_time seconds
+    # (slurmdb.h:1082), and per-job/node/user TRES limits
+    # (max_tres_pj/pn/pu, slurmdb.h:1140/1146/1152).
+    priority: int = -1
+    grace_time: int = -1
+    max_tres_per_job: str = ""
+    max_tres_per_node: str = ""
+    max_tres_per_user: str = ""
 
 
 @dataclass
