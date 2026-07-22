@@ -142,6 +142,22 @@ def _lineage(assoc: Association, account: Optional[Account]) -> str:
     return path
 
 
+def _assoc_qos_list(assoc: Association, account: Optional[Account]) -> list[str]:
+    if assoc.qos_list:
+        return list(assoc.qos_list)
+    if account and not assoc.user:
+        return [q for q in account.qos.split(",") if q]
+    return []
+
+
+def _assoc_default_qos(assoc: Association, account: Optional[Account]) -> str:
+    if assoc.def_qos:
+        return assoc.def_qos
+    if account:
+        return account.default_qos or account.qos.split(",")[0]
+    return "normal"
+
+
 def assoc_to_dict(
     assoc: Association, account: Optional[Account], is_default: bool = True
 ) -> dict[str, Any]:
@@ -164,14 +180,13 @@ def assoc_to_dict(
         "parent_account": assoc.parent or "",
         "is_default": is_default,
         "lineage": _lineage(assoc, account),
-        # account.qos holds a CSV QoS list (sacctmgr "qos=a,b" semantics);
-        # the REST payload renders it as a list of names.
-        "qos": ([q for q in account.qos.split(",") if q] if account and not assoc.user else []),
+        # A per-association grant (slurmdb_assoc_rec_t.qos_list) wins; otherwise
+        # an account-level row renders the account QoS list, and a user row with
+        # no grant renders nothing of its own.
+        "qos": _assoc_qos_list(assoc, account),
         "shares_raw": account.fairshare if account else 1,
         "comment": "",
-        "default": {
-            "qos": (account.default_qos or account.qos.split(",")[0]) if account else "normal"
-        },
+        "default": {"qos": _assoc_default_qos(assoc, account)},
         "flags": [],
         "max": {
             "jobs": {"active": uint_no_val(), "total": uint_no_val()},
@@ -191,27 +206,70 @@ def assoc_to_dict(
     }
 
 
+def _parse_slurm_duration_to_minutes(value: str) -> Optional[int]:
+    """Convert a SLURM duration to whole minutes.
+
+    Accepts ``minutes``, ``MM:SS``, ``HH:MM:SS`` and ``[days-]HH[:MM[:SS]]``
+    (slurm_time_str2mins). Returns None for empty / UNLIMITED / INFINITE.
+    Partial minutes from a seconds component round up. Falls back to the
+    digits-only reading if the shape is unrecognised.
+    """
+    v = value.strip()
+    if not v or v.upper() in {"UNLIMITED", "INFINITE"}:
+        return None
+    has_days = "-" in v
+    days = 0
+    if has_days:
+        day_str, _, v = v.partition("-")
+        try:
+            days = int(day_str)
+        except ValueError:
+            days = 0
+    try:
+        nums = [int(p) for p in v.split(":")]
+    except ValueError:
+        digits = "".join(ch for ch in value if ch.isdigit())
+        return int(digits) if digits else None
+    if has_days:
+        # after a days- prefix the remainder counts hours, then minutes, seconds
+        hours = nums[0] if len(nums) > 0 else 0
+        minutes = nums[1] if len(nums) > 1 else 0
+        seconds = nums[2] if len(nums) > 2 else 0
+    elif len(nums) == 1:
+        hours, minutes, seconds = 0, nums[0], 0
+    elif len(nums) == 2:
+        hours, minutes, seconds = 0, nums[0], nums[1]  # MM:SS
+    else:
+        hours, minutes, seconds = nums[0], nums[1], nums[2]  # HH:MM:SS
+    return days * 1440 + hours * 60 + minutes + (seconds + 59) // 60
+
+
 def qos_to_dict(qos: QOS, qos_id: int) -> dict[str, Any]:
-    max_wall = uint_no_val()
-    if qos.max_wall:
-        digits = "".join(ch for ch in qos.max_wall if ch.isdigit())
-        if digits:
-            max_wall = uint_no_val(int(digits))
+    minutes = _parse_slurm_duration_to_minutes(qos.max_wall) if qos.max_wall else None
+    max_wall = uint_no_val(minutes)
     return {
         "name": qos.name,
         "description": qos.name,
         "id": qos_id,
         "flags": [f for f in qos.flags.split(",") if f] if qos.flags else [],
-        "priority": uint_no_val(0),
+        "priority": uint_no_val(qos.priority if qos.priority >= 0 else None),
         "usage_factor": {"set": True, "infinite": False, "number": 1.0},
         "usage_threshold": {"set": False, "infinite": False, "number": 0.0},
         "limits": {
+            # Real v0.0.46 QOS: grace_time is a plain UINT32 (seconds) at
+            # limits/grace_time (parsers.c PARSER_ARRAY(QOS)), not a NO_VAL struct.
+            "grace_time": max(qos.grace_time, 0),
             "max": {
                 "active_jobs": {"accruing": uint_no_val(), "count": uint_no_val()},
                 "tres": {
                     "total": tres_list_from_str(qos.grp_tres),
                     "minutes": {"total": [], "per": {"job": []}},
-                    "per": {"job": [], "user": [], "account": [], "node": []},
+                    "per": {
+                        "job": tres_list_from_str(qos.max_tres_per_job),
+                        "user": tres_list_from_str(qos.max_tres_per_user),
+                        "account": [],
+                        "node": tres_list_from_str(qos.max_tres_per_node),
+                    },
                 },
                 "wall_clock": {"per": {"job": max_wall, "qos": uint_no_val()}},
                 "jobs": {
@@ -401,6 +459,79 @@ def _load_partition_ranges() -> dict[str, tuple[int, int]]:
 PARTITION_RANGES = _load_partition_ranges()
 
 
+# Per-partition QoS gate: AllowQos / DenyQos (part_record.h:65/79) plus the
+# partition's own assigned QOS (qos_char, part_record.h:106). Config mirrors the
+# topology env var: SLURM_EMULATOR_PARTITION_QOS holds ``name=mode:csv`` entries
+# (mode ∈ allow|deny|qos) separated by ``;``; several entries may target the
+# same partition (e.g. an allow-list plus an assigned QoS). Empty ⇒ every
+# partition permits all QoS, preserving the prior hardcoded-empty behaviour.
+_MODE_KEYS = {"allow": "allowed", "deny": "deny", "qos": "assigned"}
+
+
+def _empty_partition_qos() -> dict[str, str]:
+    return {"allowed": "", "deny": "", "assigned": ""}
+
+
+def _parse_partition_qos(spec: str) -> dict[str, dict[str, str]]:
+    """Parse ``name=mode:csv;…`` into ``{name: {allowed, deny, assigned}}``."""
+    cfg: dict[str, dict[str, str]] = {}
+    for entry in spec.split(";"):
+        entry = entry.strip()
+        if not entry or "=" not in entry or ":" not in entry:
+            continue
+        name, _, rest = entry.partition("=")
+        mode, _, values = rest.partition(":")
+        name, mode, values = name.strip(), mode.strip().lower(), values.strip()
+        if not name or mode not in _MODE_KEYS:
+            continue
+        cfg.setdefault(name, _empty_partition_qos())[_MODE_KEYS[mode]] = values
+    return cfg
+
+
+def _load_partition_qos() -> dict[str, dict[str, str]]:
+    return _parse_partition_qos(os.environ.get("SLURM_EMULATOR_PARTITION_QOS", "").strip())
+
+
+PARTITION_QOS = _load_partition_qos()
+
+
+def partition_allows_qos(
+    partition: str, qos: str, config: Optional[dict[str, dict[str, str]]] = None
+) -> bool:
+    """Return whether ``qos`` may run in ``partition`` under the AllowQos/DenyQos gate.
+
+    An unconfigured partition (or empty AllowQos and DenyQos) permits all QoS.
+    A non-empty AllowQos is exclusive and suppresses DenyQos (slurm.conf.5).
+    """
+    cfg = PARTITION_QOS if config is None else config
+    part = cfg.get(partition)
+    if not part:
+        return True
+    allowed = [q for q in part.get("allowed", "").split(",") if q]
+    if allowed:
+        return qos in allowed
+    deny = [q for q in part.get("deny", "").split(",") if q]
+    if deny:
+        return qos not in deny
+    return True
+
+
+def set_partition_qos(
+    partition: str,
+    allowed: Optional[str] = None,
+    deny: Optional[str] = None,
+    assigned: Optional[str] = None,
+) -> None:
+    """Set the QoS gate for a partition (test/controller seed for the config)."""
+    part = PARTITION_QOS.setdefault(partition, _empty_partition_qos())
+    if allowed is not None:
+        part["allowed"] = allowed
+    if deny is not None:
+        part["deny"] = deny
+    if assigned is not None:
+        part["assigned"] = assigned
+
+
 def _node_names(partition: str) -> list[str]:
     first, last = PARTITION_RANGES[partition]
     return [f"node{i:03d}" for i in range(first, last + 1)]
@@ -464,7 +595,7 @@ def partition_to_dict(name: str) -> dict[str, Any]:
         "priority": {"job_factor": 1, "tier": 1},
         "accounts": {"allowed": "", "deny": ""},
         "groups": {"allowed": ""},
-        "qos": {"allowed": "", "deny": "", "assigned": ""},
+        "qos": dict(PARTITION_QOS.get(name, _empty_partition_qos())),
     }
 
 

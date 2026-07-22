@@ -95,7 +95,7 @@ class User:
 
 @dataclass
 class QOS:
-    """SLURM Quality of Service."""
+    """SLURM Quality of Service (subset of slurmdb_qos_rec_t)."""
 
     name: str
     flags: str = ""
@@ -104,6 +104,14 @@ class QOS:
     max_submit: int = -1
     max_wall: str = ""
     min_tres_per_job: str = ""
+    # slurmdb_qos_rec_t: priority (slurmdb.h:1202), grace_time seconds
+    # (slurmdb.h:1082), and per-job/node/user TRES limits
+    # (max_tres_pj/pn/pu, slurmdb.h:1140/1146/1152).
+    priority: int = -1
+    grace_time: int = -1
+    max_tres_per_job: str = ""
+    max_tres_per_node: str = ""
+    max_tres_per_user: str = ""
 
 
 @dataclass
@@ -127,6 +135,11 @@ class Association:
     # ``assoc->parent_acct`` is NULL for user rows (see
     # as_mysql_assoc.c:2116-2126) so ParentName prints blank for them.
     parent: Optional[str] = None
+    # QoS the association may request (slurmdb_assoc_rec_t.qos_list,
+    # slurm/slurmdb.h:708) and its default (def_qos_id, slurmdb.h:612).
+    # Empty qos_list means "inherit the account/parent QOS".
+    qos_list: list[str] = field(default_factory=list)
+    def_qos: str = ""
 
     def __post_init__(self) -> None:
         """Fold the account and parent account names to lower case.
@@ -391,6 +404,8 @@ class SlurmDatabase:
         limits: Optional[dict[str, int]] = None,
         cluster: Optional[str] = None,
         partition: Optional[str] = None,
+        qos_list: Optional[list[str]] = None,
+        def_qos: str = "",
     ) -> None:
         """Add user-account association.
 
@@ -399,6 +414,9 @@ class SlurmDatabase:
         multiple partition-scoped rows must iterate themselves —
         matches real Slurm where each (user, account, cluster, partition)
         tuple is a distinct slurmdb_assoc_rec_t.
+
+        ``qos_list`` / ``def_qos`` seed the association's QosLevel and
+        DefaultQOS (slurmdb_assoc_rec_t.qos_list / def_qos_id).
         """
         cl = cluster or self.current_cluster
         key = self._association_key(user, account, cl, partition)
@@ -408,6 +426,8 @@ class SlurmDatabase:
             limits=limits or {},
             cluster=cl,
             partition=partition,
+            qos_list=list(qos_list) if qos_list else [],
+            def_qos=def_qos,
         )
 
     def get_association(
