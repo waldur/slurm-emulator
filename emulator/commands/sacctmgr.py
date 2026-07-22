@@ -149,6 +149,80 @@ _QOS_DEFAULT = (  # qos_functions.c:1178-1193
 _TRES_DEFAULT = "Type,Name%15,ID"  # tres_function.c:152
 
 
+def _split_list_operator(key: str) -> tuple[str, str]:
+    """Split a set-clause key into (base_key, operator).
+
+    Real sacctmgr list-valued fields (QosLevel, account ``qos``) accept the
+    ``=`` (replace), ``+=`` (add) and ``-=`` (remove) operators handled by
+    ``slurm_addto_char_list_with_case`` (src/common/xstring.c) via the
+    trailing ``+``/``-`` on the token. Returns e.g. ("qos", "+") for
+    ``qos+``. A plain key returns ("qos", "").
+    """
+    if key.endswith("+"):
+        return key[:-1], "+"
+    if key.endswith("-"):
+        return key[:-1], "-"
+    return key, ""
+
+
+def _set_qos_field(qos: QOS, key: str, value: str) -> bool:
+    """Apply a single ``key=value`` QoS attribute; return whether it was known.
+
+    Shared by ``add qos`` (which errors on an unknown key) and ``modify qos``
+    (which ignores one), so both accept the same field set. Keys are the
+    lower-cased sacctmgr option names (qos_functions.c ``_set_rec``).
+    """
+    if key == "flags":
+        qos.flags = value
+    elif key == "grptres":
+        qos.grp_tres = value
+    elif key == "maxjobs":
+        qos.max_jobs = int(value)
+    elif key == "maxsubmit":
+        qos.max_submit = int(value)
+    elif key == "maxwall":
+        qos.max_wall = value
+    elif key == "mintresperjob":
+        qos.min_tres_per_job = value
+    elif key in {"maxtres", "maxtresperjob"}:
+        qos.max_tres_per_job = value
+    elif key in {"maxtrespernode", "maxtrespn"}:
+        qos.max_tres_per_node = value
+    elif key in {"maxtresperuser", "maxtrespu"}:
+        qos.max_tres_per_user = value
+    elif key == "priority":
+        qos.priority = int(value)
+    elif key == "gracetime":
+        qos.grace_time = int(value)
+    else:
+        return False
+    return True
+
+
+def _apply_list_operator(current: list[str], operator: str, value: str) -> list[str]:
+    """Apply a list operator to a CSV grant, preserving order and dropping dups.
+
+    ``operator`` is "" (replace), "+" (add missing), or "-" (remove present).
+    ``value`` is a comma-separated list. Mirrors real sacctmgr where ``=``
+    replaces the whole list and ``+=``/``-=`` add/remove members.
+    """
+    incoming = [v for v in value.split(",") if v]
+    if operator == "":
+        result: list[str] = []
+        for v in incoming:
+            if v not in result:
+                result.append(v)
+        return result
+    result = list(current)
+    if operator == "+":
+        for v in incoming:
+            if v not in result:
+                result.append(v)
+    elif operator == "-":
+        result = [v for v in result if v not in incoming]
+    return result
+
+
 class SacctmgrEmulator:
     """Emulates sacctmgr commands for account management."""
 
@@ -417,6 +491,8 @@ class SacctmgrEmulator:
         default_account = ""
         target_cluster = None
         partitions: list[str] = []
+        qos_list: list[str] = []
+        def_qos = ""
 
         # Parse parameters
         for arg in args[1:]:
@@ -427,6 +503,12 @@ class SacctmgrEmulator:
                 default_account = arg.split("=", 1)[1]
             elif arg.startswith("cluster="):
                 target_cluster = arg.split("=", 1)[1]
+            elif lowered.startswith(("qoslevel=", "qos=")):
+                # QosLevel (slurmdb_assoc_rec_t.qos_list) — the set of QoS the
+                # association may request. ``qos`` is a real prefix alias.
+                qos_list = _apply_list_operator([], "", arg.split("=", 1)[1])
+            elif lowered.startswith("defaultqos="):
+                def_qos = arg.split("=", 1)[1]
             elif lowered.startswith("partitions="):
                 # Comma-joined list of partition names. Real Slurm's
                 # prefix-match also lets ``Partition=`` (singular) reach
@@ -467,12 +549,16 @@ class SacctmgrEmulator:
                         account,
                         cluster=target_cluster,
                         partition=part,
+                        qos_list=qos_list,
+                        def_qos=def_qos,
                     )
             else:
                 self.database.add_association(
                     username,
                     account,
                     cluster=target_cluster,
+                    qos_list=qos_list,
+                    def_qos=def_qos,
                 )
 
         self.database.save_state()
@@ -556,12 +642,24 @@ class SacctmgrEmulator:
                 key, value = arg.split("=", 1)
                 key = key.lower()
 
+                base_key, operator = _split_list_operator(key)
+
                 if key == "fairshare":
                     account.fairshare = int(value)
                     modifications.append(f"fairshare={value}")
-                elif key == "qos":
-                    account.qos = value
-                    modifications.append(f"qos={value}")
+                elif base_key in {"qos", "qoslevel"}:
+                    # Account QoS list with =/+=/-= operators. Real account modify
+                    # routes through QosLevel (association_functions.c:518,
+                    # MAX(command_len, 1)), so the "qos" prefix and the canonical
+                    # "QosLevel" both match. += / -= mutate the list in place so an
+                    # operational QoS (e.g. the pause/downscale swap) can be layered
+                    # on and peeled off without clobbering an existing multi-QoS grant.
+                    current = [q for q in account.qos.split(",") if q]
+                    account.qos = ",".join(_apply_list_operator(current, operator, value))
+                    modifications.append(f"{key}={value}")
+                elif key == "defaultqos":
+                    account.default_qos = value
+                    modifications.append(f"defaultqos={value}")
                 elif key.startswith("grptresmin"):
                     # Handle GrpTRESMins=billing=72000 or GrpTRESMins=cpu=600000,ram=614400
                     tres_spec = value
@@ -606,32 +704,85 @@ class SacctmgrEmulator:
         return f" Modified account...\n  {account.name}\n Settings\n  " + "\n  ".join(modifications)
 
     def _modify_user(self, args: list[str]) -> str:
-        """Modify user command."""
-        # Parse user modification - typically for per-user limits
-        if "where" not in args:
-            return self._fail(" error: No where clause found")
+        """Modify user command.
 
-        where_index = args.index("where")
-        set_index = -1
-
-        for i, arg in enumerate(args):
-            if arg.lower() == "set":
-                set_index = i
-                break
-
+        Applies QosLevel (=/+=/-=) and DefaultQOS to the matching user
+        association rows (slurmdb_assoc_rec_t.qos_list / def_qos_id). The
+        ``set`` and ``where`` clauses may appear in either order, matching
+        real sacctmgr (``modify user <name> set … where …`` and
+        ``modify user where name=… set …``).
+        """
+        set_index = next((i for i, a in enumerate(args) if a.lower() == "set"), -1)
         if set_index == -1:
             return self._fail(" error: No 'set' clause found")
+        where_index = next((i for i, a in enumerate(args) if a.lower() == "where"), -1)
 
-        # Parse where clause for account
+        if where_index != -1 and where_index < set_index:
+            where_args = args[where_index + 1 : set_index]
+            set_args = args[set_index + 1 :]
+            pre_args = args[:where_index]
+        elif where_index != -1:
+            set_args = args[set_index + 1 : where_index]
+            where_args = args[where_index + 1 :]
+            pre_args = args[:set_index]
+        else:
+            set_args = args[set_index + 1 :]
+            where_args = []
+            pre_args = args[:set_index]
+
+        # Username: positional token before the first clause, else where name=.
+        username = ""
+        for a in pre_args:
+            if "=" not in a and a.lower() not in {"set", "where", "user", "users"}:
+                username = a
+                break
         account = ""
-        for arg in args[where_index + 1 : set_index]:
-            if arg.startswith("account="):
-                account = arg.split("=", 1)[1]
+        partition = None
+        for a in where_args:
+            low = a.lower()
+            if low.startswith("account="):
+                account = a.split("=", 1)[1]
+            elif low.startswith("partition="):
+                partition = a.split("=", 1)[1]
+            elif low.startswith("name=") and not username:
+                username = a.split("=", 1)[1]
 
-        if not account:
-            return self._fail(" error: No account specified in where clause")
+        if not username:
+            return self._fail(" error: No user name specified")
 
-        return f" Modified user associations for account {account}"
+        folded_account = fold_account(account) if account else ""
+        rows = [
+            a
+            for a in self.database.associations.values()
+            if a.user == username
+            and (not folded_account or a.account == folded_account)
+            and (partition is None or a.partition == partition)
+        ]
+        if not rows:
+            return self._nothing_modified()
+
+        modifications: list[str] = []
+        for arg in set_args:
+            if "=" not in arg:
+                continue
+            key, value = arg.split("=", 1)
+            base_key, operator = _split_list_operator(key.lower())
+            if base_key in {"qoslevel", "qos"}:
+                for row in rows:
+                    row.qos_list = _apply_list_operator(row.qos_list, operator, value)
+                modifications.append(f"{key}={value}")
+            elif base_key == "defaultqos":
+                for row in rows:
+                    row.def_qos = value
+                modifications.append(f"defaultqos={value}")
+
+        if not modifications:
+            return self._nothing_modified()
+
+        self.database.save_state()
+        return f" Modified user associations...\n  {username}\n Settings\n  " + "\n  ".join(
+            modifications
+        )
 
     def _remove_account(self, args: list[str]) -> str:
         """Remove account command."""
@@ -757,20 +908,7 @@ class SacctmgrEmulator:
                     f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
                 )
             key, value = arg.split("=", 1)
-            key = key.lower()
-            if key == "flags":
-                qos.flags = value
-            elif key == "grptres":
-                qos.grp_tres = value
-            elif key == "maxjobs":
-                qos.max_jobs = int(value)
-            elif key == "maxsubmit":
-                qos.max_submit = int(value)
-            elif key == "maxwall":
-                qos.max_wall = value
-            elif key == "mintresperjob":
-                qos.min_tres_per_job = value
-            else:
+            if not _set_qos_field(qos, key.lower(), value):
                 return self._fail(
                     f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
                 )
@@ -805,19 +943,7 @@ class SacctmgrEmulator:
             if "=" not in arg:
                 return self._fail(f" Unknown option: {arg}")
             key, value = arg.split("=", 1)
-            key = key.lower()
-            if key == "flags":
-                qos.flags = value
-            elif key == "grptres":
-                qos.grp_tres = value
-            elif key == "maxjobs":
-                qos.max_jobs = int(value)
-            elif key == "maxsubmit":
-                qos.max_submit = int(value)
-            elif key == "maxwall":
-                qos.max_wall = value
-            elif key == "mintresperjob":
-                qos.min_tres_per_job = value
+            _set_qos_field(qos, key.lower(), value)
 
         return f" Modified qos...\n  {qos_name}"
 
@@ -949,6 +1075,12 @@ class SacctmgrEmulator:
     def _assoc_row(self, assoc: Association) -> dict[str, str]:
         account_obj = self.database.get_account(assoc.account)
         limits = ",".join(f"{k}={v}" for k, v in assoc.limits.items()) if assoc.limits else ""
+        # An explicit per-association qos_list wins; otherwise the row inherits
+        # the account QOS column (real Slurm shows inherited QoS on the assoc).
+        if assoc.qos_list:
+            qos = ",".join(assoc.qos_list)
+        else:
+            qos = account_obj.qos if account_obj else ""
         return {
             "Cluster": assoc.cluster,
             "Account": assoc.account,
@@ -957,7 +1089,8 @@ class SacctmgrEmulator:
             # parent_acct lives on the account-level row (empty User);
             # user rows print blank (as_mysql_assoc.c:2116-2126).
             "ParentName": (assoc.parent or "") if assoc.user == "" else "",
-            "QOS": account_obj.qos if account_obj else "",
+            "QOS": qos,
+            "Def QOS": assoc.def_qos,
             "MaxTRESMins": limits,
         }
 
