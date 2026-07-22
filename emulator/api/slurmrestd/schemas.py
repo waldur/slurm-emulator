@@ -401,6 +401,79 @@ def _load_partition_ranges() -> dict[str, tuple[int, int]]:
 PARTITION_RANGES = _load_partition_ranges()
 
 
+# Per-partition QoS gate: AllowQos / DenyQos (part_record.h:65/79) plus the
+# partition's own assigned QOS (qos_char, part_record.h:106). Config mirrors the
+# topology env var: SLURM_EMULATOR_PARTITION_QOS holds ``name=mode:csv`` entries
+# (mode ∈ allow|deny|qos) separated by ``;``; several entries may target the
+# same partition (e.g. an allow-list plus an assigned QoS). Empty ⇒ every
+# partition permits all QoS, preserving the prior hardcoded-empty behaviour.
+_MODE_KEYS = {"allow": "allowed", "deny": "deny", "qos": "assigned"}
+
+
+def _empty_partition_qos() -> dict[str, str]:
+    return {"allowed": "", "deny": "", "assigned": ""}
+
+
+def _parse_partition_qos(spec: str) -> dict[str, dict[str, str]]:
+    """Parse ``name=mode:csv;…`` into ``{name: {allowed, deny, assigned}}``."""
+    cfg: dict[str, dict[str, str]] = {}
+    for entry in spec.split(";"):
+        entry = entry.strip()
+        if not entry or "=" not in entry or ":" not in entry:
+            continue
+        name, _, rest = entry.partition("=")
+        mode, _, values = rest.partition(":")
+        name, mode, values = name.strip(), mode.strip().lower(), values.strip()
+        if not name or mode not in _MODE_KEYS:
+            continue
+        cfg.setdefault(name, _empty_partition_qos())[_MODE_KEYS[mode]] = values
+    return cfg
+
+
+def _load_partition_qos() -> dict[str, dict[str, str]]:
+    return _parse_partition_qos(os.environ.get("SLURM_EMULATOR_PARTITION_QOS", "").strip())
+
+
+PARTITION_QOS = _load_partition_qos()
+
+
+def partition_allows_qos(
+    partition: str, qos: str, config: Optional[dict[str, dict[str, str]]] = None
+) -> bool:
+    """Return whether ``qos`` may run in ``partition`` under the AllowQos/DenyQos gate.
+
+    An unconfigured partition (or empty AllowQos and DenyQos) permits all QoS.
+    A non-empty AllowQos is exclusive and suppresses DenyQos (slurm.conf.5).
+    """
+    cfg = PARTITION_QOS if config is None else config
+    part = cfg.get(partition)
+    if not part:
+        return True
+    allowed = [q for q in part.get("allowed", "").split(",") if q]
+    if allowed:
+        return qos in allowed
+    deny = [q for q in part.get("deny", "").split(",") if q]
+    if deny:
+        return qos not in deny
+    return True
+
+
+def set_partition_qos(
+    partition: str,
+    allowed: Optional[str] = None,
+    deny: Optional[str] = None,
+    assigned: Optional[str] = None,
+) -> None:
+    """Set the QoS gate for a partition (test/controller seed for the config)."""
+    part = PARTITION_QOS.setdefault(partition, _empty_partition_qos())
+    if allowed is not None:
+        part["allowed"] = allowed
+    if deny is not None:
+        part["deny"] = deny
+    if assigned is not None:
+        part["assigned"] = assigned
+
+
 def _node_names(partition: str) -> list[str]:
     first, last = PARTITION_RANGES[partition]
     return [f"node{i:03d}" for i in range(first, last + 1)]
@@ -464,7 +537,7 @@ def partition_to_dict(name: str) -> dict[str, Any]:
         "priority": {"job_factor": 1, "tier": 1},
         "accounts": {"allowed": "", "deny": ""},
         "groups": {"allowed": ""},
-        "qos": {"allowed": "", "deny": "", "assigned": ""},
+        "qos": dict(PARTITION_QOS.get(name, _empty_partition_qos())),
     }
 
 
