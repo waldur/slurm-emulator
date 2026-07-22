@@ -4,6 +4,11 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.0] - 2026-07-22
+
+### Added
+- Emulate SLURM QoS and partition gating to support enforcement test-driven development
+
 ## [0.8.0] - 2026-07-01
 
 ### Added
