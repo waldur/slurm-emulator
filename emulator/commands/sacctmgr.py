@@ -693,6 +693,14 @@ class SacctmgrEmulator:
                     else:
                         account.limits["GrpTRES"] = int(tres_spec)
                     modifications.append(f"GrpTRES={value}")
+                elif key.startswith("grpsubmit"):
+                    # Scalar GrpSubmitJobs cap (blocks new job submission when 0).
+                    # A negative value clears the limit, matching real sacctmgr.
+                    if int(value) < 0:
+                        account.limits.pop("GrpSubmitJobs", None)
+                    else:
+                        account.limits["GrpSubmitJobs"] = int(value)
+                    modifications.append(f"GrpSubmitJobs={value}")
                 elif key == "rawusage":
                     # Handle raw usage reset
                     if value == "0":
@@ -1091,6 +1099,11 @@ class SacctmgrEmulator:
             "ParentName": (assoc.parent or "") if assoc.user == "" else "",
             "QOS": qos,
             "Def QOS": assoc.def_qos,
+            "GrpSubmit": (
+                str(account_obj.limits["GrpSubmitJobs"])
+                if account_obj and "GrpSubmitJobs" in account_obj.limits
+                else ""
+            ),
             "MaxTRESMins": limits,
         }
 
