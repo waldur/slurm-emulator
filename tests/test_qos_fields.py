@@ -95,10 +95,19 @@ class TestQosRendering:
         assert rendered["priority"] == {"set": True, "infinite": False, "number": 100}
 
     def test_grace_time_rendered(self, tmp_path):
+        # Real v0.0.46 QOS: grace_time is a plain UINT32 (seconds) under
+        # limits/grace_time, not a top-level NO_VAL struct (parsers.c:9321).
         em = _emulator(tmp_path)
         em.handle_command(["add", "qos", "boost", "set", "GraceTime=120"])
         rendered = schemas.qos_to_dict(em.database.qos_list["boost"], 1)
-        assert rendered["grace_time"] == {"set": True, "infinite": False, "number": 120}
+        assert rendered["limits"]["grace_time"] == 120
+        assert "grace_time" not in rendered  # not at the top level
+
+    def test_grace_time_defaults_to_zero(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["add", "qos", "boost"])
+        rendered = schemas.qos_to_dict(em.database.qos_list["boost"], 1)
+        assert rendered["limits"]["grace_time"] == 0
 
     def test_max_tres_per_job_node_user_rendered(self, tmp_path):
         em = _emulator(tmp_path)

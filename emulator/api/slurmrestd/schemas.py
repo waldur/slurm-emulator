@@ -253,10 +253,12 @@ def qos_to_dict(qos: QOS, qos_id: int) -> dict[str, Any]:
         "id": qos_id,
         "flags": [f for f in qos.flags.split(",") if f] if qos.flags else [],
         "priority": uint_no_val(qos.priority if qos.priority >= 0 else None),
-        "grace_time": uint_no_val(qos.grace_time if qos.grace_time >= 0 else None),
         "usage_factor": {"set": True, "infinite": False, "number": 1.0},
         "usage_threshold": {"set": False, "infinite": False, "number": 0.0},
         "limits": {
+            # Real v0.0.46 QOS: grace_time is a plain UINT32 (seconds) at
+            # limits/grace_time (parsers.c PARSER_ARRAY(QOS)), not a NO_VAL struct.
+            "grace_time": max(qos.grace_time, 0),
             "max": {
                 "active_jobs": {"accruing": uint_no_val(), "count": uint_no_val()},
                 "tres": {

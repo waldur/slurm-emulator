@@ -138,6 +138,13 @@ class TestModifyAccountQosList:
         qos = set(em.database.get_account("acct1").qos.split(","))
         assert {"normal", "boost"} <= qos
 
+    def test_canonical_qoslevel_name_on_account(self, tmp_path):
+        # Real account modify routes through QosLevel (min prefix 1), so the
+        # canonical name and its +=/-= operators must also apply.
+        em = _emulator(tmp_path)
+        em.handle_command(["modify", "account", "acct1", "set", "QosLevel+=boost"])
+        assert "boost" in em.database.get_account("acct1").qos.split(",")
+
     def test_qos_remove_operator_drops_one(self, tmp_path):
         em = _emulator(tmp_path)
         em.handle_command(["modify", "account", "acct1", "set", "qos=normal,boost,limited"])

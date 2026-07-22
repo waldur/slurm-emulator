@@ -647,11 +647,13 @@ class SacctmgrEmulator:
                 if key == "fairshare":
                     account.fairshare = int(value)
                     modifications.append(f"fairshare={value}")
-                elif base_key == "qos":
-                    # Account QoS list with =/+=/-= operators. += / -= mutate the
-                    # list in place so an operational QoS (e.g. the pause/downscale
-                    # swap) can be layered on and peeled off without clobbering an
-                    # existing multi-QoS grant.
+                elif base_key in {"qos", "qoslevel"}:
+                    # Account QoS list with =/+=/-= operators. Real account modify
+                    # routes through QosLevel (association_functions.c:518,
+                    # MAX(command_len, 1)), so the "qos" prefix and the canonical
+                    # "QosLevel" both match. += / -= mutate the list in place so an
+                    # operational QoS (e.g. the pause/downscale swap) can be layered
+                    # on and peeled off without clobbering an existing multi-QoS grant.
                     current = [q for q in account.qos.split(",") if q]
                     account.qos = ",".join(_apply_list_operator(current, operator, value))
                     modifications.append(f"{key}={value}")
