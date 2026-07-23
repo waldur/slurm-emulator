@@ -693,6 +693,20 @@ class SacctmgrEmulator:
                     else:
                         account.limits["GrpTRES"] = int(tres_spec)
                     modifications.append(f"GrpTRES={value}")
+                elif key.startswith("grpsubmit"):
+                    # Scalar GrpSubmitJobs cap (blocks new job submission when 0).
+                    # Mirror real sacctmgr get_uint (common.c:1508-1528): an empty
+                    # value parses as 0; a negative value clears the limit; a
+                    # non-numeric value is a graceful error (exit 1), not a crash.
+                    try:
+                        num = int(value) if value else 0
+                    except ValueError:
+                        return self._fail(f" error: Invalid value for GrpSubmitJobs ({value})")
+                    if num < 0:
+                        account.limits.pop("GrpSubmitJobs", None)
+                    else:
+                        account.limits["GrpSubmitJobs"] = num
+                    modifications.append(f"GrpSubmitJobs={value}")
                 elif key == "rawusage":
                     # Handle raw usage reset
                     if value == "0":
@@ -914,6 +928,7 @@ class SacctmgrEmulator:
                 )
 
         self.database.qos_list[qos_name] = qos
+        self.database.save_state()
         return f" Adding QOS(s)\n  Name          = {qos_name}"
 
     def _modify_qos(self, args: list[str]) -> str:
@@ -945,6 +960,7 @@ class SacctmgrEmulator:
             key, value = arg.split("=", 1)
             _set_qos_field(qos, key.lower(), value)
 
+        self.database.save_state()
         return f" Modified qos...\n  {qos_name}"
 
     def _remove_cluster(self, args: list[str]) -> str:
@@ -1091,6 +1107,11 @@ class SacctmgrEmulator:
             "ParentName": (assoc.parent or "") if assoc.user == "" else "",
             "QOS": qos,
             "Def QOS": assoc.def_qos,
+            "GrpSubmit": (
+                str(account_obj.limits["GrpSubmitJobs"])
+                if account_obj and "GrpSubmitJobs" in account_obj.limits
+                else ""
+            ),
             "MaxTRESMins": limits,
         }
 
