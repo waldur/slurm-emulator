@@ -4,6 +4,14 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.1] - 2026-07-23
+
+### Added
+- Emulate account GrpSubmitJobs as an orthogonal pause lever
+
+### Fixed
+- Fix documentation for CLI command syntax, CI provider, and stale references
+
 ## [0.9.0] - 2026-07-22
 
 ### Added
