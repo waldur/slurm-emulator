@@ -922,6 +922,7 @@ class SacctmgrEmulator:
                 )
 
         self.database.qos_list[qos_name] = qos
+        self.database.save_state()
         return f" Adding QOS(s)\n  Name          = {qos_name}"
 
     def _modify_qos(self, args: list[str]) -> str:
@@ -953,6 +954,7 @@ class SacctmgrEmulator:
             key, value = arg.split("=", 1)
             _set_qos_field(qos, key.lower(), value)
 
+        self.database.save_state()
         return f" Modified qos...\n  {qos_name}"
 
     def _remove_cluster(self, args: list[str]) -> str:
