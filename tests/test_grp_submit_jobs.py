@@ -50,3 +50,18 @@ class TestGrpSubmitJobs:
         reloaded.state_file = em.database.state_file
         reloaded.load_state()
         assert reloaded.get_account("acct1").limits["GrpSubmitJobs"] == 0
+
+    def test_empty_value_parses_as_zero(self, tmp_path):
+        # Real sacctmgr get_uint: strtol("") == 0 (a valid cap), not a crash.
+        em = _emulator(tmp_path)
+        em.handle_command(["modify", "account", "acct1", "set", "GrpSubmitJobs="])
+        assert em.database.get_account("acct1").limits["GrpSubmitJobs"] == 0
+
+    def test_non_numeric_value_is_graceful_error(self, tmp_path):
+        # Real sacctmgr prints " error: Invalid value ..." and exits 1 rather
+        # than crashing; the emulator must not raise an uncaught ValueError.
+        em = _emulator(tmp_path)
+        out = em.handle_command(["modify", "account", "acct1", "set", "GrpSubmitJobs=abc"])
+        assert "Invalid value" in out
+        assert em.exit_code == 1
+        assert "GrpSubmitJobs" not in em.database.get_account("acct1").limits

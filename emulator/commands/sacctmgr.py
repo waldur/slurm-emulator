@@ -695,11 +695,17 @@ class SacctmgrEmulator:
                     modifications.append(f"GrpTRES={value}")
                 elif key.startswith("grpsubmit"):
                     # Scalar GrpSubmitJobs cap (blocks new job submission when 0).
-                    # A negative value clears the limit, matching real sacctmgr.
-                    if int(value) < 0:
+                    # Mirror real sacctmgr get_uint (common.c:1508-1528): an empty
+                    # value parses as 0; a negative value clears the limit; a
+                    # non-numeric value is a graceful error (exit 1), not a crash.
+                    try:
+                        num = int(value) if value else 0
+                    except ValueError:
+                        return self._fail(f" error: Invalid value for GrpSubmitJobs ({value})")
+                    if num < 0:
                         account.limits.pop("GrpSubmitJobs", None)
                     else:
-                        account.limits["GrpSubmitJobs"] = int(value)
+                        account.limits["GrpSubmitJobs"] = num
                     modifications.append(f"GrpSubmitJobs={value}")
                 elif key == "rawusage":
                     # Handle raw usage reset
