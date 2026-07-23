@@ -188,16 +188,20 @@ This approach ensures code quality while keeping development velocity for an emu
 
 ## Key Features
 
+> Note: native emulator commands use underscores (`time_advance`, `usage_inject`,
+> ...). The SLURM passthrough commands (`sacctmgr`, `sacct`, `sinfo`, `sshare`)
+> take space-separated arguments, as on a real cluster.
+
 ### Time Manipulation
 ```bash
-time advance 2 months        # Jump forward 2 months
-time set 2024-05-20         # Jump to specific date
+time_advance 2 months        # Jump forward 2 months
+time_set 2024-05-20          # Jump to specific date
 ```
 
 ### Usage Injection
 ```bash
-usage inject user1 200 account   # Add 200 node-hours
-usage show account              # Show current usage
+usage_inject user1 200 account   # Add 200 node-hours
+usage_show account               # Show current usage
 ```
 
 ### Decay Calculations
@@ -245,14 +249,14 @@ uv run pytest tests/test_api_integration.py
 ```bash
 # Test basic functionality
 uv run slurm-emulator
-> time set 2024-01-01
-> account create test "Test Account" 1000
-> usage inject user1 500 test
-> time advance 3 months
-> limits calculate test
+> time_set 2024-01-01
+> account_create test "Test Account" 1000
+> usage_inject user1 500 test
+> time_advance 3 months
+> limits_calculate test
 
 # Test complete scenario
-> scenario run sequence --interactive
+> scenario_run sequence --interactive
 ```
 
 ## Troubleshooting
@@ -261,7 +265,7 @@ uv run slurm-emulator
 
 1. **Time not advancing properly**
    - Check `time` command output
-   - Verify period transitions with `time advance`
+   - Verify period transitions with `time_advance`
 
 2. **Decay calculations incorrect**
    - Validate with: `2^(-90/15) ≈ 0.0156` for quarterly transitions
