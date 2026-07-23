@@ -22,25 +22,21 @@ uv run python -c "import readline; print('✅ readline available')"
 uv run python -c "import sys; print('Interactive:', sys.stdin.isatty())"
 ```
 
-**Solution**: Use manual completion:
+**Solution**: Diagnose completion with the built-in test commands, and use
+`help` to discover commands and arguments:
+
 ```bash
-slurm-emulator> complete s
-📋 Main commands starting with 's':
-  scenario
-  status
-  sacctmgr
-  sacct
-  sinfo
+[default] slurm-emulator> test_completion
+# Exercises the complete_* methods and reports which are wired up
 
-slurm-emulator> complete scenario r
-📋 Subcommands for 'scenario':
-  run
+[default] slurm-emulator> debug_tab
+# Shows TAB / readline binding state
 
-slurm-emulator> complete sacctmgr modify account test set
-📋 Completions for 'sacctmgr modify account test set':
-  fairshare=
-  qos=
-  GrpTRESMins=
+[default] slurm-emulator> help
+# Lists all commands (native commands use underscores: time_advance, ...)
+
+[default] slurm-emulator> help time_advance
+# Detailed help, including accepted arguments, for a specific command
 ```
 
 #### 2. Environment Variables
@@ -114,17 +110,17 @@ PriorityDecayHalfLife = 15d            # Wrong format
 
 **Solution**: Create accounts first:
 ```bash
-slurm-emulator> account create test-account "Test Account" 1000
-slurm-emulator> usage inject user1 100 test-account  # Now works
+[default] slurm-emulator> account_create test-account "Test Account" 1000
+[default] slurm-emulator> usage_inject user1 100 test-account  # Now works
 ```
 
 ### 3. Scenario execution failures
 
 **Debug steps:**
 ```bash
-slurm-emulator> scenario validate qos_thresholds   # Check scenario definition
-slurm-emulator> scenario steps qos_thresholds      # See what it will do
-slurm-emulator> scenario run qos_thresholds --step-by-step  # Run with debug
+[default] slurm-emulator> scenario_describe qos_thresholds   # Inspect scenario definition
+[default] slurm-emulator> scenario_steps qos_thresholds      # See what it will do
+[default] slurm-emulator> scenario_run qos_thresholds --step-by-step  # Run with debug
 ```
 
 ### 4. Time manipulation issues
@@ -133,9 +129,9 @@ slurm-emulator> scenario run qos_thresholds --step-by-step  # Run with debug
 
 **Solution**: Check current time:
 ```bash
-slurm-emulator> time                    # Show current time
-slurm-emulator> time set 2024-01-01    # Reset to known date
-slurm-emulator> time advance 1 months  # Test advancement
+[default] slurm-emulator> time_show                 # Show current time
+[default] slurm-emulator> time_set 2024-01-01       # Reset to known date
+[default] slurm-emulator> time_advance 1 months     # Test advancement
 ```
 
 ### 5. Usage injection problems
@@ -144,9 +140,9 @@ slurm-emulator> time advance 1 months  # Test advancement
 
 **Solution**: Check period alignment:
 ```bash
-slurm-emulator> time                    # Check current period
-slurm-emulator> usage show account     # Check current period usage
-slurm-emulator> usage show account 2024-Q1  # Check specific period
+[default] slurm-emulator> time_show                 # Check current period
+[default] slurm-emulator> usage_show account        # Check current period usage
+[default] slurm-emulator> usage_show account 2024-Q1  # Check specific period
 ```
 
 ### 6. QoS not switching
@@ -155,9 +151,9 @@ slurm-emulator> usage show account 2024-Q1  # Check specific period
 
 **Solution**: Check threshold calculations:
 ```bash
-slurm-emulator> limits calculate account    # See current thresholds
-slurm-emulator> qos check account          # Check threshold status
-slurm-emulator> usage show account         # Verify usage amounts
+[default] slurm-emulator> limits_calculate account  # See current thresholds
+[default] slurm-emulator> qos_check account         # Check threshold status
+[default] slurm-emulator> usage_show account        # Verify usage amounts
 ```
 
 ## Alternative Usage Methods
@@ -277,12 +273,12 @@ To verify auto-completion is working:
 ```bash
 uv run slurm-emulator
 
-# Should show "⌨️  Auto-completion enabled (use TAB for completion)"
+# Should show "⌨️  Completion configured (use in interactive terminal)"
 # If not, you'll see "⚠️  Auto-completion not available"
 
-# Test manual completion as fallback:
-slurm-emulator> complete s
-# Should show commands starting with 's'
+# Exercise the completion methods directly:
+[default] slurm-emulator> test_completion
+# Reports which complete_* methods are wired up
 ```
 
 ## Platform-Specific Issues

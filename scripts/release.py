@@ -107,7 +107,7 @@ def run_pre_release_checks() -> None:
     run_command(["uv", "run", "mypy", "emulator/"])
 
     print("Local pre-release checks passed!")
-    print("Note: Full testing is done automatically in GitHub Actions")
+    print("Note: Full testing is done automatically in GitLab CI/CD")
 
 
 def build_package() -> None:
@@ -115,7 +115,7 @@ def build_package() -> None:
     print("Building distribution packages locally...")
     run_command(["uv", "build"])
     print("Local build completed successfully!")
-    print("Note: Production builds and PyPI publishing are handled by GitHub Actions")
+    print("Note: Production builds and PyPI publishing are handled by GitLab CI/CD")
 
 
 def generate_changelog(version: str) -> None:
@@ -137,8 +137,8 @@ def generate_changelog(version: str) -> None:
 
 
 def create_git_tag(version: str) -> None:
-    """Create and push git tag (triggers GitHub Actions for PyPI publishing)."""
-    tag_name = f"{version}"  # GitHub Actions expects tags like "0.1.1" not "v0.1.1"
+    """Create and push git tag (triggers GitLab CI/CD for PyPI publishing)."""
+    tag_name = f"{version}"  # GitLab CI/CD expects tags like "0.1.1" not "v0.1.1"
 
     # Create tag
     run_command(["git", "add", "pyproject.toml", "CHANGELOG.md"])
@@ -146,14 +146,14 @@ def create_git_tag(version: str) -> None:
     run_command(["git", "tag", "-a", tag_name, "-m", f"Release {version}"])
 
     print(f"Created git tag: {tag_name}")
-    print("This tag will trigger GitHub Actions to:")
+    print("This tag will trigger GitLab CI/CD to:")
     print("  - Run full test suite on multiple Python versions")
     print("  - Build and publish to PyPI automatically")
 
     if click.confirm("Push tag to remote (this will trigger PyPI release)?"):
         run_command(["git", "push"])
         run_command(["git", "push", "--tags"])
-        print("Pushed tag to remote - check GitHub Actions for release progress")
+        print("Pushed tag to remote - check GitLab CI/CD for release progress")
 
 
 @click.group()
@@ -184,7 +184,7 @@ def status():
 def release(version: str, skip_changelog: bool, skip_tag: bool):
     """Create a new release - updates version, generates changelog, and creates git tag.
 
-    Building, testing, and publishing are handled by GitHub Actions.
+    Building, testing, and publishing are handled by GitLab CI/CD.
     """
     current_version = get_current_version()
 
