@@ -47,32 +47,33 @@ uv run slurm-emulator --validate-only --config /etc/slurm/slurm.conf
 Type 'help' or '?' for commands. TAB for auto-completion.
 Type 'help <command>' for detailed help on specific commands.
 
-slurm-emulator> help
+# Note: native emulator commands use underscores (time_advance, account_create,
+# usage_inject, ...). The SLURM passthrough commands (sacctmgr, sacct, sinfo,
+# sshare) take their arguments with spaces, as on a real cluster.
+
+[default] slurm-emulator> help
 # Shows all available commands
 
-slurm-emulator> help time_advance
+[default] slurm-emulator> help time_advance
 # Shows detailed help for specific command
 
-slurm-emulator> time_advance 2 months
+[default] slurm-emulator> time_advance 2 months
 ⏭️  Advanced 2 months
 
-slurm-emulator> account_create test "Test Account" 1000
-✅ Created account test with 1000Nh allocation
-
-slurm-emulator> account create test-account "Test Account" 1000
+[default] slurm-emulator> account_create test-account "Test Account" 1000
 ✅ Created account test-account with 1000Nh allocation
 
-slurm-emulator> usage inject user1 200 test-account
+[default] slurm-emulator> usage_inject user1 200 test-account
 💾 Injected 200.0Nh usage for user1 in test-account at 2024-01-01 00:00:00
 
-slurm-emulator> time advance 2 months
+[default] slurm-emulator> time_advance 2 months
 ⏭️  Advanced 2 months
 ⏰ New time: 2024-03-01 00:00:00
 
-slurm-emulator> usage inject user1 400 test-account
+[default] slurm-emulator> usage_inject user1 400 test-account
 💾 Injected 400.0Nh usage for user1 in test-account at 2024-03-01 00:00:00
 
-slurm-emulator> limits calculate test-account
+[default] slurm-emulator> limits_calculate test-account
 📊 Periodic Limits for test-account:
    Period: 2024-Q1
    Base allocation: 1000Nh
@@ -88,7 +89,7 @@ slurm-emulator> limits calculate test-account
 Run the full scenario from SLURM_PERIODIC_LIMITS_SEQUENCE.md:
 
 ```bash
-slurm-emulator> scenario run sequence --interactive
+[default] slurm-emulator> scenario_run sequence --interactive
 
 🎬 Starting SLURM Periodic Limits Sequence Scenario
 ============================================================
@@ -110,31 +111,31 @@ slurm-emulator> scenario run sequence --interactive
 The emulator intercepts and emulates real SLURM commands:
 
 ```bash
-slurm-emulator> sacctmgr add account test-account description="Test"
+[default] slurm-emulator> sacctmgr add account test-account description="Test"
  Adding Account(s)
   test-account
  Settings
   Parent     = root
   Description = Test
 
-slurm-emulator> sacctmgr modify account test-account set fairshare=333
+[default] slurm-emulator> sacctmgr modify account test-account set fairshare=333
  Modified account...
   test-account
  Settings
   fairshare=333
 
-slurm-emulator> sacctmgr modify account test-account set GrpTRESMins=billing=72000
+[default] slurm-emulator> sacctmgr modify account test-account set GrpTRESMins=billing=72000
  Modified account...
   test-account
  Settings
   GrpTRESMins=billing=72000
 
-slurm-emulator> sacct --accounts=test-account --starttime=2024-01-01 --endtime=2024-12-31
+[default] slurm-emulator> sacct --accounts=test-account --starttime=2024-01-01 --endtime=2024-12-31
 JobID           JobName  Partition    Account  AllocCPUS      State ExitCode
 ------------ ---------- ---------- ---------- ---------- ---------- --------
 1                 job_1    compute test-acco+         64  COMPLETED      0:0
 
-slurm-emulator> sacct --accounts=test-account -S 2024-01-01 --format=Account,ReqTRES,Elapsed,User --noheader --parsable2
+[default] slurm-emulator> sacct --accounts=test-account -S 2024-01-01 --format=Account,ReqTRES,Elapsed,User --noheader --parsable2
 test-account|cpu=64,mem=512G,node=1,billing=64,gres/gpu=4|08:00:00|user1
 ```
 
@@ -266,6 +267,26 @@ startup, so it can serve stale reads after REST/CLI writes.
 
 The Docker image runs both servers (ports 8080 and 6820) via
 `scripts/docker-entrypoint.sh`.
+
+## SSH Filesystem Plane
+
+For clients that expect a login node in addition to `slurmrestd` (notably
+FireCREST v2), the emulator ships an asyncssh server that provides filesystem
+operations and dispatches the Slurm CLI commands (`sacctmgr`, `sacct`, `sinfo`,
+`sshare`, `scancel`, `sbatch`) against the same shared state:
+
+```bash
+uv run --extra ssh slurm-ssh-emulator   # asyncssh server on port 2222
+```
+
+It shares the same JSON state files as the CLI, control API, and slurmrestd.
+
+### Running FireCREST v2 against the emulator
+
+The scheduler plane (slurmrestd) plus the SSH filesystem plane let the emulator
+stand in for a real cluster for [eth-cscs/firecrest-v2](https://github.com/eth-cscs/firecrest-v2).
+See [`examples/firecrest/`](examples/firecrest/) for the conformance matrix, a
+docker-compose overlay, and contract/integration test harnesses.
 
 ## Waldur Site Agent Integration
 
@@ -469,11 +490,13 @@ cleanup_account test-account
 sacctmgr <args>                      # Run sacctmgr command
 sacct <args>                         # Run sacct command
 sinfo <args>                         # Run sinfo command
+sshare <args>                        # Run sshare command
 
 # Examples:
 sacctmgr list accounts
 sacctmgr modify account test set fairshare=333
 sacct --accounts=test --format=Account,User,Elapsed --noheader --parsable2
+sshare -A test --parsable2
 ```
 
 ## Testing Scenarios
@@ -484,21 +507,21 @@ sacct --accounts=test --format=Account,User,Elapsed --noheader --parsable2
 uv run slurm-emulator --config examples/slurm.conf
 
 # In emulator CLI:
-time set 2024-01-01
-account create test-account "Test" 1000
+time_set 2024-01-01
+account_create test-account "Test" 1000
 
 # Month 1: Light usage
-usage inject user1 100 test-account
-time advance 1 months
+usage_inject user1 100 test-account
+time_advance 1 months
 
 # Month 2: Heavy usage
-usage inject user1 600 test-account
-limits calculate test-account
-qos check test-account
+usage_inject user1 600 test-account
+limits_calculate test-account
+qos_check test-account
 
 # Quarter transition
-time advance 1 months
-limits apply test-account
+time_advance 1 months
+limits_calculate test-account
 ```
 
 ### Configuration Testing
@@ -514,27 +537,27 @@ uv run slurm-emulator --validate-only --config examples/custom_slurm.conf
 ### Decay Validation
 ```bash
 # Q1: Heavy usage
-time set 2024-01-01
-account create test-account "Test" 1000
-usage inject user1 1500 test-account
+time_set 2024-01-01
+account_create test-account "Test" 1000
+usage_inject user1 1500 test-account
 
 # Q2: Check decay impact
-time set 2024-04-01
-limits calculate test-account
+time_set 2024-04-01
+limits_calculate test-account
 # Should show ~23Nh effective previous usage (1500 * 0.0156)
 ```
 
 ### QoS Threshold Testing
 ```bash
 # Setup with 1000Nh allocation (1200Nh threshold with 20% grace)
-account create test-account "Test" 1000
-qos show test-account  # Should show "normal"
+account_create test-account "Test" 1000
+qos_show test-account  # Should show "normal"
 
-usage inject user1 1100 test-account
-qos check test-account  # Should show approaching threshold
+usage_inject user1 1100 test-account
+qos_check test-account  # Should show approaching threshold
 
-usage inject user1 200 test-account  # Total: 1300Nh
-qos check test-account  # Should trigger slowdown QoS
+usage_inject user1 200 test-account  # Total: 1300Nh
+qos_check test-account  # Should trigger slowdown QoS
 ```
 
 ## Architecture
@@ -546,11 +569,14 @@ slurm-emulator/
 │   │   ├── time_engine.py          # Time manipulation
 │   │   ├── database.py             # In-memory state
 │   │   ├── slurm_config.py         # SLURM config parsing
+│   │   ├── scheduler.py            # Submitted-job lifecycle
 │   │   └── usage_simulator.py      # Usage injection
 │   ├── commands/
 │   │   ├── sacctmgr.py             # sacctmgr emulator
 │   │   ├── sacct.py                # sacct emulator
-│   │   └── dispatcher.py           # Command routing
+│   │   ├── sshare.py               # sshare emulator
+│   │   ├── print_fields.py         # SLURM-style column formatting
+│   │   └── dispatcher.py           # Command routing / script entry points
 │   ├── periodic_limits/
 │   │   ├── calculator.py           # Decay & carryover
 │   │   └── qos_manager.py          # QoS management
@@ -559,16 +585,21 @@ slurm-emulator/
 │   │   ├── scenario_registry.py    # Scenario discovery & running
 │   │   └── limits_configuration_scenarios.py
 │   ├── cli/
-│   │   ├── main.py                 # Interactive CLI
+│   │   ├── main.py                 # Interactive CLI entry point
 │   │   └── cmd_cli.py              # CMD-based CLI
 │   └── api/
-│       └── emulator_server.py      # REST API
+│       ├── emulator_server.py      # Control REST API (port 8080)
+│       ├── ui/                     # HTMX + Jinja2 web dashboard (/ui)
+│       ├── slurmrestd/             # slurmrestd emulation (port 6820)
+│       └── ssh/                    # SSH filesystem + CLI plane (port 2222)
 ├── scripts/
 │   ├── release.py                  # Release management
 │   ├── changelog.sh                # Changelog generation
 │   ├── generate_changelog_data.py  # Commit data collection
 │   └── prompts/
 │       └── changelog-prompt.md     # Changelog prompt template
+├── examples/
+│   └── firecrest/                  # FireCREST v2 integration example
 └── tests/                          # Test suites
 ```
 
@@ -590,7 +621,7 @@ uv run scripts/release.py release X.Y.Z
 uv run scripts/release.py release X.Y.Z --skip-changelog
 ```
 
-Pushing the tag triggers GitHub Actions for testing and PyPI publishing.
+Pushing the tag triggers GitLab CI/CD for testing and PyPI publishing.
 
 ### Adding New Scenarios
 
@@ -626,8 +657,8 @@ Emulator state is saved to:
 
 ### Common Issues
 
-**"Account not found"**: Create account first with `account create`
-**"No usage records"**: Inject usage with `usage inject`
+**"Account not found"**: Create account first with `account_create`
+**"No usage records"**: Inject usage with `usage_inject`
 **"Time not advancing"**: Check time with `time` command
 **"API connection failed"**: Ensure server is running on port 8080
 
