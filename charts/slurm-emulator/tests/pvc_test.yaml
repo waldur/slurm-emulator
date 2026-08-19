@@ -1,0 +1,37 @@
+suite: persistence
+templates:
+  - templates/pvc.yaml
+tests:
+  - it: renders no PVC by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a PVC when persistence is enabled
+    set:
+      persistence.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.resources.requests.storage
+          value: 1Gi
+      - equal:
+          path: spec.accessModes
+          value:
+            - ReadWriteOnce
+      - isNull:
+          path: spec.storageClassName
+
+  - it: honours an explicit storage class
+    set:
+      persistence.enabled: true
+      persistence.storageClass: fast
+      persistence.size: 5Gi
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: fast
+      - equal:
+          path: spec.resources.requests.storage
+          value: 5Gi

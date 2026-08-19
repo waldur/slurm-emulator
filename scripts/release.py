@@ -2,7 +2,8 @@
 """Release management script for SLURM Emulator.
 
 This script helps manage releases by:
-- Updating version number in pyproject.toml (single source of truth)
+- Updating version number in pyproject.toml (single source of truth) and mirroring
+  it into charts/slurm-emulator/Chart.yaml
 - Creating git tags that trigger CI/CD
 - Running local pre-release checks
 - Building test packages locally
@@ -21,6 +22,8 @@ from pathlib import Path
 # dependencies = ["click>=8.0.0"]
 # ///
 import click
+
+CHART_YAML = Path(__file__).resolve().parent.parent / "charts" / "slurm-emulator" / "Chart.yaml"
 
 
 def run_command(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
@@ -74,6 +77,41 @@ def update_version(new_version: str) -> None:
     print(f"Updated version to {new_version} in pyproject.toml")
 
 
+def update_chart_version(new_version: str) -> None:
+    """Mirror the release version into Chart.yaml's version AND appVersion.
+
+    ``version`` is the chart version; ``appVersion`` is the image tag the chart
+    deploys (templates/_helpers.tpl defaults image.tag to .Chart.AppVersion),
+    and CI pushes opennode/slurm-emulator:<tag> from the same pipeline. CI
+    rewrites both at publish time anyway — doing it here keeps the committed
+    chart honest about which image it installs.
+    """
+    if not CHART_YAML.exists():
+        print(f"Warning: {CHART_YAML} not found, skipping chart version update")
+        return
+
+    lines = CHART_YAML.read_text().splitlines(keepends=True)
+    updated_lines = []
+    found_version = found_app = False
+    for line in lines:
+        if line.startswith("version:"):
+            updated_lines.append(f"version: {new_version}\n")
+            found_version = True
+        elif line.startswith("appVersion:"):
+            updated_lines.append(f'appVersion: "{new_version}"\n')
+            found_app = True
+        else:
+            updated_lines.append(line)
+
+    if not found_version or not found_app:
+        missing = "version:" if not found_version else "appVersion:"
+        print(f"Error: Could not find {missing} line in Chart.yaml")
+        sys.exit(1)
+
+    CHART_YAML.write_text("".join(updated_lines))
+    print(f"Updated Chart.yaml -> version: {new_version}, appVersion: {new_version}")
+
+
 def validate_version(version: str) -> bool:
     """Validate version format (semantic versioning)."""
     pattern = r"^\d+\.\d+\.\d+(?:-[a-zA-Z0-9-]+)?(?:\+[a-zA-Z0-9-]+)?$"
@@ -105,6 +143,20 @@ def run_pre_release_checks() -> None:
     # Run type checking
     print("Running type check...")
     run_command(["uv", "run", "mypy", "emulator/"])
+
+    # Chart lint/unittest mirror the "Lint Helm chart" CI job.
+    print("Linting Helm chart...")
+    run_command(["helm", "lint", str(CHART_YAML.parent)])
+
+    print("Running Helm chart unit tests...")
+    result = run_command(["helm", "unittest", str(CHART_YAML.parent)], check=False)
+    if result.returncode != 0:
+        print(
+            "Note: `helm unittest` requires the helm-unittest plugin. Install with:\n"
+            "  helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v0.8.2"
+        )
+        if not click.confirm("Skip helm unittest and continue?"):
+            sys.exit(1)
 
     print("Local pre-release checks passed!")
     print("Note: Full testing is done automatically in GitLab CI/CD")
@@ -141,7 +193,7 @@ def create_git_tag(version: str) -> None:
     tag_name = f"{version}"  # GitLab CI/CD expects tags like "0.1.1" not "v0.1.1"
 
     # Create tag
-    run_command(["git", "add", "pyproject.toml", "CHANGELOG.md"])
+    run_command(["git", "add", "pyproject.toml", "CHANGELOG.md", str(CHART_YAML)])
     run_command(["git", "commit", "-m", f"Release version {version}"])
     run_command(["git", "tag", "-a", tag_name, "-m", f"Release {version}"])
 
@@ -204,6 +256,7 @@ def release(version: str, skip_changelog: bool, skip_tag: bool):
 
     # Update version
     update_version(version)
+    update_chart_version(version)
 
     # Generate changelog
     if not skip_changelog:
@@ -228,6 +281,7 @@ def version_update(version: str):
     print(f"Updating version from {current_version} to {version}")
 
     update_version(version)
+    update_chart_version(version)
     print("Version updated successfully")
 
 
@@ -239,7 +293,7 @@ def build():
 
 @cli.command()
 def check():
-    """Run local pre-release checks (linting, type checking)."""
+    """Run local pre-release checks (linting, type checking, Helm chart)."""
     run_pre_release_checks()
 
 

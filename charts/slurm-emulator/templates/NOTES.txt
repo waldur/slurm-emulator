@@ -1,0 +1,49 @@
+The SLURM emulator is running in namespace {{ .Release.Namespace | quote }}.
+
+In-cluster URLs (use these from other namespaces too):
+  Control API: http://{{ include "slurm-emulator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:8080
+  Web UI:      http://{{ include "slurm-emulator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:8080/ui/
+  slurmrestd:  http://{{ include "slurm-emulator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:6820/slurm/v0.0.46/
+{{- if .Values.ssh.enabled }}
+  SSH plane:   {{ include "slurm-emulator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.ssh.port }}
+{{- end }}
+
+Point waldur-site-agent at the control API:
+  emulator_mode: true
+  emulator_base_url: "http://{{ include "slurm-emulator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:8080"
+
+Quick smoke test from your laptop:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "slurm-emulator.fullname" . }} 8080:8080
+  curl http://localhost:8080/api/status
+
+Confirm with `helm test`:
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+For deployment details (auth, persistence, SSH plane, ingress, Gateway API), see:
+  docs/kubernetes.md
+
+{{- if .Values.ingress.enabled }}
+
+Ingress rules:
+{{- range .Values.ingress.hosts }}
+  - http://{{ .host }}
+{{- end }}
+{{- end }}
+
+{{- if and (not .Values.auth.existingSecret) (eq .Values.auth.uiPassword "admin") }}
+
+WARNING: the web dashboard is using the default password. Set `auth.uiPassword`
+(or `auth.existingSecret`) before exposing it beyond the cluster.
+{{- end }}
+
+{{- if and (not .Values.auth.existingSecret) (not .Values.auth.jwtKey) }}
+
+NOTE: `auth.jwtKey` is empty, so the slurmrestd plane accepts any
+X-SLURM-USER-TOKEN value. Fine for a sandbox; set a key to verify tokens.
+{{- end }}
+
+{{- if not .Values.persistence.enabled }}
+
+Persistence is off — the emulator clock, accounts and usage records reset on
+every pod restart. Set `persistence.enabled=true` to keep them.
+{{- end }}

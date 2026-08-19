@@ -1,0 +1,87 @@
+suite: Gateway API
+templates:
+  - templates/gateway.yaml
+  - templates/httproute.yaml
+tests:
+  - it: renders nothing by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders only the HTTPRoute when attaching to an existing Gateway
+    set:
+      gatewayApi.enabled: true
+      gatewayApi.parentRefs:
+        - name: shared
+          namespace: gateway-system
+    template: templates/httproute.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.parentRefs[0].name
+          value: shared
+
+  - it: skips the Gateway unless createGateway is set
+    set:
+      gatewayApi.enabled: true
+      gatewayApi.parentRefs:
+        - name: shared
+    template: templates/gateway.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a Gateway and attaches the route to it
+    set:
+      gatewayApi.enabled: true
+      gatewayApi.createGateway: true
+      gatewayApi.gateway.gatewayClassName: envoy
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: fails fast when createGateway lacks a gatewayClassName
+    set:
+      gatewayApi.enabled: true
+      gatewayApi.createGateway: true
+    template: templates/gateway.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: gatewayApi.gateway.gatewayClassName is required when createGateway is true
+
+  - it: defaults route traffic to the control API port
+    set:
+      gatewayApi.enabled: true
+      gatewayApi.createGateway: true
+      gatewayApi.gateway.gatewayClassName: envoy
+    template: templates/httproute.yaml
+    asserts:
+      - equal:
+          path: spec.rules[0].backendRefs[0].port
+          value: 8080
+      - equal:
+          path: spec.parentRefs[0].sectionName
+          value: http
+
+  - it: routes explicit rules to the requested ports
+    set:
+      gatewayApi.enabled: true
+      gatewayApi.parentRefs:
+        - name: shared
+      gatewayApi.hostnames:
+        - slurm.example.com
+      gatewayApi.rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /slurm
+          port: 6820
+    template: templates/httproute.yaml
+    asserts:
+      - equal:
+          path: spec.hostnames[0]
+          value: slurm.example.com
+      - equal:
+          path: spec.rules[0].backendRefs[0].port
+          value: 6820

@@ -54,6 +54,106 @@ Run tests v3.13:
   extends: .test-base
   image: registry.hpc.ut.ee/mirror/library/python:3.13-bullseye
 
+Lint Helm chart:
+  image:
+    name: "registry.hpc.ut.ee/mirror/alpine/helm:3.12.3"
+    entrypoint: [""]
+  stage: test
+  interruptible: true
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: $CI_COMMIT_TAG
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - charts/slurm-emulator/**/*
+        - .gitlab-ci.yml
+  before_script:
+    - helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v0.8.2
+  script:
+    - helm lint charts/slurm-emulator/
+    - helm unittest charts/slurm-emulator/
+    # Render the default install and every optional-feature variant — failures here
+    # catch templating regressions (missing values, invalid go-template, wrong indent).
+    - mkdir -p rendered-templates/default && helm template se charts/slurm-emulator/ --output-dir rendered-templates/default --debug
+    - mkdir -p rendered-templates/persistence && helm template se charts/slurm-emulator/ --output-dir rendered-templates/persistence --set persistence.enabled=true
+    - mkdir -p rendered-templates/ssh && helm template se charts/slurm-emulator/ --output-dir rendered-templates/ssh --set ssh.enabled=true --set ssh.hostKeySecret=host-key
+    - mkdir -p rendered-templates/existingSecret && helm template se charts/slurm-emulator/ --output-dir rendered-templates/existingSecret --set auth.existingSecret=my-secret
+    - mkdir -p rendered-templates/ingress && helm template se charts/slurm-emulator/ --output-dir rendered-templates/ingress --set ingress.enabled=true --set 'ingress.hosts[0].host=se.example.com' --set 'ingress.hosts[0].paths[0].path=/' --set 'ingress.hosts[0].paths[0].pathType=Prefix' --set 'ingress.hosts[0].paths[0].port=8080'
+    - mkdir -p rendered-templates/gatewayApi && helm template se charts/slurm-emulator/ --output-dir rendered-templates/gatewayApi --set gatewayApi.enabled=true --set gatewayApi.createGateway=true --set gatewayApi.gateway.gatewayClassName=envoy --set 'gatewayApi.hostnames[0]=se.example.com' --set 'gatewayApi.rules[0].matches[0].path.type=PathPrefix' --set 'gatewayApi.rules[0].matches[0].path.value=/' --set 'gatewayApi.rules[0].port=8080'
+  artifacts:
+    expire_in: 1 week
+    when: always
+    paths:
+      - rendered-templates
+
+Publish chart to GitHub Pages:
+  # Publishes the Helm chart by pushing a packaged .tgz + updated index.yaml
+  # to the gh-pages branch of the GitHub mirror at
+  # github.com/waldur/slurm-emulator. GitHub Pages serves the branch at
+  # https://waldur.github.io/slurm-emulator/. Users:
+  #   helm repo add slurm-emulator https://waldur.github.io/slurm-emulator/
+  #   helm install se slurm-emulator/slurm-emulator --version X.Y.Z
+  #
+  # Versioning model: the tag IS the chart version. This job rewrites
+  # charts/slurm-emulator/Chart.yaml's `version:` and `appVersion:` to
+  # $CI_COMMIT_TAG at publish time, so the .tgz filename, the index and the
+  # deployed image tag all reflect the tag. The matching :$CI_COMMIT_TAG image
+  # is pushed by the "Publish docker image" job below.
+  #
+  # Requires the CI variable $OPENNODE_JENKINS_GITHUB_TOKEN (same one
+  # waldur-helm uses) to be configured at Settings -> CI/CD -> Variables, with
+  # write access to the GitHub mirror.
+  image:
+    name: "registry.hpc.ut.ee/mirror/alpine/helm:3.12.3"
+    entrypoint: [""]
+  stage: release
+  interruptible: false
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: $CI_COMMIT_TAG
+  variables:
+    GITHUB_REPO: "waldur/slurm-emulator"
+    PAGES_URL: "https://waldur.github.io/slurm-emulator"
+  before_script:
+    - apk add --no-cache git
+  script:
+    # Bump chart version AND appVersion to match the tag, then package. appVersion
+    # is the image tag the chart deploys (templates/_helpers.tpl defaults the image
+    # tag to .Chart.AppVersion), and the versioned image is published below.
+    - 'sed -i "s/^version:.*/version: ${CI_COMMIT_TAG}/" charts/slurm-emulator/Chart.yaml'
+    - 'sed -i "s/^appVersion:.*/appVersion: \"${CI_COMMIT_TAG}\"/" charts/slurm-emulator/Chart.yaml'
+    - 'grep -E "^version:|^appVersion:" charts/slurm-emulator/Chart.yaml'
+    - mkdir -p /tmp/dist
+    - helm package charts/slurm-emulator/ -d /tmp/dist/
+    # Configure git and add the GitHub mirror as a remote.
+    - git config user.name "Opennode Jenkins"
+    - git config user.email jenkins@opennodecloud.com
+    - git remote remove github-origin 2>/dev/null || true
+    - git remote add github-origin "https://opennode-jenkins:${OPENNODE_JENKINS_GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git"
+    - git fetch github-origin
+    # Switch to gh-pages (create as orphan on the very first publish).
+    - |
+      if git ls-remote --exit-code github-origin gh-pages >/dev/null; then
+        git checkout -B gh-pages github-origin/gh-pages
+      else
+        git checkout --orphan gh-pages
+        git rm -rf . || true
+      fi
+    # Place the new tarball under charts/ and rebuild the index over all
+    # tarballs present in the branch (old versions stay reachable).
+    - mkdir -p charts
+    - mv "/tmp/dist/slurm-emulator-${CI_COMMIT_TAG}.tgz" charts/
+    - helm repo index . --url "${PAGES_URL}"
+    - git add charts/ index.yaml
+    - git status
+    - git commit -m "Release ${CI_COMMIT_TAG}"
+    - git push github-origin gh-pages
+
 Publish to PyPI:
   stage: release
   image: registry.hpc.ut.ee/mirror/library/python:3.12-bullseye
@@ -68,7 +168,7 @@ Publish to PyPI:
     - uv build
     - uv publish --username $PYPI_USERNAME --password $PYPI_PASSWORD
 
-Publish latest docker image:
+Publish docker image:
   stage: release
   interruptible: true
   image:
@@ -77,22 +177,33 @@ Publish latest docker image:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
+    # Release tag -> publish the versioned image (and move :latest to it). The
+    # Helm chart deploys :$appVersion, which is the tag, so this must run.
+    - if: '$CI_COMMIT_TAG'
+    # Default-branch push -> refresh :latest.
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   variables:
     BUILDAH_FORMAT: docker
     BUILDAH_ISOLATION: chroot
     DOCKER_HUB_REGISTRY: "docker.io"
-    IMAGE_TAG: "opennode/slurm-emulator:latest"
+    IMAGE_REPO: "opennode/slurm-emulator"
   before_script:
-    - echo "[+] Build and publish latest docker image for ${CI_DEFAULT_BRANCH} branch"
     - echo "${WALDUR_DOCKER_HUB_PASSWORD}" | buildah login -u "${WALDUR_DOCKER_HUB_USER}" --password-stdin "${DOCKER_HUB_REGISTRY}"
   script:
-    - echo "[+] Building image ${IMAGE_TAG}"
+    # On a release tag VERSION is the tag and we publish both :<tag> and :latest;
+    # on default-branch pushes we publish :latest only.
+    - VERSION="${CI_COMMIT_TAG:-latest}"
+    - echo "[+] Building ${IMAGE_REPO} (version=${VERSION})"
     - |
       buildah bud \
         --build-arg COMMIT_INFO="${CI_COMMIT_SHA}" \
-        --build-arg VERSION="latest" \
-        -t "${IMAGE_TAG}" \
+        --build-arg VERSION="${VERSION}" \
+        -t "${IMAGE_REPO}:latest" \
         -f "${CI_PROJECT_DIR}/Dockerfile" \
         "${CI_PROJECT_DIR}"
-    - buildah push "${IMAGE_TAG}" "docker://${IMAGE_TAG}"
+    - |
+      if [ -n "${CI_COMMIT_TAG}" ]; then
+        buildah tag "${IMAGE_REPO}:latest" "${IMAGE_REPO}:${CI_COMMIT_TAG}"
+        buildah push "${IMAGE_REPO}:${CI_COMMIT_TAG}" "docker://${IMAGE_REPO}:${CI_COMMIT_TAG}"
+      fi
+    - buildah push "${IMAGE_REPO}:latest" "docker://${IMAGE_REPO}:latest"

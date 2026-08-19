@@ -1,0 +1,181 @@
+{{- $dataDir := include "slurm-emulator.persistence.dir" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "slurm-emulator.fullname" . }}
+  labels:
+    {{- include "slurm-emulator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "slurm-emulator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "slurm-emulator.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- if not .Values.auth.existingSecret }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: emulator
+          image: "{{ .Values.image.repository }}:{{ include "slurm-emulator.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # No command/args: the image CMD runs scripts/docker-entrypoint.sh,
+          # which starts both API servers (and the SSH plane when enabled).
+          # Everything is configured through the environment.
+          env:
+            - name: SLURM_EMULATOR_UI_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "slurm-emulator.secretName" . }}
+                  key: ui-username
+            - name: SLURM_EMULATOR_UI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "slurm-emulator.secretName" . }}
+                  key: ui-password
+            - name: SLURM_EMULATOR_JWT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "slurm-emulator.secretName" . }}
+                  key: jwt-key
+                  optional: true
+            {{- if .Values.ssh.enabled }}
+            - name: SLURM_EMULATOR_ENABLE_SSH
+              value: "1"
+            - name: SLURM_EMULATOR_SSH_PORT
+              value: {{ .Values.ssh.port | quote }}
+            - name: SLURM_EMULATOR_SSH_TIMEOUT
+              value: {{ .Values.ssh.timeoutSeconds | quote }}
+            {{- if .Values.ssh.hostKeySecret }}
+            - name: SLURM_EMULATOR_SSH_HOST_KEY
+              value: "/etc/slurm-emulator/ssh/ssh_host_key"
+            {{- end }}
+            {{- end }}
+            {{- with .Values.partitions }}
+            - name: SLURM_EMULATOR_PARTITIONS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.partitionQos }}
+            - name: SLURM_EMULATOR_PARTITION_QOS
+              value: {{ . | quote }}
+            {{- end }}
+            - name: SLURM_EMULATOR_JOB_CLOCK
+              value: {{ .Values.jobs.clock | quote }}
+            - name: SLURM_EMULATOR_JOB_RUN_DELAY
+              value: {{ .Values.jobs.runDelaySeconds | quote }}
+            - name: SLURM_EMULATOR_JOB_RUN_DURATION
+              value: {{ .Values.jobs.runDurationSeconds | quote }}
+            {{- if .Values.debug }}
+            - name: SLURM_EMULATOR_DEBUG
+              value: "1"
+            {{- end }}
+            {{- if .Values.persistence.enabled }}
+            - name: SLURM_EMULATOR_STATE_FILE
+              value: {{ printf "%s/slurm_emulator_db.json" $dataDir | quote }}
+            - name: SLURM_EMULATOR_TIME_FILE
+              value: {{ printf "%s/slurm_emulator_time.json" $dataDir | quote }}
+            - name: SLURM_EMULATOR_FS_ROOT
+              value: {{ printf "%s/fs" $dataDir | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: control-api
+              containerPort: 8080
+              protocol: TCP
+            - name: slurmrestd
+              containerPort: 6820
+              protocol: TCP
+            {{- if .Values.ssh.enabled }}
+            - name: ssh
+              containerPort: {{ .Values.ssh.port }}
+              protocol: TCP
+            {{- end }}
+          {{- if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: control-api
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: control-api
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if or .Values.persistence.enabled (and .Values.ssh.enabled .Values.ssh.hostKeySecret) }}
+          volumeMounts:
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: {{ $dataDir }}
+            {{- end }}
+            {{- if and .Values.ssh.enabled .Values.ssh.hostKeySecret }}
+            - name: ssh-host-key
+              mountPath: /etc/slurm-emulator/ssh
+              readOnly: true
+            {{- end }}
+          {{- end }}
+      {{- if or .Values.persistence.enabled (and .Values.ssh.enabled .Values.ssh.hostKeySecret) }}
+      volumes:
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "slurm-emulator.fullname" . }}
+        {{- end }}
+        {{- if and .Values.ssh.enabled .Values.ssh.hostKeySecret }}
+        - name: ssh-host-key
+          secret:
+            secretName: {{ .Values.ssh.hostKeySecret }}
+            defaultMode: 0400
+            items:
+              - key: ssh_host_key
+                path: ssh_host_key
+        {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
