@@ -19,7 +19,7 @@ The pod runs `scripts/docker-entrypoint.sh`, which serves two HTTP planes from o
 | 6820 | slurmrestd emulation (Slurm 26.11, `v0.0.46`) | `X-SLURM-USER-TOKEN` required |
 | 2222 | SSH filesystem plane | Opt-in via `ssh.enabled` |
 
-Both planes share the same in-memory state and JSON state files, so an account created over `sacctmgr`/the control API shows up in `/slurmdb` immediately.
+The planes are separate processes sharing the same JSON state files, so an account created over the control API shows up in `/slurmdb` immediately. The reverse lags: only the slurmrestd app reloads state per request, while the control API reads it once at startup — see [`docs/kubernetes.md`](../../docs/kubernetes.md#both-planes-share-one-state--with-one-caveat).
 
 ## Values reference
 

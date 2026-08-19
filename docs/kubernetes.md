@@ -158,11 +158,13 @@ kubectl -n consumer delete pod curlcheck
 kubectl delete ns consumer
 ```
 
-### Both planes share one state
+### Both planes share one state — with one caveat
 
-The control API, the slurmrestd emulation, the CLI commands (`sacct`, `sacctmgr`, `sinfo`, `sshare`), and the SSH plane all read and write the same JSON state and clock files. An account created over `POST /api/accounts` is visible at `/slurmdb/v0.0.46/accounts` right away, and time advanced through the dashboard applies to every plane at once.
+The control API, the slurmrestd emulation, the CLI commands (`sacct`, `sacctmgr`, `sinfo`, `sshare`), and the SSH plane all read and write the same JSON state and clock files, so an account created over `POST /api/accounts` shows up at `/slurmdb/v0.0.46/accounts` right away.
 
-That sharing is also why persistence matters: without a PVC, the files live in the container's `/tmp` and every restart resets the cluster to a fresh, empty, present-day state.
+The reverse does not hold. They are separate processes, and only the slurmrestd app reloads state per request — the control API on 8080 loads it once at startup ([`emulator_server.py`](../emulator/api/emulator_server.py) `__init__`). So a write made over slurmrestd, `sacctmgr`, or the SSH plane is **not** reflected in `GET /api/status` or the dashboard until the pod restarts. An in-cluster integration test that creates an account over `/slurmdb` and then asserts on the control API will read stale data; drive both from the control API, or restart the Deployment between the write and the read.
+
+State sharing is also why persistence matters: without a PVC, the files live in the container's `/tmp` and every restart resets the cluster to a fresh, empty, present-day state.
 
 ## Step 5 (optional) — Persistence
 
@@ -260,10 +262,23 @@ Without those CRDs, `helm upgrade` will fail to apply the `Gateway`/`HTTPRoute` 
 
 ```bash
 helm uninstall slurm-emulator -n se
-kubectl delete ns se       # also removes the PVC if persistence was enabled
+kubectl delete ns se       # optional, if nothing else lives there
 ```
 
-If you only `helm uninstall` and keep the namespace, the PVC stays — delete it manually with `kubectl -n se delete pvc -l app.kubernetes.io/instance=slurm-emulator` to reclaim disk.
+**`helm uninstall` deletes the PVC and the persisted state with it.** The chart does not set `helm.sh/resource-policy: keep`, so the clock, accounts, and usage records are gone — an uninstall/reinstall cycle does not preserve them. Back the state up first if it matters:
+
+```bash
+kubectl -n se exec deploy/slurm-emulator -- \
+  tar cf - -C /data slurm_emulator_db.json slurm_emulator_time.json > emulator-state.tar
+```
+
+To keep the volume across a reinstall instead, annotate the claim before uninstalling:
+
+```bash
+kubectl -n se annotate pvc slurm-emulator helm.sh/resource-policy=keep
+```
+
+Helm will then leave it behind, and the next install with the same release name binds to it again.
 
 ## Limitations
 

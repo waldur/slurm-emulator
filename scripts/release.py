@@ -13,6 +13,7 @@ from the central version source in emulator/__init__.py.
 """
 
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -144,19 +145,27 @@ def run_pre_release_checks() -> None:
     print("Running type check...")
     run_command(["uv", "run", "mypy", "emulator/"])
 
-    # Chart lint/unittest mirror the "Lint Helm chart" CI job.
-    print("Linting Helm chart...")
-    run_command(["helm", "lint", str(CHART_YAML.parent)])
-
-    print("Running Helm chart unit tests...")
-    result = run_command(["helm", "unittest", str(CHART_YAML.parent)], check=False)
-    if result.returncode != 0:
-        print(
-            "Note: `helm unittest` requires the helm-unittest plugin. Install with:\n"
-            "  helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v0.8.2"
-        )
-        if not click.confirm("Skip helm unittest and continue?"):
+    # Chart lint/unittest mirror the "Lint Helm chart" CI job. run_command only
+    # handles a non-zero exit; a missing binary raises FileNotFoundError before
+    # there is an exit code at all, so check for helm up front.
+    if shutil.which("helm") is None:
+        print("Note: helm not found on PATH, skipping chart lint and unit tests.")
+        print("      CI still gates them in the 'Lint Helm chart' job.")
+        if not click.confirm("Continue without the chart checks?"):
             sys.exit(1)
+    else:
+        print("Linting Helm chart...")
+        run_command(["helm", "lint", str(CHART_YAML.parent)])
+
+        print("Running Helm chart unit tests...")
+        result = run_command(["helm", "unittest", str(CHART_YAML.parent)], check=False)
+        if result.returncode != 0:
+            print(
+                "Note: `helm unittest` requires the helm-unittest plugin. Install with:\n"
+                "  helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v0.8.2"
+            )
+            if not click.confirm("Skip helm unittest and continue?"):
+                sys.exit(1)
 
     print("Local pre-release checks passed!")
     print("Note: Full testing is done automatically in GitLab CI/CD")

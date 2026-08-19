@@ -114,7 +114,10 @@ Publish chart to GitHub Pages:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
-    - if: $CI_COMMIT_TAG
+    # Same guard as "Publish to PyPI": a non-semver tag would sed an invalid
+    # version into Chart.yaml and fail helm package, and a prerelease tag would
+    # publish an rc chart to the public repo that PyPI correctly skips.
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
   variables:
     GITHUB_REPO: "waldur/slurm-emulator"
     PAGES_URL: "https://waldur.github.io/slurm-emulator"
@@ -137,8 +140,11 @@ Publish chart to GitHub Pages:
     - git fetch github-origin
     # Switch to gh-pages (create as orphan on the very first publish).
     - |
+      # -f is required: the sed above leaves Chart.yaml modified, and it does not
+      # exist on gh-pages, so a plain checkout refuses to discard it. Safe here —
+      # the chart is already packaged into /tmp/dist at this point.
       if git ls-remote --exit-code github-origin gh-pages >/dev/null; then
-        git checkout -B gh-pages github-origin/gh-pages
+        git checkout -f -B gh-pages github-origin/gh-pages
       else
         git checkout --orphan gh-pages
         git rm -rf . || true
@@ -176,8 +182,8 @@ Publish docker image:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
-    # Release tag -> publish the versioned image (and move :latest to it). The
-    # Helm chart deploys :$appVersion, which is the tag, so this must run.
+    # Release tag -> publish the versioned image. The Helm chart deploys
+    # :$appVersion, which is the tag, so this must run.
     - if: '$CI_COMMIT_TAG'
     # Default-branch push -> refresh :latest.
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
@@ -189,8 +195,8 @@ Publish docker image:
   before_script:
     - echo "${WALDUR_DOCKER_HUB_PASSWORD}" | buildah login -u "${WALDUR_DOCKER_HUB_USER}" --password-stdin "${DOCKER_HUB_REGISTRY}"
   script:
-    # On a release tag VERSION is the tag and we publish both :<tag> and :latest;
-    # on default-branch pushes we publish :latest only.
+    # On a release tag VERSION is the tag and we publish :<tag>; on
+    # default-branch pushes we publish :latest.
     - VERSION="${CI_COMMIT_TAG:-latest}"
     - echo "[+] Building ${IMAGE_REPO} (version=${VERSION})"
     - |
@@ -200,9 +206,13 @@ Publish docker image:
         -t "${IMAGE_REPO}:latest" \
         -f "${CI_PROJECT_DIR}/Dockerfile" \
         "${CI_PROJECT_DIR}"
+    # A tag pipeline publishes only the versioned image. :latest stays "tip of
+    # the default branch" — tagging a patch off a maintenance branch must not
+    # move it backwards for everyone running `docker run opennode/slurm-emulator`.
     - |
       if [ -n "${CI_COMMIT_TAG}" ]; then
         buildah tag "${IMAGE_REPO}:latest" "${IMAGE_REPO}:${CI_COMMIT_TAG}"
         buildah push "${IMAGE_REPO}:${CI_COMMIT_TAG}" "docker://${IMAGE_REPO}:${CI_COMMIT_TAG}"
+      else
+        buildah push "${IMAGE_REPO}:latest" "docker://${IMAGE_REPO}:latest"
       fi
-    - buildah push "${IMAGE_REPO}:latest" "docker://${IMAGE_REPO}:latest"

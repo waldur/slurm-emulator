@@ -11,9 +11,13 @@ spec:
     - name: {{ include "slurm-emulator.fullname" . }}
       sectionName: {{ .Values.gatewayApi.gateway.listenerName | quote }}
     {{- else }}
-    {{- with .Values.gatewayApi.parentRefs }}
-    {{- toYaml . | nindent 4 }}
+    {{- /* `required` does not reject an empty list, and an empty parentRefs renders
+           `parentRefs:` (null) — which the API server accepts, leaving the HTTPRoute
+           bound to no Gateway with nothing anywhere reporting it. */}}
+    {{- if not .Values.gatewayApi.parentRefs }}
+    {{- fail "gatewayApi.parentRefs is required unless gatewayApi.createGateway is true" }}
     {{- end }}
+    {{- toYaml .Values.gatewayApi.parentRefs | nindent 4 }}
     {{- end }}
   {{- with .Values.gatewayApi.hostnames }}
   hostnames:

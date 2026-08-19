@@ -50,6 +50,14 @@ tests:
       - failedTemplate:
           errorMessage: gatewayApi.gateway.gatewayClassName is required when createGateway is true
 
+  - it: fails fast when enabled without a Gateway to attach to
+    set:
+      gatewayApi.enabled: true
+    template: templates/httproute.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: gatewayApi.parentRefs is required unless gatewayApi.createGateway is true
+
   - it: defaults route traffic to the control API port
     set:
       gatewayApi.enabled: true
