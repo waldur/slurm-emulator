@@ -69,6 +69,12 @@ persistence:
   # Directory inside the container holding the state and clock JSON files, plus
   # the SSH plane's fake filesystem root.
   path: /data
+  # Keep the PVC when the release is uninstalled. Off by default so an uninstall
+  # leaves nothing behind; turn it on before `helm uninstall` if the emulator
+  # clock and accounting are worth preserving across a reinstall. This must be
+  # set while the release is installed — Helm reads the resource policy from the
+  # stored release manifest, so annotating the live PVC afterwards has no effect.
+  keepOnUninstall: false
 
 service:
   type: ClusterIP

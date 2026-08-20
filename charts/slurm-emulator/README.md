@@ -44,6 +44,7 @@ The planes are separate processes sharing the same JSON state files, so an accou
 | `persistence.enabled` | `false` | When on, mounts a PVC and redirects state, clock, and SSH filesystem into it. |
 | `persistence.size` | `1Gi` | |
 | `persistence.path` | `/data` | Mount dir; holds `slurm_emulator_db.json`, `slurm_emulator_time.json`, and `fs/`. |
+| `persistence.keepOnUninstall` | `false` | Renders `helm.sh/resource-policy: keep` so `helm uninstall` leaves the PVC. Must be set *before* the uninstall — Helm reads the policy from the stored release manifest, not the live object. |
 | `service.type` | `ClusterIP` | 8080 and 6820 always exposed; 2222 added with `ssh.enabled`. |
 | `ingress.enabled` | `false` | Disabled by default — see Limitations. |
 | `gatewayApi.enabled` | `false` | Optional `gateway.networking.k8s.io/v1` HTTPRoute. Off for the same reason as `ingress`. |
@@ -58,7 +59,7 @@ The planes are separate processes sharing the same JSON state files, so an accou
 - Single replica only. State lives in memory and is flushed to one JSON file; two replicas diverge silently, and `strategy: Recreate` exists so a rolling update never puts two pods on one `ReadWriteOnce` volume.
 - Without `persistence.enabled`, the emulator clock, accounts, and usage records reset on every restart — which also resets any time travel a test had performed.
 - `ingress` / `gatewayApi` cover the HTTP planes only. The SSH plane is TCP and needs a `TCPRoute` or a `LoadBalancer`/`NodePort` Service instead.
-- Do not expose the dashboard without changing `auth.uiPassword`, or the slurmrestd plane without setting `auth.jwtKey` — the defaults accept `admin`/`admin` and any bearer token respectively.
+- Do not expose the dashboard without changing `auth.uiPassword`, or the slurmrestd plane without setting `auth.jwtKey` — the defaults accept `admin`/`admin` and any bearer token respectively. Note that only `/ui/` is behind Basic auth: the control API's `/api/*` routes on the same port are unauthenticated and no chart value changes that, so port 8080 needs a fronting proxy if it leaves the cluster.
 - Persistence is plain JSON; switching emulator versions may break the on-disk schema.
 
 ## See also

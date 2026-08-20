@@ -14,3 +14,8 @@
 .idea/
 *.tmproj
 .vscode/
+
+# helm-unittest suites — dev-only fixtures, no place in the packaged chart.
+# Anchored so it cannot also match templates/tests/, which holds the real
+# `helm test` hook.
+/tests/

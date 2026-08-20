@@ -22,6 +22,13 @@ Confirm with `helm test`:
 For deployment details (auth, persistence, SSH plane, ingress, Gateway API), see:
   docs/kubernetes.md
 
+{{- if or .Values.ingress.enabled .Values.gatewayApi.enabled }}
+
+WARNING: this release is published outside the cluster. Only /ui/ is behind
+Basic auth — the control API's /api/* routes on port 8080 have no authentication
+and no chart value adds any. Put an authenticating proxy in front.
+{{- end }}
+
 {{- if .Values.ingress.enabled }}
 
 Ingress rules:
@@ -30,7 +37,7 @@ Ingress rules:
 {{- end }}
 {{- end }}
 
-{{- if and (not .Values.auth.existingSecret) (eq .Values.auth.uiPassword "admin") }}
+{{- if and (not .Values.auth.existingSecret) (eq (toString .Values.auth.uiPassword) "admin") }}
 
 WARNING: the web dashboard is using the default password. Set `auth.uiPassword`
 (or `auth.existingSecret`) before exposing it beyond the cluster.

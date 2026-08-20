@@ -78,6 +78,8 @@ Two secrets matter, and both have permissive defaults so the emulator works out 
 | `auth.uiPassword` | `admin` | The web dashboard at `/ui/` — which can advance time, inject usage, and change QoS — is open to anyone who can reach port 8080 |
 | `auth.jwtKey` | `""` (empty) | The slurmrestd plane accepts *any* `X-SLURM-USER-TOKEN` value |
 
+**Neither of these protects the control API itself.** Only `/ui/` is behind Basic auth; the `/api/*` routes on the same port have no authentication and no chart value that adds any — `POST /api/time/advance`, `/api/accounts`, `/api/submit-report`, and `/api/downscale-resource` all answer unauthenticated requests. Anyone who can reach port 8080 can rewind the cluster clock and inject usage regardless of what you set here. Treat network reachability as the only control on 8080, and put an authenticating proxy in front if it must leave the cluster.
+
 Set them at install time, or point the chart at a Secret you manage yourself:
 
 ```bash
@@ -207,7 +209,9 @@ The SSH plane is TCP, so `ingress` and `gatewayApi` do not cover it — expose i
 
 ## Step 7 (optional) — Expose externally
 
-The chart supports either Ingress or Gateway API for the two HTTP planes; pick whichever your cluster already runs. **Only expose on a trusted network, and only after Step 2** — the dashboard drives the whole emulator.
+The chart supports either Ingress or Gateway API for the two HTTP planes; pick whichever your cluster already runs.
+
+**Only expose on a trusted network.** Step 2 is necessary but not sufficient: the ingress example below and the default HTTPRoute rule both publish port 8080, whose `/api/*` routes are unauthenticated no matter what credentials you set. Anything reachable from outside the cluster needs an authenticating proxy in front of it.
 
 ### Option A: Ingress (`networking.k8s.io/v1`)
 
@@ -272,18 +276,19 @@ kubectl -n se exec deploy/slurm-emulator -- \
   tar cf - -C /data slurm_emulator_db.json slurm_emulator_time.json > emulator-state.tar
 ```
 
-To keep the volume across a reinstall instead, annotate the claim before uninstalling:
+To keep the volume across a reinstall instead, set `persistence.keepOnUninstall` **while the release is still installed**:
 
 ```bash
-kubectl -n se annotate pvc slurm-emulator helm.sh/resource-policy=keep
+helm upgrade slurm-emulator ./charts/slurm-emulator -n se --reuse-values \
+  --set persistence.keepOnUninstall=true
 ```
 
-Helm will then leave it behind, and the next install with the same release name binds to it again.
+Helm will then leave the PVC behind, and the next install with the same release name binds to it again. It has to go through the chart: Helm reads `helm.sh/resource-policy` from the manifest stored in the release, never from the live object, so `kubectl annotate` on the PVC after the fact has no effect at all.
 
 ## Limitations
 
 - **Single replica only.** Emulator state is in memory and flushed to one JSON file; two pods produce two diverging clusters, each with its own clock. The chart defaults `replicaCount: 1` and there is no supported way to scale out.
-- **Permissive defaults.** Dashboard `admin`/`admin`, and any bearer token accepted on slurmrestd. Both are configurable (Step 2) — neither is safe to skip before exposing the Service.
+- **Permissive defaults, and one surface with no knob at all.** The dashboard defaults to `admin`/`admin` and slurmrestd accepts any bearer token; both are configurable (Step 2). The control API's `/api/*` routes on 8080 are unauthenticated and cannot be secured through the chart — only a fronting proxy or network policy protects them.
 - **Ephemeral without a PVC.** Time travel, injected usage, and created accounts are lost on restart, which silently rewinds any test mid-flight.
 - **HTTP exposure only.** `ingress` / `gatewayApi` do not cover the SSH plane.
 - **Persistence is plain JSON.** There is no schema migration; an image upgrade over an existing PVC may fail to read state written by a different emulator version. Delete the PVC to start clean if that happens.

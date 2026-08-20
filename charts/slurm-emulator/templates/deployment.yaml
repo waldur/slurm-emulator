@@ -161,7 +161,10 @@ spec:
         - name: ssh-host-key
           secret:
             secretName: {{ .Values.ssh.hostKeySecret }}
-            defaultMode: 0400
+            # 0444, not 0400: with a non-root securityContext an unreadable key
+            # makes asyncssh raise, and docker-entrypoint.sh's `wait -n` then
+            # takes the healthy API planes down with it.
+            defaultMode: 0444
             items:
               - key: ssh_host_key
                 path: ssh_host_key

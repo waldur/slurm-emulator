@@ -78,7 +78,9 @@ Lint Helm chart:
     # Render the default install and every optional-feature variant — failures here
     # catch templating regressions (missing values, invalid go-template, wrong indent).
     - mkdir -p rendered-templates/default && helm template se charts/slurm-emulator/ --output-dir rendered-templates/default --debug
-    - mkdir -p rendered-templates/persistence && helm template se charts/slurm-emulator/ --output-dir rendered-templates/persistence --set persistence.enabled=true
+    - mkdir -p rendered-templates/persistence && helm template se charts/slurm-emulator/ --output-dir rendered-templates/persistence --set persistence.enabled=true --set persistence.keepOnUninstall=true
+    # --set coerces an all-digit password to int64; NOTES.txt must not compare it as a string.
+    - mkdir -p rendered-templates/numericPassword && helm template se charts/slurm-emulator/ --output-dir rendered-templates/numericPassword --set auth.uiPassword=12345678
     - mkdir -p rendered-templates/ssh && helm template se charts/slurm-emulator/ --output-dir rendered-templates/ssh --set ssh.enabled=true --set ssh.hostKeySecret=host-key
     - mkdir -p rendered-templates/existingSecret && helm template se charts/slurm-emulator/ --output-dir rendered-templates/existingSecret --set auth.existingSecret=my-secret
     - mkdir -p rendered-templates/ingress && helm template se charts/slurm-emulator/ --output-dir rendered-templates/ingress --set ingress.enabled=true --set 'ingress.hosts[0].host=se.example.com' --set 'ingress.hosts[0].paths[0].path=/' --set 'ingress.hosts[0].paths[0].pathType=Prefix' --set 'ingress.hosts[0].paths[0].port=8080'
@@ -111,6 +113,13 @@ Publish chart to GitHub Pages:
     entrypoint: [""]
   stage: release
   interruptible: false
+  # The published chart pins appVersion (and therefore image.tag) to this tag.
+  # Publishing it before the image exists would put a .tgz on gh-pages that
+  # installs to ImagePullBackOff, and gh-pages entries are not retractable —
+  # fixing it would mean republishing the same chart version.
+  needs:
+    - job: Publish docker image
+      artifacts: false
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
@@ -183,8 +192,10 @@ Publish docker image:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
     # Release tag -> publish the versioned image. The Helm chart deploys
-    # :$appVersion, which is the tag, so this must run.
-    - if: '$CI_COMMIT_TAG'
+    # :$appVersion, which is the tag, so this must run. Same semver guard as the
+    # chart and PyPI jobs: a tag they skip must not leave an orphan image tag
+    # behind that nothing references.
+    - if: '$CI_COMMIT_TAG =~ /^\d+\.\d+\.\d+$/'
     # Default-branch push -> refresh :latest.
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   variables:
