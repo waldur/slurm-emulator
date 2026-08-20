@@ -1,0 +1,74 @@
+# FireCREST v2 cluster config for emulators deployed by the Helm chart.
+#
+# This is ../e2e/f7t-api-config.emulator.yaml with the compose service names
+# swapped for in-cluster DNS, and two differences that are specific to the chart
+# — the SSH port and the filesystem path. Both are called out below.
+#
+# Field names track FireCREST's `src/firecrest/config.py` (Scheduler at ~:130,
+# HPCCluster at ~:427) — align them with your FireCREST version if the schema
+# has moved.
+#
+# Assumes both releases are installed in the `firecrest` namespace with the
+# fullnameOverride from the values files in this directory. If FireCREST itself
+# runs in that same namespace, the short name (`cluster-emulator`) resolves too.
+clusters:
+  - name: "cluster-emulator"
+    ssh:
+      host: "cluster-emulator.firecrest.svc.cluster.local"
+      # 2222, not 22: the chart's ssh.port default. Set `ssh.port: 22` in the
+      # chart values instead if you would rather keep this at 22.
+      port: 2222
+      max_clients: 10
+      timeout:
+        connection: 5
+        login: 5
+        # The emulator runs uploads as real coreutils over SSH; keep this
+        # comfortably above SLURM_EMULATOR_SSH_TIMEOUT (chart: ssh.timeoutSeconds).
+        command_execution: 30
+    scheduler:
+      type: "slurm"
+      connection_mode: "rest"
+      version: "26.11.0"
+      api_url: "http://cluster-emulator.firecrest.svc.cluster.local:6820"
+      # Must stay 0.0.46 — it is the emulator's data_parser version, and the
+      # submit dialect (script inside the job body, environment as a list)
+      # differs in other versions.
+      api_version: "0.0.46"
+      timeout: 10
+    service_account:
+      client_id: "firecrest-cluster"
+      secret: "change-me"
+    file_systems:
+      # NOT /home. With chart persistence on, the emulator's SSH plane roots the
+      # fake filesystem at <persistence.path>/fs, so a user's home directory is
+      # /data/fs/home/<username>. Pointing this at /home would land FireCREST in
+      # the container's real, empty /home — off the PVC, and wiped on restart.
+      - path: "/data/fs/home"
+        data_type: "users"
+        default_work_dir: true
+    # Point data_transfer at your S3/MinIO as in the demo config. Large-file
+    # transfer is out of scope for the emulator either way.
+
+  - name: "cluster-emulator-2"
+    ssh:
+      host: "cluster-emulator-2.firecrest.svc.cluster.local"
+      port: 2222
+      max_clients: 10
+      timeout:
+        connection: 5
+        login: 5
+        command_execution: 30
+    scheduler:
+      type: "slurm"
+      connection_mode: "rest"
+      version: "26.11.0"
+      api_url: "http://cluster-emulator-2.firecrest.svc.cluster.local:6820"
+      api_version: "0.0.46"
+      timeout: 10
+    service_account:
+      client_id: "firecrest-cluster"
+      secret: "change-me"
+    file_systems:
+      - path: "/data/fs/home"
+        data_type: "users"
+        default_work_dir: true
