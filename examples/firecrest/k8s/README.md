@@ -2,7 +2,15 @@
 
 The [`ui/`](../ui/) and [`e2e/`](../e2e/) stacks wire FireCREST to the emulator with docker-compose. This directory covers the same scenario when the emulator is deployed by the [Helm chart](../../../charts/slurm-emulator) instead: which chart values the FireCREST path actually requires, and the four places where the chart's defaults do *not* match what the compose files set.
 
-Scope is the emulator side. Deploying FireCREST, its Keycloak, OpenFGA and S3 to Kubernetes is FireCREST's own business — this only tells you what to point them at.
+FireCREST v2 publishes its own Helm chart, so both halves install from a chart repo:
+
+```bash
+helm repo add slurm-emulator https://waldur.github.io/slurm-emulator/
+helm repo add firecrest-v2   https://eth-cscs.github.io/firecrest-v2/charts/
+helm repo update
+```
+
+This directory carries the overlay for each. Keycloak, OpenFGA and S3 remain FireCREST's own business — the overlays mark those spots `CHANGE ME`.
 
 ## What the scenario needs
 
@@ -15,6 +23,8 @@ FireCREST talks to a cluster over two planes, and the emulator serves both from 
 | Control API + dashboard | 8080 | not used by FireCREST | on, keep internal |
 
 Both planes share one state directory, so a file uploaded over SSH is visible to the job that reads it.
+
+A Waldur site agent, if you add one, is a third party on the 6820 plane — see [Adding a Waldur site agent](#adding-a-waldur-site-agent).
 
 ## Install
 
@@ -39,9 +49,26 @@ helm install cluster-emulator slurm-emulator/slurm-emulator \
 helm test cluster-emulator -n firecrest
 ```
 
-Then hand [`f7t-api-config.emulator-k8s.yaml`](f7t-api-config.emulator-k8s.yaml) to FireCREST as its `YAML_CONFIG_FILE`, or merge its `clusters:` entries into the config you already have.
-
 For the two-cluster setup that [`ui/`](../ui/) demonstrates, repeat with [`values-cluster-emulator-2.yaml`](values-cluster-emulator-2.yaml) and its own host-key Secret.
+
+Then deploy FireCREST against it with [`values-firecrest-api.yaml`](values-firecrest-api.yaml):
+
+```bash
+helm install firecrest firecrest-v2/firecrest-api \
+  -n firecrest -f values-firecrest-api.yaml
+```
+
+That overlay only fills in the emulator-facing parts of FireCREST's config — the OIDC provider, the service account, and the SSH key Secret are marked `CHANGE ME`. If you drive FireCREST's cluster config through `clusters: path:/app/clusters` and a `firecrest-cluster-configs` ConfigMap instead of chart values, [`f7t-api-config.emulator-k8s.yaml`](f7t-api-config.emulator-k8s.yaml) is the same content in that form.
+
+## Files
+
+| File | For |
+|---|---|
+| [`values-cluster-emulator.yaml`](values-cluster-emulator.yaml) | the `slurm-emulator` chart — first cluster |
+| [`values-cluster-emulator-2.yaml`](values-cluster-emulator-2.yaml) | the `slurm-emulator` chart — second, independent cluster |
+| [`values-firecrest-api.yaml`](values-firecrest-api.yaml) | the `firecrest-v2/firecrest-api` chart, pointed at both |
+| [`values-site-agent.yaml`](values-site-agent.yaml) | the `waldur-site-agent` chart — see [Adding a Waldur site agent](#adding-a-waldur-site-agent) |
+| [`f7t-api-config.emulator-k8s.yaml`](f7t-api-config.emulator-k8s.yaml) | FireCREST's raw cluster config, for the ConfigMap route |
 
 ## The four things the chart does not do for you
 
@@ -87,6 +114,43 @@ Without `ssh.hostKeySecret` the emulator generates a fresh RSA host key at every
 
 The emulator's SSH plane accepts any client key — the key FireCREST presents only has to satisfy its own static-key loader, exactly as in [`ui/`](../ui/).
 
+## Adding a Waldur site agent
+
+`waldur-site-agent` is a second, independent consumer of the same emulator. FireCREST drives jobs and files for end users; the agent creates and manages the SLURM accounts those jobs are charged to. Both reach `slurmrestd` on 6820, and neither knows about the other:
+
+```
+Waldur Mastermind ──► site agent ──┐
+                                   ├──► cluster-emulator:6820  (slurmrestd)
+end user ──► FireCREST ────────────┘──► cluster-emulator:2222  (SSH plane)
+```
+
+The agent has no FireCREST client and does not need one — it speaks the same `slurmrestd` plane directly, via its SLURM plugin's `execution_mode: rest`. Deploy it with its own chart and [`values-site-agent.yaml`](values-site-agent.yaml):
+
+```bash
+helm install site-agent ../../../../waldur-site-agent/helm/waldur-site-agent \
+  -n firecrest -f values-site-agent.yaml
+```
+
+Fill in `waldur_api_url`, `waldur_api_token` and `waldur_offering_uuid` for your Mastermind first — those are the only `CHANGE ME` fields.
+
+### Two things to get right
+
+**`api_version` must be `v0.0.46`, with the `v`.** The SLURM plugin interpolates this value verbatim into `/slurmdb/{api_version}/...`, and its default is `v0.0.43`. The emulator serves `v0.0.46` only, so the default produces:
+
+```
+BackendError slurmrestd error (GET /slurm/v0.0.43/ping/): HTTP 404
+```
+
+This is the **opposite convention from FireCREST**, which builds `/slurm/v{api_version}/` and therefore wants `0.0.46` with no prefix. The same cluster, two configs, two spellings — [`values-firecrest-api.yaml`](values-firecrest-api.yaml) and [`values-site-agent.yaml`](values-site-agent.yaml) each carry a comment saying so.
+
+**`cluster_name` is required in rest mode**, because every REST association payload carries an explicit cluster. Omitting it fails at startup with `cluster_name is required when SLURM execution_mode is 'rest'`.
+
+The token is a non-issue as long as `auth.jwtKey` stays empty (which FireCREST requires anyway): any non-empty `SLURM_JWT` value is accepted. If you ever do set a key, mint a real one with `POST /api/token` on the control API rather than inventing a string.
+
+### Which agents to run
+
+The overlay enables the polling agents — `orderProcess`, `report`, `membershipSync` — and disables `eventProcess`, which needs Mastermind's STOMP broker reachable from the cluster. Turn it on once that connectivity exists.
+
 ## Verify
 
 ```bash
@@ -119,6 +183,23 @@ From FireCREST itself, the end-to-end check is the same as with compose: list th
 | Whole pod in `CrashLoopBackOff` after setting a non-root `securityContext` | The SSH host key must be readable by the runtime user; when asyncssh cannot read it the entrypoint's `wait -n` takes the healthy planes down too | Add a matching `fsGroup`, or drop the custom `securityContext` |
 | Job submit rejected with a schema error | `scheduler.api_version` is not `0.0.46` | The emulator serves one data_parser version; pin it |
 | Two clusters show identical node lists | Both releases use the default topology | Give each its own `partitions` |
+| Site agent: `slurmrestd error (GET /slurm/v0.0.43/ping/): HTTP 404` | `rest_api.api_version` left at the plugin default | Set `v0.0.46`, with the `v` |
+| Site agent: `cluster_name is required when SLURM execution_mode is 'rest'` | Missing `backend_settings.cluster_name` | Set it to the emulator's cluster name |
+| FireCREST requests hit `/slurm/vv0.0.46/` | `api_version` given as `v0.0.46` on the FireCREST side | Drop the `v` — FireCREST prepends it |
+
+## Validated against
+
+Everything above was checked on a live cluster (Kubernetes 1.36) against the published chart `slurm-emulator 0.9.2`, not just rendered:
+
+- both values files install; the pod becomes Ready and `helm test` passes
+- `slurmrestd` answers `/slurm/v0.0.46/ping/` with an arbitrary token, and 401s with none
+- setting `auth.jwtKey` makes *both* an RS256 Keycloak-shaped token and an opaque one 401 — clearing it restores 200
+- over the SSH plane, `pwd` returns `/data/fs/home/<user>` and `$HOME` matches
+- a file written there survives `kubectl rollout restart`, and the host key fingerprint is unchanged across it (so `ssh.hostKeySecret` is doing its job)
+- the FireCREST overlay renders against `firecrest-v2/firecrest-api` 2.5.6
+- the site-agent overlay renders, and the config it produces validates against the SLURM plugin's schema and drives the plugin's real `SlurmRestClient` against the emulator image — `slurm 26.11.0`, accounts listed
+
+Not validated: FireCREST and the site agent running end to end against Mastermind and Keycloak. Those need credentials this example cannot carry.
 
 ## See also
 

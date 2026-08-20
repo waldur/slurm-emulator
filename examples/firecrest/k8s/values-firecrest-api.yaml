@@ -1,0 +1,119 @@
+# Overlay for FireCREST v2's own Helm chart, pointing it at emulators deployed
+# by the slurm-emulator chart.
+#
+#   helm repo add firecrest-v2 https://eth-cscs.github.io/firecrest-v2/charts/
+#   helm repo update
+#   helm install firecrest firecrest-v2/firecrest-api \
+#     -n firecrest -f examples/firecrest/k8s/values-firecrest-api.yaml
+#
+# This is only the emulator-facing part. FireCREST's OIDC provider, its service
+# account, and (if you need large transfers) S3 are yours to fill in — the
+# placeholders below are marked CHANGE ME.
+#
+# Checked against chart firecrest-v2/firecrest-api 2.5.6.
+
+firecrest:
+  auth:
+    authentication:
+      # CHANGE ME — your Keycloak realm. The emulator does not care who the user
+      # is, but FireCREST will not start without a working OIDC configuration.
+      token_url: "https://keycloak.example.com/auth/realms/kcrealm/protocol/openid-connect/token"
+      public_certs:
+        - "https://keycloak.example.com/auth/realms/kcrealm/protocol/openid-connect/certs"
+
+  ssh_credentials:
+    # The emulator's SSH plane authenticates nobody (begin_auth returns False),
+    # so this key only has to satisfy FireCREST's own static-key loader.
+    type: "SSHStaticKeys"
+    keys:
+      fireuser:
+        private_key: "secret_file:/app/secrets/fireuser_private_key"
+
+  clusters:
+    - name: "cluster-emulator"
+      ssh:
+        # Service name from values-cluster-emulator.yaml (fullnameOverride),
+        # in the namespace you installed it into.
+        host: "cluster-emulator.firecrest.svc.cluster.local"
+        # 2222, not the chart default 22 — that is the slurm-emulator chart's
+        # ssh.port. Set ssh.port: 22 over there if you would rather keep 22 here.
+        port: 2222
+        max_clients: 10
+        timeout:
+          connection: 5
+          login: 5
+          # Above the emulator's own shell timeout (ssh.timeoutSeconds, 30s):
+          # FireCREST moves files by running real coreutils over this channel.
+          command_execution: 30
+      scheduler:
+        type: "slurm"
+        # Present in FireCREST's own f7t-api-config.local-env.yaml. Without it
+        # the cluster is driven over SSH CLI rather than slurmrestd.
+        connection_mode: "rest"
+        version: "26.11.0"
+        api_url: "http://cluster-emulator.firecrest.svc.cluster.local:6820"
+        # NO "v" prefix. FireCREST builds URLs as /slurm/v{api_version}/... so
+        # "v0.0.46" here would request /slurm/vv0.0.46/ and 404. Note this is the
+        # opposite convention from waldur-site-agent — see values-site-agent.yaml.
+        api_version: "0.0.46"
+        timeout: 10
+      service_account:
+        client_id: "firecrest-health-check"   # CHANGE ME
+        secret: "secret_file:/app/secrets/health_check_service_account_secret"
+      file_systems:
+        # NOT /home. The slurm-emulator chart roots the fake filesystem inside
+        # the PVC at <persistence.path>/fs, so homes are /data/fs/home/<user>.
+        # Verified on a live cluster: `pwd` over the SSH plane returns
+        # /data/fs/home/<user>, and files written there survive a pod restart.
+        - path: "/data/fs/home"
+          data_type: "users"
+          default_work_dir: true
+
+    # Second cluster — drop this block for a single-cluster setup.
+    - name: "cluster-emulator-2"
+      ssh:
+        host: "cluster-emulator-2.firecrest.svc.cluster.local"
+        port: 2222
+        max_clients: 10
+        timeout:
+          connection: 5
+          login: 5
+          command_execution: 30
+      scheduler:
+        type: "slurm"
+        connection_mode: "rest"
+        version: "26.11.0"
+        api_url: "http://cluster-emulator-2.firecrest.svc.cluster.local:6820"
+        api_version: "0.0.46"
+        timeout: 10
+      service_account:
+        client_id: "firecrest-health-check"   # CHANGE ME
+        secret: "secret_file:/app/secrets/health_check_service_account_secret"
+      file_systems:
+        - path: "/data/fs/home"
+          data_type: "users"
+          default_work_dir: true
+
+# Mount the secrets referenced above as secret_file:. Create the Secret yourself:
+#   kubectl -n firecrest create secret generic firecrest-secrets \
+#     --from-file=fireuser_private_key=./id_rsa \
+#     --from-literal=health_check_service_account_secret=CHANGEME
+volumes:
+  - name: firecrest-secrets-volume
+    secret:
+      secretName: firecrest-secrets
+      items:
+        - key: fireuser_private_key
+          path: fireuser_private_key
+        - key: health_check_service_account_secret
+          path: health_check_service_account_secret
+
+# The chart's defaults request 4 CPU / 2Gi. Fine on a real cluster, too much for
+# a laptop kind/Docker Desktop node — lower them for a local run.
+resources:
+  requests:
+    cpu: 1
+    memory: 1Gi
+  limits:
+    cpu: 2
+    memory: 2Gi
