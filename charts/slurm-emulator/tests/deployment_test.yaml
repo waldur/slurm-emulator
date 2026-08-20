@@ -1,0 +1,240 @@
+suite: deployment env, ports, mounts, and image
+templates:
+  - templates/deployment.yaml
+  # Rendered only so the checksum/secret annotation's include can resolve;
+  # every test scopes its assertions back to the Deployment.
+  - templates/secret.yaml
+tests:
+  - it: defaults the image tag to the chart appVersion
+    template: templates/deployment.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "^opennode/slurm-emulator:.+$"
+
+  - it: relies on the image CMD rather than overriding the entrypoint
+    template: templates/deployment.yaml
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].command
+      - isNull:
+          path: spec.template.spec.containers[0].args
+
+  - it: exposes the two API ports and no SSH port by default
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - name: control-api
+              containerPort: 8080
+              protocol: TCP
+            - name: slurmrestd
+              containerPort: 6820
+              protocol: TCP
+
+  - it: reads UI credentials and the JWT key from the chart-managed Secret
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_UI_USER
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-slurm-emulator
+                key: ui-username
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_JWT_KEY
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-slurm-emulator
+                key: jwt-key
+                optional: true
+
+  - it: reads credentials from auth.existingSecret when set
+    template: templates/deployment.yaml
+    set:
+      auth.existingSecret: my-secret
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_UI_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: my-secret
+                key: ui-password
+      - isNull:
+          path: spec.template.metadata.annotations["checksum/secret"]
+
+  - it: rolls pods when the chart-managed Secret changes
+    template: templates/deployment.yaml
+    asserts:
+      - isNotNull:
+          path: spec.template.metadata.annotations["checksum/secret"]
+
+  - it: omits partition topology env vars when unset
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_PARTITIONS
+          any: true
+
+  - it: passes partition topology and QoS gates through
+    template: templates/deployment.yaml
+    set:
+      partitions: "gpu:8,compute:32"
+      partitionQos: "gpu=allow:normal,high"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_PARTITIONS
+            value: "gpu:8,compute:32"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_PARTITION_QOS
+            value: "gpu=allow:normal,high"
+
+  - it: quotes numeric job lifecycle values (env values must be strings)
+    template: templates/deployment.yaml
+    set:
+      jobs.runDelaySeconds: 5
+      jobs.runDurationSeconds: 60
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_JOB_RUN_DELAY
+            value: "5"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_JOB_RUN_DURATION
+            value: "60"
+
+  - it: enables the SSH plane and its port when ssh.enabled
+    template: templates/deployment.yaml
+    set:
+      ssh.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_ENABLE_SSH
+            value: "1"
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: ssh
+            containerPort: 2222
+            protocol: TCP
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_SSH_HOST_KEY
+          any: true
+
+  - it: mounts a persistent SSH host key when one is supplied
+    template: templates/deployment.yaml
+    set:
+      ssh.enabled: true
+      ssh.hostKeySecret: my-host-key
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_SSH_HOST_KEY
+            value: /etc/slurm-emulator/ssh/ssh_host_key
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: ssh-host-key
+            mountPath: /etc/slurm-emulator/ssh
+            readOnly: true
+
+  - it: ignores ssh.hostKeySecret while the SSH plane is disabled
+    template: templates/deployment.yaml
+    set:
+      ssh.hostKeySecret: my-host-key
+    asserts:
+      - isNull:
+          path: spec.template.spec.volumes
+
+  - it: redirects state, clock, and SSH filesystem into the PVC
+    template: templates/deployment.yaml
+    set:
+      persistence.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_STATE_FILE
+            value: /data/slurm_emulator_db.json
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_TIME_FILE
+            value: /data/slurm_emulator_time.json
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_FS_ROOT
+            value: /data/fs
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: data
+            mountPath: /data
+
+  - it: strips a trailing slash from persistence.path
+    template: templates/deployment.yaml
+    set:
+      persistence.enabled: true
+      persistence.path: /var/lib/slurm-emulator/
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_STATE_FILE
+            value: /var/lib/slurm-emulator/slurm_emulator_db.json
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: data
+            mountPath: /var/lib/slurm-emulator
+
+  - it: never rolls two replicas over each other onto one RWO volume
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: probes the unauthenticated control API root
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet
+          value:
+            path: /
+            port: control-api
+
+  - it: appends extraEnv verbatim
+    template: templates/deployment.yaml
+    set:
+      extraEnv:
+        - name: EXTRA
+          value: "1"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXTRA
+            value: "1"

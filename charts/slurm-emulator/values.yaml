@@ -1,0 +1,168 @@
+# Default values for slurm-emulator.
+
+image:
+  repository: opennode/slurm-emulator
+  # Tag left empty so it falls back to .Chart.AppVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Always 1 — the emulator keeps state in memory, flushed to a single JSON file.
+# A second replica gets its own divergent clock and account state.
+replicaCount: 1
+
+auth:
+  # HTTP Basic credentials for the web dashboard at /ui/. The image defaults to
+  # admin/admin and prints a startup warning; the chart sets them explicitly.
+  uiUsername: admin
+  uiPassword: admin
+  # HS256 signing key for slurmrestd JWT verification (SLURM_EMULATOR_JWT_KEY).
+  # Empty means any X-SLURM-USER-TOKEN value is accepted — fine for a sandbox.
+  jwtKey: ""
+  # Use a pre-created Secret instead of the chart-managed one. Expected keys:
+  # ui-username, ui-password, and optionally jwt-key.
+  existingSecret: ""
+
+# SSH filesystem plane (asyncssh, port 2222). Only needed to drive FireCREST v2
+# or anything else that expects a shell on the cluster. Off by default.
+ssh:
+  enabled: false
+  port: 2222
+  # Shell command timeout in seconds.
+  timeoutSeconds: 30
+  # Name of a Secret holding an SSH host key under the `ssh_host_key` key.
+  # Without one the server generates a fresh RSA key on every start, so clients
+  # see a host-key change after each pod restart.
+  hostKeySecret: ""
+
+# Cluster topology reported by sinfo and the slurmrestd partition endpoints.
+# Either counts ("gpu:8,compute:32") or explicit node ranges
+# ("debug:1-4,compute:5-100"). Empty keeps the image default.
+partitions: ""
+# Per-partition QoS gates: `name=mode:csv` entries (mode is allow|deny|qos)
+# separated by ";", e.g. "gpu=allow:normal,high;gpu=qos:normal".
+# Empty means every partition permits every QoS.
+partitionQos: ""
+
+# Lifecycle of jobs submitted through slurmrestd / sbatch. They advance
+# PENDING -> RUNNING -> COMPLETED lazily on read.
+jobs:
+  # "wall" advances against real time, "time" against the emulator's clock.
+  clock: wall
+  runDelaySeconds: 2
+  runDurationSeconds: 8
+
+# Sets SLURM_EMULATOR_DEBUG=1.
+debug: false
+
+# Optional persistence. Off by default because the demo/sandbox use case is
+# ephemeral — without it, time travel and accounting reset on every restart.
+persistence:
+  enabled: false
+  size: 1Gi
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  # Directory inside the container holding the state and clock JSON files, plus
+  # the SSH plane's fake filesystem root.
+  path: /data
+  # Keep the PVC when the release is uninstalled. Off by default so an uninstall
+  # leaves nothing behind; turn it on before `helm uninstall` if the emulator
+  # clock and accounting are worth preserving across a reinstall. This must be
+  # set while the release is installed — Helm reads the resource policy from the
+  # stored release manifest, so annotating the live PVC afterwards has no effect.
+  keepOnUninstall: false
+
+service:
+  type: ClusterIP
+  annotations: {}
+  # 8080 (control API + web UI) and 6820 (slurmrestd) are always exposed;
+  # 2222 is added when ssh.enabled is true.
+
+# Ingress is off by default. The dashboard ships default credentials and the
+# slurmrestd plane accepts any token unless auth.jwtKey is set — neither belongs
+# on the public internet without a fronting proxy.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # Each host targets a single emulator port. Example:
+  # hosts:
+  #   - host: slurm-emulator.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  #         port: 8080
+  hosts: []
+  tls: []
+
+# Optional Gateway API (gateway.networking.k8s.io/v1) HTTPRoute, off by default.
+# Same security caveat as ingress. HTTP only — the SSH plane needs a TCPRoute or
+# a LoadBalancer Service instead.
+gatewayApi:
+  enabled: false
+  # When createGateway: true, the chart renders a Gateway the HTTPRoute attaches
+  # to. Useful in clusters without a shared Gateway (kind, throwaway envs). In
+  # production leave it false and point parentRefs at an existing Gateway.
+  createGateway: false
+  gateway:
+    # Required when createGateway: true. e.g. "envoy", "istio", "cilium".
+    gatewayClassName: ""
+    listenerName: http
+    listenerPort: 80
+    listenerProtocol: HTTP
+  # parentRefs the HTTPRoute attaches to. Auto-derived to the chart-created
+  # Gateway when createGateway: true. Required otherwise. Example:
+  # parentRefs:
+  #   - name: my-gateway
+  #     namespace: gateway-system
+  parentRefs: []
+  # Hostnames the HTTPRoute matches.
+  hostnames: []
+  # Rules, each routing matched paths to one emulator port. Defaults to all
+  # traffic on 8080. Example:
+  # rules:
+  #   - matches:
+  #       - path:
+  #           type: PathPrefix
+  #           value: /
+  #     port: 8080
+
+resources:
+  # Two uvicorn processes with JSON state in memory idle at roughly 120-180 MiB
+  # resident; the sequence scenario and preset-sized usage injection spike it.
+  requests:
+    cpu: 50m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+probes:
+  liveness:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext: {}
+securityContext: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Escape hatch for additional environment variables, appended verbatim.
+extraEnv: []

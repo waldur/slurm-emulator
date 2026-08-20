@@ -1,0 +1,53 @@
+suite: persistence
+templates:
+  - templates/pvc.yaml
+tests:
+  - it: renders no PVC by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a PVC when persistence is enabled
+    set:
+      persistence.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.resources.requests.storage
+          value: 1Gi
+      - equal:
+          path: spec.accessModes
+          value:
+            - ReadWriteOnce
+      - isNull:
+          path: spec.storageClassName
+
+  - it: does not mark the PVC for retention by default
+    set:
+      persistence.enabled: true
+    asserts:
+      - isNull:
+          path: metadata.annotations
+
+  - it: renders the retention policy so helm uninstall keeps the volume
+    set:
+      persistence.enabled: true
+      persistence.keepOnUninstall: true
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: honours an explicit storage class
+    set:
+      persistence.enabled: true
+      persistence.storageClass: fast
+      persistence.size: 5Gi
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: fast
+      - equal:
+          path: spec.resources.requests.storage
+          value: 5Gi

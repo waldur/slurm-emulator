@@ -1,0 +1,23 @@
+{{- if .Values.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "slurm-emulator.fullname" . }}
+  labels:
+    {{- include "slurm-emulator.labels" . | nindent 4 }}
+  {{- if .Values.persistence.keepOnUninstall }}
+  annotations:
+    # Helm reads this from the manifest stored in the release, never from the
+    # live object — annotating the PVC with kubectl after the fact does nothing.
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | quote }}
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+{{- end }}
