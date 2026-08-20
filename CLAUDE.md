@@ -71,6 +71,31 @@ Use these commands:
   filesystem ops + Slurm CLI dispatch; for running FireCREST v2 against the emulator)
 - **Direct commands**: `uv run sacctmgr`, `uv run sacct`, `uv run sinfo`
 
+### Helm Chart
+
+The chart in `charts/slurm-emulator/` deploys the Docker image (control API +
+slurmrestd, optional SSH plane) to Kubernetes. Everything is configured through
+environment variables — the chart sets no `command`/`args`, so the image's
+`scripts/docker-entrypoint.sh` stays in charge of which servers start.
+
+- **Lint**: `helm lint charts/slurm-emulator/`
+- **Unit tests**: `helm unittest charts/slurm-emulator/` (needs the
+  [helm-unittest](https://github.com/helm-unittest/helm-unittest) plugin)
+- **Render a variant**: `helm template se charts/slurm-emulator/ --set persistence.enabled=true`
+
+`templates/` is excluded from the `check-yaml` pre-commit hook — Go templates are
+not parseable YAML. CI runs `helm lint` + `helm unittest` plus a `helm template`
+render of every optional-feature combination instead.
+
+Adding a new value means touching four places: `values.yaml` (with a comment
+explaining *why*, not just what), the template that consumes it, a case in
+`tests/`, and the table in `charts/slurm-emulator/README.md`.
+
+Releases: pushing a `X.Y.Z` tag makes CI rewrite the chart's `version` and
+`appVersion` to the tag, package it, and push it to the `gh-pages` branch of the
+GitHub mirror. The chart therefore always deploys `opennode/slurm-emulator:<tag>`,
+which the "Publish docker image" job pushes from the same pipeline.
+
 ### Testing and Quality
 
 - **Run tests**: `uv run pytest`
@@ -101,7 +126,9 @@ Use these commands:
 - **Testing**: Runs automatically on every push/MR (Python 3.9–3.13)
 - **Publishing**: Triggered by pushing version tags matching `X.Y.Z` pattern
 - **PyPI Release**: Automatically builds with `uv build` and publishes with `uv publish` when version tag is pushed
-- **Docker Image**: Publishes `opennode/slurm-emulator:latest` to Docker Hub on every commit to `main`
+- **Docker Image**: Publishes `opennode/slurm-emulator:latest` to Docker Hub on every commit to `main`,
+  and `opennode/slurm-emulator:X.Y.Z` on a version tag
+- **Helm Chart**: Publishes `charts/slurm-emulator/` to https://waldur.github.io/slurm-emulator/ on a version tag
 
 The release script handles local version management and creates git tags that trigger automated CI/CD for testing and publishing.
 

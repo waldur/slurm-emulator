@@ -4,6 +4,9 @@ repos:
     hooks:
       - id: check-yaml
         args: [--unsafe]
+        # Helm templates are Go templates, not YAML — a leading {{- if }} is a
+        # parse error here. `helm lint` + `helm unittest` cover them in CI.
+        exclude: ^charts/[^/]+/templates/
       - id: trailing-whitespace
       - id: check-toml
       - id: check-merge-conflict

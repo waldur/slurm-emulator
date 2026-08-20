@@ -14,6 +14,7 @@ A comprehensive SLURM command emulator with time manipulation capabilities for t
 - 🖥️ **Web Dashboard** - Browser console to view status and drive the emulator ([docs](docs/web-ui.md))
 - 🔌 **API Integration** - REST API for waldur-site-agent integration
 - 💾 **State Management** - Checkpoint/restore functionality for testing
+- ☸️ **Helm Chart** - Single-command Kubernetes deploy of both API planes ([docs](docs/kubernetes.md))
 
 ## Quick Start
 
@@ -267,6 +268,29 @@ startup, so it can serve stale reads after REST/CLI writes.
 
 The Docker image runs both servers (ports 8080 and 6820) via
 `scripts/docker-entrypoint.sh`.
+
+## Run on Kubernetes (via Helm)
+
+A published Helm chart deploys the emulator as a single-replica `Deployment` +
+`ClusterIP` Service exposing the control API (8080), the slurmrestd plane
+(6820), and optionally the SSH plane (2222). Consumers in the same cluster
+reach it at `http://<release>-slurm-emulator.<ns>.svc.cluster.local:8080`.
+
+```bash
+helm repo add slurm-emulator https://waldur.github.io/slurm-emulator/
+helm install se slurm-emulator/slurm-emulator \
+  --namespace se --create-namespace --wait
+helm test se -n se        # probes both API planes
+```
+
+Set `auth.uiPassword` (dashboard) and `auth.jwtKey` (slurmrestd) before exposing
+it anywhere shared — both default to accepting anything. `persistence.enabled=true`
+keeps the clock, accounts, and usage records across restarts.
+
+See [`docs/kubernetes.md`](docs/kubernetes.md) for the full operator guide
+(credentials, persistence, SSH plane, Ingress/Gateway API, troubleshooting). The
+chart source lives at [`charts/slurm-emulator/`](charts/slurm-emulator) — also
+installable from disk via `helm install se ./charts/slurm-emulator`.
 
 ## SSH Filesystem Plane
 

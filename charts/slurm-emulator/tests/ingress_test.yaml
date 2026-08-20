@@ -1,0 +1,56 @@
+suite: ingress
+templates:
+  - templates/ingress.yaml
+tests:
+  - it: is disabled by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: routes each declared path at its own emulator port
+    set:
+      ingress.enabled: true
+      ingress.className: nginx
+      ingress.hosts:
+        - host: slurm.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+              port: 8080
+            - path: /slurm
+              pathType: Prefix
+              port: 6820
+    asserts:
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.rules[0].host
+          value: slurm.example.com
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 8080
+      - equal:
+          path: spec.rules[0].http.paths[1].backend.service.port.number
+          value: 6820
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: RELEASE-NAME-slurm-emulator
+
+  - it: passes TLS blocks through
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: slurm.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+              port: 8080
+      ingress.tls:
+        - hosts:
+            - slurm.example.com
+          secretName: slurm-tls
+    asserts:
+      - equal:
+          path: spec.tls[0].secretName
+          value: slurm-tls

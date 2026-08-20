@@ -1,0 +1,36 @@
+suite: service ports
+templates:
+  - templates/service.yaml
+tests:
+  - it: exposes the control API and slurmrestd by default
+    asserts:
+      - equal:
+          path: spec.ports
+          value:
+            - name: control-api
+              port: 8080
+              targetPort: control-api
+              protocol: TCP
+            - name: slurmrestd
+              port: 6820
+              targetPort: slurmrestd
+              protocol: TCP
+
+  - it: adds the SSH port when the plane is enabled
+    set:
+      ssh.enabled: true
+      ssh.port: 2022
+    asserts:
+      - contains:
+          path: spec.ports
+          content:
+            name: ssh
+            port: 2022
+            targetPort: ssh
+            protocol: TCP
+
+  - it: defaults to ClusterIP
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
