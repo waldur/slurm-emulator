@@ -4,6 +4,11 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.2] - 2026-08-20
+
+### Added
+- Add Helm chart for deploying the emulator to Kubernetes
+
 ## [0.9.1] - 2026-07-23
 
 ### Added
