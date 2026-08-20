@@ -1,0 +1,28 @@
+apiVersion: v1
+entries:
+  slurm-emulator:
+  - apiVersion: v2
+    appVersion: 0.9.2
+    created: "2026-08-20T08:38:35.820474445Z"
+    description: 'SLURM command emulator with time travel — Waldur control API, slurmrestd
+      (v0.0.46) emulation and an optional SSH filesystem plane, for demos and integration
+      testing without a real SLURM cluster. '
+    digest: 9782a1d0a48907f98295a4f832c300c2762e852e23a48c9007f19dc5f7fabf1d
+    home: https://code.opennodecloud.com/waldur/slurm-emulator
+    keywords:
+    - slurm
+    - emulator
+    - hpc
+    - testing
+    - waldur
+    maintainers:
+    - name: Waldur Team
+      url: https://waldur.com/
+    name: slurm-emulator
+    sources:
+    - https://code.opennodecloud.com/waldur/slurm-emulator
+    type: application
+    urls:
+    - https://waldur.github.io/slurm-emulator/charts/slurm-emulator-0.9.2.tgz
+    version: 0.9.2
+generated: "2026-08-20T08:38:35.817822674Z"
