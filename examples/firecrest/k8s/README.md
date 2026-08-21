@@ -186,6 +186,8 @@ From FireCREST itself, the end-to-end check is the same as with compose: list th
 | Site agent: `slurmrestd error (GET /slurm/v0.0.43/ping/): HTTP 404` | `rest_api.api_version` left at the plugin default | Set `v0.0.46`, with the `v` |
 | Site agent: `cluster_name is required when SLURM execution_mode is 'rest'` | Missing `backend_settings.cluster_name` | Set it to the emulator's cluster name |
 | FireCREST requests hit `/slurm/vv0.0.46/` | `api_version` given as `v0.0.46` on the FireCREST side | Drop the `v` — FireCREST prepends it |
+| FireCREST pod CrashLoopBackOff, `ValidationError: clusters.0.probing Field required` | Setting `clusters` replaces the chart's default list wholesale, so required fields must all be present | Keep the `probing` block — it is in the overlay for exactly this reason |
+| Editing the overlay does not change FireCREST's behaviour | The chart has no config checksum annotation, so a ConfigMap change alone leaves the pod running the old config | `kubectl rollout restart deploy/<release>-firecrest` |
 
 ## Validated against
 

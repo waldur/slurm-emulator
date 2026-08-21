@@ -60,6 +60,21 @@ firecrest:
       service_account:
         client_id: "firecrest-health-check"   # CHANGE ME
         secret: "secret_file:/app/secrets/health_check_service_account_secret"
+      # Required by FireCREST 2.5.6. Setting `clusters` replaces the chart's
+      # default list wholesale rather than merging into it, so every field
+      # FireCREST marks required has to be present here. Omitting this one puts
+      # the pod in CrashLoopBackOff with:
+      #   ValidationError: 1 validation error for Settings
+      #   clusters.0.probing  Field required
+      probing:
+        interval_check: 300
+        services:
+          ssh:
+            timeout: 10
+          scheduler:
+            timeout: 10
+          filesystem:
+            timeout: 10
       file_systems:
         # NOT /home. The slurm-emulator chart roots the fake filesystem inside
         # the PVC at <persistence.path>/fs, so homes are /data/fs/home/<user>.
@@ -89,6 +104,15 @@ firecrest:
       service_account:
         client_id: "firecrest-health-check"   # CHANGE ME
         secret: "secret_file:/app/secrets/health_check_service_account_secret"
+      probing:
+        interval_check: 300
+        services:
+          ssh:
+            timeout: 10
+          scheduler:
+            timeout: 10
+          filesystem:
+            timeout: 10
       file_systems:
         - path: "/data/fs/home"
           data_type: "users"
