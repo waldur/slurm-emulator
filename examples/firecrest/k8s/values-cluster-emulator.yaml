@@ -1,0 +1,75 @@
+# slurm-emulator chart values for a FireCREST v2 deployment on Kubernetes.
+#
+#   helm install cluster-emulator slurm-emulator/slurm-emulator \
+#     -n firecrest --create-namespace \
+#     -f examples/firecrest/k8s/values-cluster-emulator.yaml \
+#     --set auth.uiPassword="$(openssl rand -hex 16)"
+#
+# See README.md in this directory for what each setting is for and what breaks
+# without it.
+
+# Service (and DNS) name becomes exactly "cluster-emulator" instead of
+# "<release>-slurm-emulator", so it matches the cluster name FireCREST uses.
+fullnameOverride: cluster-emulator
+
+ssh:
+  # FireCREST needs a login node for filesystem operations; without this the
+  # container serves slurmrestd only and every /filesystem call fails.
+  enabled: true
+  port: 2222
+  # Pin the host key. Without it asyncssh generates a fresh RSA key on every
+  # pod start, so the emulator's identity changes across restarts. Create with:
+  #   ssh-keygen -t rsa -b 4096 -N '' -f ./ssh_host_key
+  #   kubectl -n firecrest create secret generic cluster-emulator-hostkey \
+  #     --from-file=ssh_host_key=./ssh_host_key
+  hostKeySecret: cluster-emulator-hostkey
+
+auth:
+  # MUST stay empty. FireCREST forwards the end user's Keycloak access token as
+  # X-SLURM-USER-TOKEN; that token is RS256, while the emulator's verifier is
+  # HS256 only, so setting a key rejects every FireCREST request with 401
+  # "Authentication failure". Empty means any token is accepted, which is what
+  # the compose examples rely on too.
+  jwtKey: ""
+  # Set auth.uiPassword on the command line — leaving it here would either commit
+  # a credential or (if blank) configure an empty-password dashboard.
+
+persistence:
+  # Job/accounting state, the emulator clock, and every file FireCREST uploads
+  # all live under this one volume. Without it, an upload and the job that reads
+  # it do not survive a pod restart.
+  enabled: true
+  size: 5Gi
+  path: /data
+  # The emulator clock is the point of the thing — do not throw it away on an
+  # accidental uninstall.
+  keepOnUninstall: true
+
+# Cluster topology reported by sinfo and the slurmrestd partition endpoints.
+partitions: "debug:1-4,compute:5-100"
+
+# Submitted jobs advance PENDING -> RUNNING -> COMPLETED against the wall clock,
+# which is what makes the UI's job list visibly progress during a demo.
+jobs:
+  clock: wall
+  runDelaySeconds: 2
+  runDurationSeconds: 8
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 192Mi
+  limits:
+    cpu: "1"
+    # Raised from the chart default (512Mi): FireCREST moves files by running
+    # real coreutils (base64, tar) over the SSH plane, so uploads are charged to
+    # this container.
+    memory: 1Gi
+
+# Left off deliberately. Only /ui/ is behind Basic auth — the control API's
+# /api/* routes on port 8080 take unauthenticated writes, and FireCREST reaches
+# the emulator over in-cluster DNS, so nothing here needs publishing.
+ingress:
+  enabled: false
+gatewayApi:
+  enabled: false

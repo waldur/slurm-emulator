@@ -16,6 +16,7 @@ scripts and docs.
 |---|---|
 | [`ui/`](ui/) | Self-contained docker-compose stack: **firecrest-ui → FireCREST API → emulator** + Keycloak. Run `ui/up.sh`. Two clusters, persistence. |
 | [`e2e/`](e2e/) | Overlay onto FireCREST v2's *own* docker-compose, swapping its `slurm` service for the emulator. Run `e2e/run.sh`. |
+| [`k8s/`](k8s/) | The same scenario with the emulator deployed by the Helm chart: required values, ready-to-use values files, and a FireCREST cluster config on in-cluster DNS. |
 | [`ui-guide.md`](ui-guide.md) | Walkthrough with screenshots: run & evaluate the stack via the UI. |
 | [`conformance.md`](conformance.md) | Field-by-field parity matrix (what FireCREST calls, what the emulator serves). |
 | [`img/`](img/) | Screenshots used by the guide. |
@@ -25,6 +26,9 @@ scripts and docs.
 - **Evaluate/demo the UI** → `ui/` (start with [`ui-guide.md`](ui-guide.md)).
 - **Test the emulator inside FireCREST's upstream compose** (scheduler REST
   plane, CI-style) → `e2e/`.
+- **Run it on Kubernetes** → `k8s/`. The chart's defaults differ from the
+  compose files in four places that each break FireCREST silently; that README
+  is mostly about those.
 
 The emulator's own FireCREST conformance tests live with the rest of the suite
 under the repo's `tests/` (`test_firecrest_contract.py`, `firecrest/`).

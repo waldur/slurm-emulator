@@ -1,0 +1,100 @@
+# Overlay for the waldur-site-agent chart, pointing its SLURM backend at an
+# emulator deployed by the slurm-emulator chart.
+#
+#   helm install site-agent ../../../../waldur-site-agent/helm/waldur-site-agent \
+#     -n firecrest -f examples/firecrest/k8s/values-site-agent.yaml
+#
+# The agent is a second, independent consumer of the same emulator: FireCREST
+# drives jobs and files for end users, while the agent creates and manages the
+# accounts those jobs are charged to. Both reach slurmrestd on :6820; neither
+# knows about the other.
+#
+#   Waldur Mastermind ──► site agent ──┐
+#                                      ├──► cluster-emulator:6820 (slurmrestd)
+#   end user ──► FireCREST ────────────┘──► cluster-emulator:2222 (SSH plane)
+#
+# waldur-site-agent has no FireCREST client and does not need one — it talks to
+# the same slurmrestd plane FireCREST does.
+
+# Order processing is polling-based; event processing needs Mastermind's STOMP
+# broker reachable from the cluster. Start with the polling agents.
+agents:
+  eventProcess:
+    enabled: false
+  orderProcess:
+    enabled: true
+    replicas: 1
+  report:
+    enabled: true
+    replicas: 1
+  membershipSync:
+    enabled: true
+    replicas: 1
+
+# The token the agent sends as X-SLURM-USER-TOKEN. Any non-empty value works
+# while the emulator's auth.jwtKey is empty, which is required anyway for
+# FireCREST to function — see README.md item 1. If you ever do set a key, mint a
+# real token with `POST /api/token` on the emulator's control API instead.
+extraEnv:
+  - name: SLURM_JWT
+    value: "emulator-any-token"
+
+secret:
+  create: true
+  data:
+    config.yaml: |
+      timezone: "UTC"
+      log_level: "INFO"
+      reporting_periods: 2
+      offerings:
+        - name: "SLURM emulator"
+          # CHANGE ME — your Mastermind instance and an offering token.
+          waldur_api_url: "https://waldur.example.com/api/"
+          waldur_api_token: ""
+          waldur_offering_uuid: ""
+          username_management_backend: "base"
+          order_processing_backend: "slurm"
+          membership_sync_backend: "slurm"
+          reporting_backend: "slurm"
+          backend_type: "slurm"
+          stomp_enabled: false
+          backend_settings:
+            # Required in rest mode: every REST association payload carries an
+            # explicit cluster. Match the emulator's cluster name.
+            cluster_name: "cluster-emulator"
+            # Without this the agent shells out to sacctmgr/sacct, which do not
+            # exist in the agent image — it must go over the REST plane.
+            execution_mode: "rest"
+            rest_api:
+              url: "http://cluster-emulator.firecrest.svc.cluster.local:6820"
+              # WITH the "v" prefix, and it must be set. The plugin interpolates
+              # this verbatim into /slurmdb/{api_version}/..., and its default is
+              # v0.0.43 — which the emulator answers with 404, since it serves
+              # v0.0.46 only. Note this is the opposite convention from
+              # FireCREST, which prepends the "v" itself.
+              api_version: "v0.0.46"
+              username: "waldur-agent"
+              token_env: "SLURM_JWT"
+              timeout: 30
+            default_account: "root"
+            customer_prefix: "c_"
+            project_prefix: "p_"
+            allocation_prefix: "a_"
+            qos_downscaled: "limited"
+            qos_paused: "paused"
+            qos_default: "normal"
+            # The emulator has no real user home directories to create.
+            enable_user_homedir_account_creation: false
+          backend_components:
+            cpu:
+              limit: 10
+              measured_unit: "k-Hours"
+              unit_factor: 60000
+              accounting_type: "usage"
+              label: "CPU"
+            mem:
+              limit: 10
+              measured_unit: "gb-Hours"
+              unit_factor: 61440
+              accounting_type: "usage"
+              label: "RAM"
