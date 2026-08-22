@@ -1,0 +1,132 @@
+# Overlay for FireCREST v2's own Helm chart, pointing it at emulators deployed
+# by the slurm-emulator chart.
+#
+#   helm repo add firecrest-v2 https://eth-cscs.github.io/firecrest-v2/charts/
+#   helm repo update
+#   helm install firecrest firecrest-v2/firecrest-api \
+#     -n firecrest -f examples/firecrest/k8s/values-firecrest-api.yaml
+#
+# This is only the emulator-facing part. FireCREST's OIDC provider, its service
+# account, and (if you need large transfers) S3 are yours to fill in — the
+# placeholders below are marked CHANGE ME.
+#
+# Checked against chart firecrest-v2/firecrest-api 2.5.6.
+# Mount the secrets referenced above as secret_file:. Create the Secret yourself:
+#   kubectl -n firecrest create secret generic firecrest-secrets \
+#     --from-file=fireuser_private_key=./id_rsa \
+#     --from-literal=health_check_service_account_secret=CHANGEME
+# The chart's defaults request 4 CPU / 2Gi. Fine on a real cluster, too much for
+# a laptop kind/Docker Desktop node — lower them for a local run.
+#
+# Two things learned by running this rather than rendering it:
+#
+#   username_claim is set explicitly. It defaults to preferred_username, which is
+#   correct, but it is the hinge of the whole setup — it must equal the username
+#   the emulator's SSH plane will resolve a home directory for, so it is worth
+#   stating rather than inheriting.
+#
+#   The service account needs its own SSH key. FireCREST's ssh and filesystem
+#   health probes connect as the service-account user, not as an end user, so
+#   without an entry here the cluster reports
+#     No SSH credentials found for user:firecrest-health-check
+#   with the scheduler probe green and the other two red. Whatever client_id you
+#   use for service_account below needs a matching key here.
+#
+# Also note your IdP must emit a given_name claim: FireCREST maps
+# ApiAuthUser.first_name from it and types it as a plain str, so a token without
+# it authenticates and then 500s on user-model construction.
+firecrest:
+  auth:
+    authentication:
+      token_url: https://keycloak.example.com/auth/realms/kcrealm/protocol/openid-connect/token
+      public_certs:
+      - https://keycloak.example.com/auth/realms/kcrealm/protocol/openid-connect/certs
+      username_claim: preferred_username
+  ssh_credentials:
+    type: SSHStaticKeys
+    keys:
+      fireuser:
+        private_key: secret_file:/app/secrets/fireuser_private_key
+      firecrest-health-check:
+        private_key: secret_file:/app/secrets/fireuser_private_key
+  clusters:
+  - name: cluster-emulator
+    ssh:
+      host: cluster-emulator.firecrest.svc.cluster.local
+      port: 2222
+      max_clients: 10
+      timeout:
+        connection: 5
+        login: 5
+        command_execution: 30
+    scheduler:
+      type: slurm
+      connection_mode: rest
+      version: 26.11.0
+      api_url: http://cluster-emulator.firecrest.svc.cluster.local:6820
+      api_version: 0.0.46
+      timeout: 10
+    service_account:
+      client_id: firecrest-health-check
+      secret: secret_file:/app/secrets/health_check_service_account_secret
+    probing:
+      interval_check: 300
+      services:
+        ssh:
+          timeout: 10
+        scheduler:
+          timeout: 10
+        filesystem:
+          timeout: 10
+    file_systems:
+    - path: /data/fs/home
+      data_type: users
+      default_work_dir: true
+  - name: cluster-emulator-2
+    ssh:
+      host: cluster-emulator-2.firecrest.svc.cluster.local
+      port: 2222
+      max_clients: 10
+      timeout:
+        connection: 5
+        login: 5
+        command_execution: 30
+    scheduler:
+      type: slurm
+      connection_mode: rest
+      version: 26.11.0
+      api_url: http://cluster-emulator-2.firecrest.svc.cluster.local:6820
+      api_version: 0.0.46
+      timeout: 10
+    service_account:
+      client_id: firecrest-health-check
+      secret: secret_file:/app/secrets/health_check_service_account_secret
+    probing:
+      interval_check: 300
+      services:
+        ssh:
+          timeout: 10
+        scheduler:
+          timeout: 10
+        filesystem:
+          timeout: 10
+    file_systems:
+    - path: /data/fs/home
+      data_type: users
+      default_work_dir: true
+volumes:
+- name: firecrest-secrets-volume
+  secret:
+    secretName: firecrest-secrets
+    items:
+    - key: fireuser_private_key
+      path: fireuser_private_key
+    - key: health_check_service_account_secret
+      path: health_check_service_account_secret
+resources:
+  requests:
+    cpu: 1
+    memory: 1Gi
+  limits:
+    cpu: 2
+    memory: 2Gi

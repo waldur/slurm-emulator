@@ -1,0 +1,51 @@
+# Second, independent emulator release — the Kubernetes equivalent of the `slurm2`
+# service in ../ui/docker-compose.yml. Same chart, own Deployment, own PVC, own
+# clock and accounting, deliberately different topology so the two clusters look
+# distinct in FireCREST's cluster list.
+#
+#   helm install cluster-emulator-2 slurm-emulator/slurm-emulator \
+#     -n firecrest \
+#     -f examples/firecrest/k8s/values-cluster-emulator-2.yaml \
+#     --set auth.uiPassword="$(openssl rand -hex 16)"
+#
+# Drop this release (and its `clusters:` entry in the FireCREST config) for a
+# single-cluster setup.
+
+fullnameOverride: cluster-emulator-2
+
+ssh:
+  enabled: true
+  port: 2222
+  hostKeySecret: cluster-emulator-2-hostkey
+
+auth:
+  # Same constraint as the first cluster — see values-cluster-emulator.yaml.
+  jwtKey: ""
+
+persistence:
+  enabled: true
+  size: 5Gi
+  path: /data
+  keepOnUninstall: true
+
+# gpu node[001-008] + compute node[009-040] = 40 nodes, against the first
+# cluster's 100.
+partitions: "gpu:8,compute:32"
+
+jobs:
+  clock: wall
+  runDelaySeconds: 2
+  runDurationSeconds: 8
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 192Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+ingress:
+  enabled: false
+gatewayApi:
+  enabled: false

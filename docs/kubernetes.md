@@ -205,7 +205,9 @@ helm upgrade slurm-emulator ./charts/slurm-emulator -n se --reuse-values \
   --set ssh.enabled=true --set ssh.hostKeySecret=slurm-emulator-hostkey
 ```
 
-The SSH plane is TCP, so `ingress` and `gatewayApi` do not cover it — expose it with a `LoadBalancer`/`NodePort` Service or a Gateway API `TCPRoute` if it needs to leave the cluster. See [`examples/firecrest/`](../examples/firecrest) for the full FireCREST setup.
+The SSH plane is TCP, so `ingress` and `gatewayApi` do not cover it — expose it with a `LoadBalancer`/`NodePort` Service or a Gateway API `TCPRoute` if it needs to leave the cluster.
+
+If you are deploying the emulator specifically to back FireCREST, read [`examples/firecrest/k8s/`](../examples/firecrest/k8s/) before going further: four of this chart's defaults — `auth.jwtKey`, `ssh.enabled`, the filesystem root, and persistence — are wrong for that scenario, and three of them fail quietly.
 
 ## Step 7 (optional) — Expose externally
 
