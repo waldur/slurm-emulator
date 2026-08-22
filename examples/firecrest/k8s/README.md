@@ -28,6 +28,23 @@ A Waldur site agent, if you add one, is a third party on the 6820 plane — see 
 
 ## Install
 
+First check you have a *working* default StorageClass, not merely a default one
+— `persistence` below needs it:
+
+```bash
+kubectl get sc
+```
+
+Some clusters register a default class with no provisioner behind it (Docker
+Desktop's kubeadm engine ships a `hostpath` class in exactly that state), and
+then every PVC sits `Pending` forever with nothing in its events to point at.
+If that is your situation, install one and pass `--set persistence.storageClass=`
+to match:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.30/deploy/local-path-storage.yaml
+```
+
 ```bash
 helm repo add slurm-emulator https://waldur.github.io/slurm-emulator/
 helm repo update
@@ -70,9 +87,11 @@ That overlay only fills in the emulator-facing parts of FireCREST's config — t
 | [`values-site-agent.yaml`](values-site-agent.yaml) | the `waldur-site-agent` chart — see [Adding a Waldur site agent](#adding-a-waldur-site-agent) |
 | [`f7t-api-config.emulator-k8s.yaml`](f7t-api-config.emulator-k8s.yaml) | FireCREST's raw cluster config, for the ConfigMap route |
 
-## The four things the chart does not do for you
+## The five things the chart does not do for you
 
-Everything below is a default that is right for a standalone emulator and wrong for FireCREST.
+The first four are defaults that are right for a standalone emulator and wrong
+for FireCREST. The fifth is about your identity provider rather than the chart,
+and is here because it fails in the same silent way.
 
 ### 1. `auth.jwtKey` must stay empty
 
@@ -107,6 +126,24 @@ FireCREST's `file_systems[].path` must match. Point it at `/home` and FireCREST 
 `persistence.enabled: true` puts the emulator clock, the accounting state, and every uploaded file on one PVC. Without it they live in the container's `/tmp`, so a pod restart silently rewinds the cluster to an empty, present-day state — mid-demo, or mid-test-run.
 
 The values files also set `persistence.keepOnUninstall: true`, which renders `helm.sh/resource-policy: keep`. Note this only works if it is set *while the release is installed*: Helm reads the resource policy from the stored release manifest, so annotating the PVC after the fact does nothing.
+
+### 5. Your IdP has to emit more than a username
+
+Two claims beyond the obvious, both of which fail *after* authentication
+succeeds, so the logs point at the wrong place:
+
+- **`given_name`** — FireCREST maps `ApiAuthUser.first_name` from it and types it
+  as a plain `str`. A token without it passes signature validation and then 500s
+  building the user model, with `first_name Input should be a valid string
+  [input_value=None]`. A Keycloak user with no first name set does this.
+- **A service account that can also log in over SSH** — see
+  [`values-firecrest-api.yaml`](values-firecrest-api.yaml). The `ssh` and
+  `filesystem` health probes connect as the service-account user, so it needs an
+  entry in `ssh_credentials.keys` as well as a client in your IdP.
+
+If you point FireCREST at the OpenStack emulator's embedded provider instead of
+a real IdP, both of these need arranging in its preset — its stock users carry no
+`given_name`, and its OIDC clients do not include a FireCREST service account.
 
 ## Host key
 
@@ -169,7 +206,42 @@ kubectl -n firecrest run ssh-probe --rm -it --restart=Never \
   sh -c 'nc -z -w3 cluster-emulator 2222 && echo "ssh plane open"'
 ```
 
-From FireCREST itself, the end-to-end check is the same as with compose: list the cluster, submit a job, watch it go PENDING → RUNNING → COMPLETED, then browse the user's directory. [`../ui-guide.md`](../ui-guide.md) walks that through with screenshots.
+### Through FireCREST
+
+Run this from inside the cluster: the emulator derives its OIDC issuer from the
+request's `Host` header, so a token minted through a port-forward carries an
+issuer FireCREST will not match.
+
+```bash
+kubectl -n firecrest run f7t --rm -it --restart=Never \
+  --image=curlimages/curl:8.10.1 --command -- sh -c '
+TOK=$(curl -s -X POST http://<your-idp>/token \
+  -d "grant_type=password&username=alice&password=password&client_id=<id>&client_secret=<secret>&scope=openid profile email" \
+  | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p")
+B=http://<release>-firecrest:5001
+curl -s -H "Authorization: Bearer $TOK" $B/status/systems
+curl -s -H "Authorization: Bearer $TOK" $B/filesystem/cluster-emulator/ops/ls?path=/data/fs/home
+curl -s -X POST -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
+  -d "{\"job\":{\"name\":\"demo\",\"working_directory\":\"/data/fs/home/alice\",\"script\":\"#!/bin/bash\\nsleep 5\\n\"}}" \
+  $B/compute/cluster-emulator/jobs
+'
+```
+
+A healthy setup returns all three probes green, the user's home directory under
+`/data/fs/home`, and a `jobId`:
+
+```
+scheduler healthy: true   ssh healthy: true   filesystem healthy: true
+{"output":[{"name":"alice","type":"d", ...}]}
+{"jobId":"1"}
+```
+
+Anything less is covered in [Troubleshooting](#troubleshooting) below —
+in particular, all three probes green *except* `ssh` and `filesystem` means the
+service account has no SSH key.
+
+[`../ui-guide.md`](../ui-guide.md) walks the same ground through the UI with
+screenshots.
 
 ## Troubleshooting
 
@@ -188,20 +260,36 @@ From FireCREST itself, the end-to-end check is the same as with compose: list th
 | FireCREST requests hit `/slurm/vv0.0.46/` | `api_version` given as `v0.0.46` on the FireCREST side | Drop the `v` — FireCREST prepends it |
 | FireCREST pod CrashLoopBackOff, `ValidationError: clusters.0.probing Field required` | Setting `clusters` replaces the chart's default list wholesale, so required fields must all be present | Keep the `probing` block — it is in the overlay for exactly this reason |
 | Editing the overlay does not change FireCREST's behaviour | The chart has no config checksum annotation, so a ConfigMap change alone leaves the pod running the old config | `kubectl rollout restart deploy/<release>-firecrest` |
+| Every request 500s with `first_name Input should be a valid string` | The IdP emits no `given_name` claim | Item 5 above |
+| `scheduler` probe green, `ssh` and `filesystem` red: `No SSH credentials found for user:<service account>` | The service account has no entry in `ssh_credentials.keys` | Item 5 above |
+| All tokens suddenly `Access token is invalid` after redeploying the emulator | The embedded OIDC provider regenerates its signing key at every process start, and FireCREST caches the JWKS | `kubectl rollout restart deploy/<release>-firecrest` |
+| Emulator PVC stuck `Pending`, no useful events | A default StorageClass exists but has no provisioner behind it | See the storage note in [Install](#install) |
+| `slurmdb` requests return 307 and an empty body | The emulator's collection routes want a trailing slash | `curl -L`, or append `/` |
 
 ## Validated against
 
-Everything above was checked on a live cluster (Kubernetes 1.36) against the published chart `slurm-emulator 0.9.2`, not just rendered:
+Everything above was checked on a live cluster (Kubernetes 1.36) against the
+published chart `slurm-emulator 0.9.2` and `firecrest-v2/firecrest-api 2.5.6` —
+deployed, not just rendered:
 
 - both values files install; the pod becomes Ready and `helm test` passes
-- `slurmrestd` answers `/slurm/v0.0.46/ping/` with an arbitrary token, and 401s with none
-- setting `auth.jwtKey` makes *both* an RS256 Keycloak-shaped token and an opaque one 401 — clearing it restores 200
+- `slurmrestd` answers `/slurm/v0.0.46/ping/` with an arbitrary token, and 401s
+  with none
+- setting `auth.jwtKey` makes *both* an RS256 Keycloak-shaped token and an opaque
+  one 401 — clearing it restores 200
 - over the SSH plane, `pwd` returns `/data/fs/home/<user>` and `$HOME` matches
-- a file written there survives `kubectl rollout restart`, and the host key fingerprint is unchanged across it (so `ssh.hostKeySecret` is doing its job)
-- the FireCREST overlay renders against `firecrest-v2/firecrest-api` 2.5.6
-- the site-agent overlay renders, and the config it produces validates against the SLURM plugin's schema and drives the plugin's real `SlurmRestClient` against the emulator image — `slurm 26.11.0`, accounts listed
+- a file written there survives `kubectl rollout restart`, and the host key
+  fingerprint is unchanged across it, so `ssh.hostKeySecret` is doing its job
+- FireCREST reports all three health probes green, lists the user's home
+  directory, and accepts a job submission that reaches the emulator
 
-Not validated: FireCREST and the site agent running end to end against Mastermind and Keycloak. Those need credentials this example cannot carry.
+The identity notes in item 5 come from the same run: each failure quoted there is
+one this configuration actually produced before it was fixed.
+
+Not validated: a production IdP. This was exercised against the OpenStack
+emulator's embedded OpenID Provider, which is a real RS256 provider but a small
+one — a Keycloak or Entra deployment may differ in which claims it emits by
+default, and `given_name` is the one to check first.
 
 ## See also
 
