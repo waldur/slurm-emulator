@@ -4,6 +4,11 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- Model QoS `GrpTRESMins` (slurmdbd merge semantics, `-1` removes) and `RawUsage` in sacctmgr and slurmrestd emulation
+
 ## [0.9.2] - 2026-08-20
 
 ### Added

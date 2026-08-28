@@ -100,6 +100,14 @@ class QOS:
     name: str
     flags: str = ""
     grp_tres: str = ""
+    # Allocation budget (slurmdb_qos_rec_t.grp_tres_mins, slurmdb.h) as a
+    # TRES string, e.g. "billing=14428800,gres/gpu=216000". Written by
+    # ``modify qos … set GrpTRESMins=…`` with merge semantics (see
+    # sacctmgr._combine_tres_string).
+    grp_tres_mins: str = ""
+    # Accrued usage (slurmdb_qos_usage_t.usage_raw). ``set RawUsage=<value>``
+    # on a QoS is a real sacctmgr option (qos_functions.c _set_rec, "RawUsage").
+    usage_raw: float = 0.0
     max_jobs: int = -1
     max_submit: int = -1
     max_wall: str = ""
