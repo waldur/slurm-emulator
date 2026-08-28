@@ -846,6 +846,12 @@ def _upsert_qos(state: RequestState, entry: dict[str, Any]) -> Optional[str]:
     grp_tres = tres_str_from_list(max_tree.get("tres", {}).get("total", []))
     if grp_tres:
         qos.grp_tres = _tres_dict_to_str(grp_tres)
+    # v0.0.46 QOS grp_tres_mins lives at limits/max/tres/minutes/total
+    # (data_parser parsers.c PARSER_ARRAY(QOS)); the association-style
+    # max/tres/group/minutes path is *not* a QOS field and is ignored.
+    grp_tres_mins = tres_str_from_list(max_tree.get("tres", {}).get("minutes", {}).get("total", []))
+    if grp_tres_mins:
+        qos.grp_tres_mins = _tres_dict_to_str(grp_tres_mins)
     qos.max_jobs = no_val_number(
         jobs_tree.get("active_jobs", {}).get("per", {}).get("user"), qos.max_jobs
     )

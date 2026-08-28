@@ -215,7 +215,9 @@ def _combine_tres_string(current: str, incoming: str, known_tres: list[str]) -> 
     what ``sacctmgr_print_tres`` renders — plain integers for every TRES
     except ``mem``-like ones (``convert_num_unit`` UNIT_MEGA, not modelled).
     """
-    lowered_known = {k.lower() for k in known_tres}
+    # Static TRES (cpu, mem, node, …) always exist in slurmdbd regardless of
+    # what AccountingStorageTRES adds, so accept them alongside the table.
+    lowered_known = {k.lower() for k in known_tres} | set(_STATIC_TRES_IDS)
     merged: dict[str, str] = {}
     for part in current.split(","):
         name, sep, count = part.partition("=")
@@ -1050,7 +1052,8 @@ class SacctmgrEmulator:
                 break
 
         if set_index == -1:
-            return self._fail(" error: No 'set' clause found")
+            # sacctmgr_modify_qos: !rec_set → stderr, exit 1.
+            return self._fail(" You didn't give me anything to set")
 
         # Real sacctmgr parses every set-clause first (_set_rec) and bails
         # out before any RPC if one of them set exit_code, so a bad field

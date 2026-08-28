@@ -64,6 +64,9 @@ class TestCombineTresString:
         out = _combine_tres_string("", "GRES/gpu=3,billing=5,CPU=1,Mem=2", KNOWN)
         assert out == "cpu=1,mem=2,billing=5,gres/gpu=3"
 
+    def test_static_tres_always_accepted(self):
+        assert _combine_tres_string("", "node=4,vmem=1", KNOWN) == "node=4,vmem=1"
+
     def test_unknown_tres_raises(self):
         with pytest.raises(UnknownTresError):
             _combine_tres_string("", "foo=1", KNOWN)
@@ -126,6 +129,11 @@ class TestGrpTRESMinsRoundTrip:
         assert em.exit_code == 0
         assert em.database.qos_list["other"].grp_tres_mins == "cpu=5"
 
+    def test_no_set_clause_is_real_message(self, em):
+        out = em.handle_command(["modify", "qos", QOS])
+        assert em.exit_code == 1
+        assert out == " You didn't give me anything to set"
+
     def test_unknown_qos_nothing_modified(self, em):
         out = em.handle_command(["modify", "qos", "missing", "set", "GrpTRESMins=cpu=1"])
         assert out == "  Nothing modified"
@@ -147,6 +155,39 @@ class TestGrpTRESMinsRoundTrip:
         minutes = rendered["limits"]["max"]["tres"]["minutes"]["total"]
         assert {(t["type"], t.get("name", ""), t["count"]) for t in minutes} == {
             ("cpu", "", 100),
+            ("gres", "gpu", 200),
+        }
+
+
+class TestSlurmrestdQosPost:
+    def test_post_qos_minutes_total_round_trips(self, restd, auth_headers):
+        body = {
+            "qos": [
+                {
+                    "name": QOS,
+                    "limits": {
+                        "max": {
+                            "tres": {
+                                "minutes": {
+                                    "total": [
+                                        {"type": "billing", "name": "", "count": 100},
+                                        {"type": "gres", "name": "gpu", "count": 200},
+                                    ]
+                                },
+                                # association-style path: not a QOS field, ignored
+                                "group": {"minutes": [{"type": "cpu", "name": "", "count": 999}]},
+                            }
+                        }
+                    },
+                }
+            ]
+        }
+        r = restd.post("/slurmdb/v0.0.46/qos/", json=body, headers=auth_headers)
+        assert r.status_code == 200, r.text
+        r = restd.get(f"/slurmdb/v0.0.46/qos/{QOS}", headers=auth_headers)
+        minutes = r.json()["qos"][0]["limits"]["max"]["tres"]["minutes"]["total"]
+        assert {(t["type"], t.get("name", ""), t["count"]) for t in minutes} == {
+            ("billing", "", 100),
             ("gres", "gpu", 200),
         }
 
