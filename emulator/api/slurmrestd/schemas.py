@@ -263,7 +263,7 @@ def qos_to_dict(qos: QOS, qos_id: int) -> dict[str, Any]:
                 "active_jobs": {"accruing": uint_no_val(), "count": uint_no_val()},
                 "tres": {
                     "total": tres_list_from_str(qos.grp_tres),
-                    "minutes": {"total": [], "per": {"job": []}},
+                    "minutes": {"total": tres_list_from_str(qos.grp_tres_mins), "per": {"job": []}},
                     "per": {
                         "job": tres_list_from_str(qos.max_tres_per_job),
                         "user": tres_list_from_str(qos.max_tres_per_user),

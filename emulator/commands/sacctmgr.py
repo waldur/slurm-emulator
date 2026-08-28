@@ -165,6 +165,41 @@ def _split_list_operator(key: str) -> tuple[str, str]:
     return key, ""
 
 
+def _combine_tres_string(current: str, incoming: str) -> str:
+    """Merge a ``GrpTRESMins``-style TRES string the way slurmdbd does.
+
+    Real ``sacctmgr modify qos … set GrpTRESMins=cpu=1`` does **not** replace
+    the stored list. The client only concatenates the values given on that
+    command line (qos_functions.c ``_set_rec``, ``slurmdb_combine_tres_strings``
+    with ``TRES_STR_FLAG_REPLACE``); slurmdbd then folds that onto the stored
+    row with ``TRES_STR_FLAG_REMOVE`` (as_mysql_qos.c ``_setup_qos_limits``,
+    ``tres_str_flags``). ``slurmdb_tres_list_from_string`` (slurmdb_defs.c)
+    keeps the *new* count for a TRES named on both sides, keeps every TRES
+    that is only in the old string, and drops a TRES whose new count is
+    ``-1`` (``INFINITE64``) when the REMOVE flag is set.
+
+    Net effect: named TRES are updated, unnamed TRES survive, ``-1`` removes.
+    Real Slurm sorts the result by TRES id (``TRES_STR_FLAG_SORT_ID``); the
+    emulator keeps first-seen order, which is stable for round-trips.
+    """
+    merged: dict[str, str] = {}
+    for part in current.split(","):
+        name, sep, count = part.partition("=")
+        if sep and name.strip():
+            merged[name.strip()] = count.strip()
+    for part in incoming.split(","):
+        name, sep, count = part.partition("=")
+        if not sep or not name.strip():
+            continue
+        name = name.strip()
+        count = count.strip()
+        if count == "-1":
+            merged.pop(name, None)
+        else:
+            merged[name] = count
+    return ",".join(f"{k}={v}" for k, v in merged.items())
+
+
 def _set_qos_field(qos: QOS, key: str, value: str) -> bool:
     """Apply a single ``key=value`` QoS attribute; return whether it was known.
 
@@ -176,6 +211,13 @@ def _set_qos_field(qos: QOS, key: str, value: str) -> bool:
         qos.flags = value
     elif key == "grptres":
         qos.grp_tres = value
+    elif key == "grptresmins":
+        qos.grp_tres_mins = _combine_tres_string(qos.grp_tres_mins, value)
+    elif key == "rawusage":
+        # qos_functions.c _set_rec "RawUsage": get_double(); the value is
+        # applied via sacctmgr_update_qos_usage. Bad values raise here and
+        # the caller renders the real " Bad RawUsage value: …" shape.
+        qos.usage_raw = float(value)
     elif key == "maxjobs":
         qos.max_jobs = int(value)
     elif key == "maxsubmit":
@@ -922,7 +964,11 @@ class SacctmgrEmulator:
                     f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
                 )
             key, value = arg.split("=", 1)
-            if not _set_qos_field(qos, key.lower(), value):
+            try:
+                known = _set_qos_field(qos, key.lower(), value)
+            except ValueError:
+                return self._fail(f" Bad RawUsage value: {value}")
+            if not known:
                 return self._fail(
                     f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
                 )
@@ -958,7 +1004,11 @@ class SacctmgrEmulator:
             if "=" not in arg:
                 return self._fail(f" Unknown option: {arg}")
             key, value = arg.split("=", 1)
-            _set_qos_field(qos, key.lower(), value)
+            try:
+                _set_qos_field(qos, key.lower(), value)
+            except ValueError:
+                # qos_functions.c:672-677: exit_code=1, message on stderr.
+                return self._fail(f" Bad RawUsage value: {value}")
 
         self.database.save_state()
         return f" Modified qos...\n  {qos_name}"
@@ -1013,6 +1063,7 @@ class SacctmgrEmulator:
                 "UsageFactor": "1.000000",
                 "Flags": q.flags,
                 "GrpTRES": q.grp_tres,
+                "GrpTRESMins": q.grp_tres_mins,
                 "MaxJobs": str(q.max_jobs) if q.max_jobs else "",
                 "MaxSubmit": str(q.max_submit) if q.max_submit else "",
                 "MaxWall": q.max_wall,
