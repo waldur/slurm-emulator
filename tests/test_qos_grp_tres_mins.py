@@ -4,20 +4,36 @@ Consumer: ``waldur/waldur-site-agent!541`` (``apply_limits_to_qos``) issues
 ``modify qos <name> set GrpTRESMins=…``, ``show qos <name>
 format=Name,GrpTRESMins`` and ``modify qos <name> set RawUsage=0``.
 
-Parity references (real Slurm source):
-- ``GrpTRESMins`` merge, not replace: qos_functions.c ``_set_rec`` +
-  as_mysql_qos.c ``_setup_qos_limits`` (``TRES_STR_FLAG_REMOVE``), where a
-  ``-1`` count drops the TRES (slurmdb_defs.c ``slurmdb_tres_list_from_string``).
-- ``RawUsage`` is a QoS option: qos_functions.c ``_set_rec`` "RawUsage"
-  (``get_double``; bad value → exit 1, " Bad RawUsage value: …").
+Parity references (real Slurm 26.11 source):
+- ``GrpTRESMins`` merge, not replace: qos_functions.c ``_set_rec`` →
+  ``sacctmgr_set_tres_rec_field`` (client side, ``TRES_STR_FLAG_REPLACE``),
+  then accounting_storage_mysql.c ``mod_tres_str`` (new string first, old
+  appended, ``TRES_STR_FLAG_REMOVE``): first occurrence wins, ``-1`` drops
+  the TRES. Output sorted by TRES id (``TRES_STR_FLAG_SORT_ID``).
+- Unknown TRES name: slurmdb_defs.c ``slurmdb_format_tres_str`` →
+  ``error("no TRES known by type %s")``, exit 1, nothing sent.
+- Any bad set-field aborts the whole modify before the RPC
+  (``sacctmgr_modify_qos``: ``if (exit_code) return SLURM_ERROR``).
+- ``RawUsage`` is a QoS option (qos_functions.c ``_set_rec`` "RawUsage",
+  ``get_double``; negative → INFINITE → rejected) but takes a separate path:
+  ``sacctmgr_modify_qos`` short-circuits into ``sacctmgr_update_qos_usage``
+  (common.c), which prints only "No cluster specified, resetting on local
+  cluster <c>" and never " Modified qos...". ``sacctmgr_add_qos`` ignores it.
 """
 
 import pytest
 
 from emulator.api.slurmrestd import schemas
-from emulator.commands.sacctmgr import SacctmgrEmulator, _combine_tres_string
+from emulator.commands.sacctmgr import (
+    SacctmgrEmulator,
+    UnknownTresError,
+    _combine_tres_string,
+)
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
+
+QOS = "ehpc-dev-2026d07-114"
+KNOWN = ["CPU", "Mem", "GRES/gpu", "billing"]
 
 
 @pytest.fixture
@@ -25,27 +41,32 @@ def em(tmp_path):
     db = SlurmDatabase()
     db.state_file = tmp_path / "state.json"
     emulator = SacctmgrEmulator(db, TimeEngine())
-    emulator.handle_command(
-        ["add", "qos", "ehpc-dev-2026d07-114", "set", "flags=DenyOnLimit,NoDecay"]
-    )
+    emulator.handle_command(["add", "qos", QOS, "set", "flags=DenyOnLimit,NoDecay"])
     return emulator
-
-
-QOS = "ehpc-dev-2026d07-114"
 
 
 class TestCombineTresString:
     def test_new_over_empty(self):
-        assert _combine_tres_string("", "cpu=100,gres/gpu=200") == "cpu=100,gres/gpu=200"
+        assert _combine_tres_string("", "cpu=100,gres/gpu=200", KNOWN) == "cpu=100,gres/gpu=200"
 
     def test_named_tres_updated_unnamed_kept(self):
-        assert _combine_tres_string("cpu=100,gres/gpu=200", "cpu=1") == "cpu=1,gres/gpu=200"
+        assert _combine_tres_string("cpu=100,gres/gpu=200", "cpu=1", KNOWN) == "cpu=1,gres/gpu=200"
 
     def test_minus_one_removes(self):
-        assert _combine_tres_string("cpu=100,gres/gpu=200", "gres/gpu=-1") == "cpu=100"
+        assert _combine_tres_string("cpu=100,gres/gpu=200", "gres/gpu=-1", KNOWN) == "cpu=100"
 
     def test_minus_one_on_absent_is_noop(self):
-        assert _combine_tres_string("cpu=100", "mem=-1") == "cpu=100"
+        assert _combine_tres_string("cpu=100", "mem=-1", KNOWN) == "cpu=100"
+
+    def test_sorted_by_tres_id_and_lowercased(self):
+        # billing (id 5) sorts after cpu (1) and mem (2); gres/* is dynamic and
+        # sorts last. Names are canonical lower-case like the real id→name print.
+        out = _combine_tres_string("", "GRES/gpu=3,billing=5,CPU=1,Mem=2", KNOWN)
+        assert out == "cpu=1,mem=2,billing=5,gres/gpu=3"
+
+    def test_unknown_tres_raises(self):
+        with pytest.raises(UnknownTresError):
+            _combine_tres_string("", "foo=1", KNOWN)
 
 
 class TestGrpTRESMinsRoundTrip:
@@ -62,6 +83,11 @@ class TestGrpTRESMinsRoundTrip:
             "Name|GrpTRESMins",
             f"{QOS}|billing=14428800,gres/gpu=216000",
         ]
+
+    def test_show_parsable_trailing_pipe(self, em):
+        em.handle_command(["modify", "qos", QOS, "set", "GrpTRESMins=cpu=100"])
+        out = em.handle_command(["-p", "show", "qos", QOS, "format=Name,GrpTRESMins"])
+        assert out.splitlines()[1] == f"{QOS}|cpu=100|"
 
     def test_show_table_mode(self, em):
         em.handle_command(["modify", "qos", QOS, "set", "GrpTRESMins=cpu=100"])
@@ -80,6 +106,21 @@ class TestGrpTRESMinsRoundTrip:
         em.handle_command(["modify", "qos", QOS, "set", "GrpTRESMins=gres/gpu=-1"])
         assert em.database.qos_list[QOS].grp_tres_mins == "billing=100"
 
+    def test_unknown_tres_exits_one_and_modifies_nothing(self, em):
+        em.handle_command(["modify", "qos", QOS, "set", "GrpTRESMins=cpu=100"])
+        out = em.handle_command(["modify", "qos", QOS, "set", "GrpTRESMins=foo=1"])
+        assert em.exit_code == 1
+        assert out == "sacctmgr: error: slurmdb_format_tres_str: no TRES known by type foo"
+        assert em.database.qos_list[QOS].grp_tres_mins == "cpu=100"
+
+    def test_bad_field_aborts_whole_modify(self, em):
+        # sacctmgr_modify_qos checks exit_code after parsing every set-field
+        # and returns before the RPC, so MaxJobs must not have been applied.
+        out = em.handle_command(["modify", "qos", QOS, "set", "MaxJobs=7", "GrpTRESMins=nope=1"])
+        assert em.exit_code == 1
+        assert "no TRES known by type nope" in out
+        assert em.database.qos_list[QOS].max_jobs == -1
+
     def test_add_qos_accepts_grp_tres_mins(self, em):
         em.handle_command(["add", "qos", "other", "set", "GrpTRESMins=cpu=5"])
         assert em.exit_code == 0
@@ -92,7 +133,8 @@ class TestGrpTRESMinsRoundTrip:
         assert "missing" not in em.database.qos_list
 
     def test_persists_across_reload(self, em, tmp_path):
-        em.handle_command(["modify", "qos", QOS, "set", "GrpTRESMins=cpu=7", "RawUsage=42"])
+        em.handle_command(["modify", "qos", QOS, "set", "GrpTRESMins=cpu=7"])
+        em.handle_command(["modify", "qos", QOS, "set", "RawUsage=42"])
         db = SlurmDatabase()
         db.state_file = tmp_path / "state.json"
         db.load_state()
@@ -110,17 +152,44 @@ class TestGrpTRESMinsRoundTrip:
 
 
 class TestRawUsage:
-    def test_reset_to_zero(self, em):
+    def test_reset_to_zero_takes_usage_path(self, em):
         em.database.qos_list[QOS].usage_raw = 1234.5
-        out = em.handle_command(["modify", "qos", QOS, "set", "RawUsage=0"])
+        out = em.handle_command(["-i", "modify", "qos", QOS, "set", "RawUsage=0"])
         assert em.exit_code == 0
-        assert out == f" Modified qos...\n  {QOS}"
+        # sacctmgr_update_qos_usage, not the " Modified qos..." branch.
+        assert out == "No cluster specified, resetting on local cluster default"
         assert em.database.qos_list[QOS].usage_raw == 0.0
+
+    def test_other_fields_in_same_command_are_ignored(self, em):
+        # ``if (qos->usage)`` returns after the usage update; the qos_modify
+        # RPC carrying MaxJobs is never sent.
+        em.handle_command(["modify", "qos", QOS, "set", "RawUsage=0", "MaxJobs=9"])
+        assert em.exit_code == 0
+        assert em.database.qos_list[QOS].max_jobs == -1
 
     def test_bad_value_exits_one(self, em):
         out = em.handle_command(["modify", "qos", QOS, "set", "RawUsage=abc"])
         assert em.exit_code == 1
         assert out == " Bad RawUsage value: abc"
+
+    def test_negative_is_bad_value(self, em):
+        # get_double turns a negative into INFINITE, which _set_rec rejects.
+        out = em.handle_command(["modify", "qos", QOS, "set", "RawUsage=-1"])
+        assert em.exit_code == 1
+        assert out == " Bad RawUsage value: -1"
+
+    def test_missing_qos_is_failed_to_find(self, em):
+        out = em.handle_command(["modify", "qos", "ghost", "set", "RawUsage=0"])
+        assert em.exit_code == 1
+        assert out == "sacctmgr: error: Failed to find QOS ghost"
+
+    def test_add_qos_parses_but_ignores_raw_usage(self, em):
+        em.handle_command(["add", "qos", "fresh", "set", "RawUsage=5"])
+        assert em.exit_code == 0
+        assert em.database.qos_list["fresh"].usage_raw == 0.0
+        em.handle_command(["add", "qos", "broken", "set", "RawUsage=x"])
+        assert em.exit_code == 1
+        assert "broken" not in em.database.qos_list
 
     def test_does_not_touch_grp_tres_mins(self, em):
         em.handle_command(["modify", "qos", QOS, "set", "GrpTRESMins=cpu=100"])

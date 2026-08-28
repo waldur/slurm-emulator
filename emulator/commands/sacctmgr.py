@@ -24,6 +24,7 @@ accepted no-op — the emulator is headless), and a leading ``-M
 compatibility (real sacctmgr has no ``-M``).
 """
 
+import dataclasses
 from typing import Optional
 
 from emulator import __version__
@@ -165,42 +166,91 @@ def _split_list_operator(key: str) -> tuple[str, str]:
     return key, ""
 
 
-def _combine_tres_string(current: str, incoming: str) -> str:
-    """Merge a ``GrpTRESMins``-style TRES string the way slurmdbd does.
+# Static TRES ids (slurm/slurmdb.h ``tres_types_t``): cpu=1, mem=2, energy=3,
+# node=4, billing=5, fs/disk=6, vmem=7, pages=8. Dynamic TRES (gres/*,
+# license/*, …) get ids >= 1001 in creation order.
+_STATIC_TRES_IDS = {
+    "cpu": 1,
+    "mem": 2,
+    "energy": 3,
+    "node": 4,
+    "billing": 5,
+    "fs/disk": 6,
+    "vmem": 7,
+    "pages": 8,
+}
+
+
+class UnknownTresError(ValueError):
+    """A TRES name that ``slurmdb_format_tres_str`` cannot resolve to an id."""
+
+
+def _tres_sort_key(name: str, known: list[str]) -> tuple[int, int]:
+    """Order TRES the way ``TRES_STR_FLAG_SORT_ID`` does: by TRES id."""
+    if name in _STATIC_TRES_IDS:
+        return (0, _STATIC_TRES_IDS[name])
+    lowered = [k.lower() for k in known]
+    return (1, lowered.index(name) if name in lowered else len(lowered))
+
+
+def _combine_tres_string(current: str, incoming: str, known_tres: list[str]) -> str:
+    """Merge a ``GrpTRESMins``-style TRES string the way sacctmgr + slurmdbd do.
 
     Real ``sacctmgr modify qos … set GrpTRESMins=cpu=1`` does **not** replace
-    the stored list. The client only concatenates the values given on that
-    command line (qos_functions.c ``_set_rec``, ``slurmdb_combine_tres_strings``
-    with ``TRES_STR_FLAG_REPLACE``); slurmdbd then folds that onto the stored
-    row with ``TRES_STR_FLAG_REMOVE`` (as_mysql_qos.c ``_setup_qos_limits``,
-    ``tres_str_flags``). ``slurmdb_tres_list_from_string`` (slurmdb_defs.c)
-    keeps the *new* count for a TRES named on both sides, keeps every TRES
-    that is only in the old string, and drops a TRES whose new count is
-    ``-1`` (``INFINITE64``) when the REMOVE flag is set.
+    the stored list. The client resolves names to TRES ids with
+    ``slurmdb_format_tres_str`` (qos_functions.c ``_set_rec`` →
+    ``sacctmgr_set_tres_rec_field``) — an unknown name is
+    ``error: no TRES known by type <name>``, exit 1, nothing modified — and
+    only concatenates the values from that one command line
+    (``TRES_STR_FLAG_REPLACE``). slurmdbd then folds the new string onto the
+    stored row: ``mod_tres_str`` (accounting_storage_mysql.c) starts from the
+    *new* string and appends the old one with ``TRES_STR_FLAG_REMOVE``;
+    ``slurmdb_tres_list_from_string`` keeps the first occurrence (the new
+    count) and ``slurmdb_make_tres_string`` drops any TRES whose count is
+    ``INFINITE64`` (``-1``) under REMOVE.
 
     Net effect: named TRES are updated, unnamed TRES survive, ``-1`` removes.
-    Real Slurm sorts the result by TRES id (``TRES_STR_FLAG_SORT_ID``); the
-    emulator keeps first-seen order, which is stable for round-trips.
+    Names are stored canonical lower-case (ids on the real side) and the
+    result is ordered by TRES id (``TRES_STR_FLAG_SORT_ID``), which is also
+    what ``sacctmgr_print_tres`` renders — plain integers for every TRES
+    except ``mem``-like ones (``convert_num_unit`` UNIT_MEGA, not modelled).
     """
+    lowered_known = {k.lower() for k in known_tres}
     merged: dict[str, str] = {}
     for part in current.split(","):
         name, sep, count = part.partition("=")
         if sep and name.strip():
-            merged[name.strip()] = count.strip()
+            merged[name.strip().lower()] = count.strip()
     for part in incoming.split(","):
         name, sep, count = part.partition("=")
         if not sep or not name.strip():
             continue
-        name = name.strip()
+        name = name.strip().lower()
+        if name not in lowered_known:
+            raise UnknownTresError(name)
         count = count.strip()
         if count == "-1":
             merged.pop(name, None)
         else:
             merged[name] = count
-    return ",".join(f"{k}={v}" for k, v in merged.items())
+    ordered = sorted(merged, key=lambda n: _tres_sort_key(n, known_tres))
+    return ",".join(f"{n}={merged[n]}" for n in ordered)
 
 
-def _set_qos_field(qos: QOS, key: str, value: str) -> bool:
+def _parse_raw_usage(value: str) -> float:
+    """Parse a ``RawUsage=`` value the way qos_functions.c ``_set_rec`` does.
+
+    ``get_double`` maps a negative number to INFINITE, which ``_set_rec``
+    then rejects — so anything that is not a non-negative number is
+    ``Bad RawUsage value``.
+    """
+    usage = float(value)
+    if usage < 0:
+        raise ValueError(value)
+    return usage
+
+
+def _set_qos_field(qos: QOS, key: str, value: str, known_tres: list[str]) -> bool:
     """Apply a single ``key=value`` QoS attribute; return whether it was known.
 
     Shared by ``add qos`` (which errors on an unknown key) and ``modify qos``
@@ -212,12 +262,13 @@ def _set_qos_field(qos: QOS, key: str, value: str) -> bool:
     elif key == "grptres":
         qos.grp_tres = value
     elif key == "grptresmins":
-        qos.grp_tres_mins = _combine_tres_string(qos.grp_tres_mins, value)
+        qos.grp_tres_mins = _combine_tres_string(qos.grp_tres_mins, value, known_tres)
     elif key == "rawusage":
-        # qos_functions.c _set_rec "RawUsage": get_double(); the value is
-        # applied via sacctmgr_update_qos_usage. Bad values raise here and
-        # the caller renders the real " Bad RawUsage value: …" shape.
-        qos.usage_raw = float(value)
+        # Parsed by _set_rec (so a bad value fails the command) but *not*
+        # stored through the QoS record: sacctmgr_modify_qos routes it to
+        # sacctmgr_update_qos_usage instead, and sacctmgr_add_qos ignores
+        # ``qos->usage`` entirely. Callers handle the field themselves.
+        _parse_raw_usage(value)
     elif key == "maxjobs":
         qos.max_jobs = int(value)
     elif key == "maxsubmit":
@@ -965,7 +1016,11 @@ class SacctmgrEmulator:
                 )
             key, value = arg.split("=", 1)
             try:
-                known = _set_qos_field(qos, key.lower(), value)
+                known = _set_qos_field(qos, key.lower(), value, self.database.tres_types)
+            except UnknownTresError as e:
+                return self._fail(
+                    f"sacctmgr: error: slurmdb_format_tres_str: no TRES known by type {e}"
+                )
             except ValueError:
                 return self._fail(f" Bad RawUsage value: {value}")
             if not known:
@@ -987,9 +1042,6 @@ class SacctmgrEmulator:
 
         qos_name = args[0]
         qos = self.database.qos_list.get(qos_name)
-        if qos is None:
-            # Same SLURM_NO_CHANGE_IN_DATA shape as accounts: stdout, exit 1.
-            return self._nothing_modified()
 
         set_index = -1
         for i, arg in enumerate(args):
@@ -1000,16 +1052,50 @@ class SacctmgrEmulator:
         if set_index == -1:
             return self._fail(" error: No 'set' clause found")
 
+        # Real sacctmgr parses every set-clause first (_set_rec) and bails
+        # out before any RPC if one of them set exit_code, so a bad field
+        # leaves the QoS untouched. Work on a copy and commit at the end.
+        pending = dataclasses.replace(qos) if qos is not None else QOS(name=qos_name)
+        raw_usage: Optional[float] = None
         for arg in args[set_index + 1 :]:
             if "=" not in arg:
                 return self._fail(f" Unknown option: {arg}")
             key, value = arg.split("=", 1)
+            key = key.lower()
             try:
-                _set_qos_field(qos, key.lower(), value)
+                if key == "rawusage":
+                    raw_usage = _parse_raw_usage(value)
+                else:
+                    _set_qos_field(pending, key, value, self.database.tres_types)
+            except UnknownTresError as e:
+                return self._fail(
+                    f"sacctmgr: error: slurmdb_format_tres_str: no TRES known by type {e}"
+                )
             except ValueError:
-                # qos_functions.c:672-677: exit_code=1, message on stderr.
+                # qos_functions.c _set_rec: exit_code=1, " Bad RawUsage value: …"
                 return self._fail(f" Bad RawUsage value: {value}")
 
+        if raw_usage is not None:
+            # sacctmgr_modify_qos: ``if (qos->usage)`` short-circuits into
+            # sacctmgr_update_qos_usage (common.c) and returns — the other
+            # set-fields in the same invocation are never sent, nothing is
+            # printed on success except the local-cluster notice, and a QoS
+            # the cond does not match is ``error("Failed to find QOS %s")``.
+            # commit_check() is answered by -i; the interactive 30 s prompt
+            # of a non-immediate run is not modelled.
+            if qos is None:
+                return self._fail(f"sacctmgr: error: Failed to find QOS {qos_name}")
+            qos.usage_raw = raw_usage
+            self.database.save_state()
+            clusters = self.database.list_clusters()
+            local = clusters[0].name if clusters else "default"
+            return f"No cluster specified, resetting on local cluster {local}"
+
+        if qos is None:
+            # Same SLURM_NO_CHANGE_IN_DATA shape as accounts: stdout, exit 1.
+            return self._nothing_modified()
+
+        self.database.qos_list[qos_name] = pending
         self.database.save_state()
         return f" Modified qos...\n  {qos_name}"
 
