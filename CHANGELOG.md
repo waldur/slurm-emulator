@@ -4,10 +4,15 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.9.3] - 2026-08-28
 
 ### Added
-- Model QoS `GrpTRESMins` (slurmdbd merge semantics, `-1` removes) and `RawUsage` in sacctmgr and slurmrestd emulation
+- Add QoS GrpTRESMins and RawUsage modelling to sacctmgr emulation
+- Add a landing page published alongside the Helm chart index
+- Add documentation for running the FireCREST scenario on Kubernetes
+
+### Changed
+- Wire the dependency licence gate into CI
 
 ## [0.9.2] - 2026-08-20
 
