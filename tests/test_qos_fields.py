@@ -1,8 +1,8 @@
 """Tests for the expanded QoS record and MaxWall duration parsing.
 
-Validates emulator parity with real Slurm (/Users/ilja/workspace/slurm):
+Validates emulator parity with real Slurm (see docs/slurm-parity.md):
 
-- slurmdb_qos_rec_t (slurm/slurmdb.h:1076) carries priority, grace_time and
+- slurmdb_qos_rec_t (slurm://slurm/slurmdb.h#slurmdb_qos_rec_t) carries priority, grace_time and
   per-job/node/user TRES limits (max_tres_pj/pn/pu). The emulator now stores
   and round-trips these alongside the original 7 fields.
 - MaxWall accepts SLURM duration syntax (minutes, ``[days-]HH:MM:SS``,
@@ -14,6 +14,9 @@ from emulator.api.slurmrestd import schemas
 from emulator.commands.sacctmgr import SacctmgrEmulator
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
+from emulator.slurm_version import current
+
+V = current().api_version
 
 
 def _emulator(tmp_path):
@@ -95,8 +98,8 @@ class TestQosRendering:
         assert rendered["priority"] == {"set": True, "infinite": False, "number": 100}
 
     def test_grace_time_rendered(self, tmp_path):
-        # Real v0.0.46 QOS: grace_time is a plain UINT32 (seconds) under
-        # limits/grace_time, not a top-level NO_VAL struct (parsers.c:9321).
+        # Real {V} QOS: grace_time is a plain UINT32 (seconds) under
+        # limits/grace_time, not a top-level NO_VAL struct (slurm://src/plugins/data_parser/{V}/parsers.c#"limits/grace_time"@26.05+).
         em = _emulator(tmp_path)
         em.handle_command(["add", "qos", "boost", "set", "GraceTime=120"])
         rendered = schemas.qos_to_dict(em.database.qos_list["boost"], 1)

@@ -66,7 +66,7 @@ Use these commands:
 
 - **Interactive CLI**: `uv run slurm-emulator`
 - **API Server**: `uv run uvicorn emulator.api.emulator_server:app --host 0.0.0.0 --port 8080`
-- **slurmrestd API**: `uv run slurmrestd-emulator` (Slurm 26.11 REST API v0.0.46 on port 6820)
+- **slurmrestd API**: `uv run slurmrestd-emulator` (Slurm 26.05 REST API v0.0.45 on port 6820)
 - **SSH filesystem plane**: `uv run --extra ssh slurm-ssh-emulator` (asyncssh server on port 2222;
   filesystem ops + Slurm CLI dispatch; for running FireCREST v2 against the emulator)
 - **Direct commands**: `uv run sacctmgr`, `uv run sacct`, `uv run sinfo`
@@ -96,6 +96,50 @@ Releases: pushing a `X.Y.Z` tag makes CI rewrite the chart's `version` and
 GitHub mirror. The chart therefore always deploys `opennode/slurm-emulator:<tag>`,
 which the "Publish docker image" job pushes from the same pipeline.
 
+### Tracing changes against real Slurm
+
+The emulator's behaviour is a set of claims about real Slurm, and every claim
+is anchored to SchedMD's source. Full guide: `docs/slurm-parity.md`.
+
+- **Source cache**: `uv run scripts/slurm_src.py update` clones
+  https://github.com/SchedMD/slurm once into `~/.cache/slurm-emulator/` (override
+  with `SLURM_SRC_CACHE`) and keeps one worktree per tracked version;
+  `status` shows freshness, `path 26.05` prints a worktree, `grep PATTERN [paths]`
+  searches every version at once. Run `update` before parity work.
+- **Tracked versions** live in `[tool.slurm-parity]` in `pyproject.toml`:
+  `primary = "26.05"` (what the emulator claims by default) and
+  `versions = ["master", "26.05", "25.11", "25.05", "24.11"]` (SchedMD's support
+  window plus `master` as an early warning for upstream changes). The slurmrestd
+  plane emulates `data_parser/v0.0.45` (26.05); its references carry `@26.05+`.
+- **Reference syntax** — required in the comment/docstring next to any behaviour
+  in `emulator/commands/`, `emulator/api/slurmrestd/`, `emulator/core/database.py`
+  and in the test that covers it:
+  `slurm://<path>[#<symbol>][@<versions>]`, e.g.
+  `slurm://src/sacctmgr/common.c#_get_print_field`,
+  `slurm://slurm/slurmdb.h#slurmdb_qos_rec_t.grace_time`,
+  `slurm://src/sacctmgr/common.c#"Def QOS"`,
+  `slurm://src/plugins/data_parser/v0.0.45/parsers.c#ASSOC_SHORT@26.05+`,
+  `slurm://src/slurmrestd/operations.c#http_status_from_error@25.11+`.
+  Anchor on the function/table, not a line. No `@` means "same in every
+  tracked version". **Never** write `file.c:<line>` or a local checkout path —
+  `scripts/check_slurm_refs.py` rejects both.
+- **Checking**: `uv run scripts/check_slurm_refs.py --summary` verifies each
+  reference's file and symbol in every version it claims. Runs in pre-commit
+  (skips uncached versions) and in CI with `--strict`.
+- **Version differences**: if the checker says a symbol is missing in an older
+  version, narrow the reference (`@25.11+`); if the emulator must behave
+  differently, branch on `emulator.slurm_version.at_least()` (target selected by
+  `SLURM_EMULATOR_SLURM_VERSION`, default = primary) and either mark the test
+  `@pytest.mark.slurm_version("25.11+")` / `("24.11", "25.05")` or, for REST
+  shapes, add a case to `tests/test_slurmrestd_dialects.py` (which runs every
+  version). REST tests must never hard-code `v0.0.4X`: use
+  `current().api_version` (`V` in the existing test modules). CI runs the whole
+  suite once per tracked version.
+- **Intentional deviations** from real Slurm go in the module docstring (existing
+  examples: `sacctmgr -M` tolerance, no interactive commit prompt, `sacct -X`/`-a`
+  no-ops) — with the reference to what real Slurm does instead.
+- Changelog entries for parity changes cite the same reference.
+
 ### Testing and Quality
 
 - **Run tests**: `uv run pytest`
@@ -104,6 +148,7 @@ which the "Publish docker image" job pushes from the same pipeline.
 - **Lint code**: `uv run --with ruff ruff check emulator/ --fix`
 - **Type check**: `uv run --with mypy mypy emulator/`
 - **Run all pre-commit checks**: `uv run pre-commit run --all-files`
+- **Verify Slurm source references**: `uv run scripts/check_slurm_refs.py --summary`
 
 ### Release Management
 
@@ -206,7 +251,7 @@ This approach ensures code quality while keeping development velocity for an emu
   startup warning; put behind TLS if exposed beyond localhost). Screenshots and a
   feature walkthrough live in `docs/web-ui.md`. Also includes inline QoS editing,
   per-account association add/remove, and a scenario editor (build/adjust steps)
-- **slurmrestd Emulation** (`emulator/api/slurmrestd/`) - Slurm 26.11 REST API (v0.0.46) on
+- **slurmrestd Emulation** (`emulator/api/slurmrestd/`) - Slurm 26.05 REST API (v0.0.45) on
   port 6820: `/slurmdb` CRUD + `/slurm` controller read paths, real response envelopes,
   JWT-style auth (`X-SLURM-USER-TOKEN`, optional `SLURM_EMULATOR_JWT_KEY` verification).
   Shares state with the CLI commands via the JSON state files
@@ -247,6 +292,7 @@ usage_show account               # Show current usage
 - Use uv for all Python package management
 - Test time manipulation before complex scenarios
 - Validate decay calculations with known values
+- Cite real Slurm source (`slurm://<path>#<symbol>`) for every command/REST behaviour change and run `scripts/check_slurm_refs.py`
 - Use checkpoints for complex testing scenarios
 - Check QoS transitions after usage injection
 
@@ -254,6 +300,7 @@ usage_show account               # Show current usage
 - Use pip, poetry, or other package managers
 - Assume time advances automatically
 - Skip decay factor validation
+- Reference Slurm source by line number (`file.c:<line>`) or by a local checkout path
 - Ignore QoS threshold calculations
 - Commit without testing sequence scenario
 
@@ -338,17 +385,21 @@ print('Current quarter:', te.get_current_quarter())
 - `POST /api/accounts` - Create an account (sacctmgr add account stand-in)
 
 ### slurmrestd Endpoints (port 6820)
-- `/slurmdb/v0.0.46/...` - accounts, users, associations, qos, tres, clusters, jobs
+- `/slurmdb/v0.0.45/...` - accounts, users, associations, qos, tres, clusters, jobs
   (one job per usage record, matching `sacct` output)
-- `/slurm/v0.0.46/...` - jobs (+ `POST /job/submit` = sbatch, `DELETE /job/{id}` = scancel),
+- `/slurm/v0.0.45/...` - jobs (+ `POST /job/submit` = sbatch, `DELETE /job/{id}` = scancel),
   nodes, partitions, shares, ping, diag
 - Auth header required: `X-SLURM-USER-TOKEN` (any token accepted unless
   `SLURM_EMULATOR_JWT_KEY` is set)
 
 ### Job lifecycle (submitted jobs)
-Jobs created via `POST /slurm/v0.0.46/job/submit` (or `sbatch` over SSH) advance
+Jobs created via `POST /slurm/v0.0.45/job/submit` (or `sbatch` over SSH) advance
 PENDING → RUNNING → COMPLETED lazily on read, and emit a usage record on completion
 so they also appear in the accounting (`/slurmdb` / `sacct`) view. Configurable via env:
+- `SLURM_EMULATOR_SLURM_VERSION` = which tracked Slurm release the emulator is launched as
+  (`24.11`, `25.05`, `25.11`, `26.05` default, `master`): selects the slurmrestd URL prefix
+  (`/slurm/v0.0.42/` … `/slurm/v0.0.46/`), `meta.slurm.release` and version-gated response
+  shapes; see `emulator/slurm_version.py` `RELEASES` and `docs/slurm-parity.md`
 - `SLURM_EMULATOR_JOB_CLOCK` = `wall` (default, real-time) or `time` (simulated clock)
 - `SLURM_EMULATOR_JOB_RUN_DELAY` (default 2s to RUNNING), `SLURM_EMULATOR_JOB_RUN_DURATION`
   (default 8s to COMPLETED)

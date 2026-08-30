@@ -1,9 +1,9 @@
 """sacctmgr command emulator.
 
-Output formatting and exit codes mirror real Slurm 26.11:
+Output formatting and exit codes mirror real Slurm 26.05:
 
 * list/show output defaults to fixed-width columns with a dashed
-  underline (``src/common/print_fields.c``); ``-p``/``--parsable``
+  underline (``slurm://src/common/print_fields.c``); ``-p``/``--parsable``
   pipe-separates with a trailing ``|``, ``-P``/``--parsable2`` without,
   ``-n``/``--noheader`` drops the header;
 * field names, printed headers, and column widths come from the
@@ -12,11 +12,11 @@ Output formatting and exit codes mirror real Slurm 26.11:
   ``sacctmgr/*_functions.c``;
 * errors print with a leading-space `` error: ...`` prefix and exit 1
   (the dispatcher routes failing output to stderr); ``Nothing
-  modified`` goes to stdout and exits 0 (account_functions.c:727-729 —
+  modified`` goes to stdout and exits 0 (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account —
   only the local rc is set, the global ``exit_code`` stays 0);
 * re-adding an existing account reports ``SLURM_NO_CHANGE_IN_DATA``:
   `` Data has not changed since time specified`` on stdout, exit 0
-  (account_functions.c:342-343, slurm_errno.c:205-207).
+  (slurm://src/sacctmgr/account_functions.c#sacctmgr_add_account, slurm://src/common/slurm_errno.c#SLURM_NO_CHANGE_IN_DATA).
 
 Intentional deviations: no interactive commit prompt (``-i`` is an
 accepted no-op — the emulator is headless), and a leading ``-M
@@ -47,107 +47,107 @@ from emulator.core.database import (
 from emulator.core.time_engine import TimeEngine
 
 # Field registry mirroring the prefix-match chain in
-# src/sacctmgr/common.c:219-891. Order matters: tokens resolve to the
+# slurm://src/sacctmgr/common.c#_get_print_field. Order matters: tokens resolve to the
 # first entry they prefix-match (e.g. "Cl" must hit Clusters, not
 # Classification, because Classification needs 3 chars). Alias entries
 # (e.g. Acct) carry the canonical printed header so they share a column.
 _REGISTRY: list[FieldSpec] = [
-    FieldSpec("Account", 10, min_prefix=3),  # common.c:219
+    FieldSpec("Account", 10, min_prefix=3),
     FieldSpec("Acct", 10, header="Account", min_prefix=4),
-    FieldSpec("AdminLevel", 9, header="Admin", min_prefix=2),  # common.c:243
-    FieldSpec("Classification", 9, header="Class", min_prefix=3),  # common.c:263
-    FieldSpec("Clusters", 10, header="Cluster", min_prefix=2),  # common.c:274
-    FieldSpec("ControlHost", 15, min_prefix=8),  # common.c:289
-    FieldSpec("ControlPort", 12, min_prefix=8),  # common.c:294
-    FieldSpec("DefaultAccount", 10, header="Def Acct", min_prefix=8),  # common.c:320
-    FieldSpec("DefaultQOS", 9, header="Def QOS", min_prefix=8),  # common.c:326
-    FieldSpec("Description", 20, header="Descr", min_prefix=3),  # common.c:336
-    FieldSpec("Flags", 20, min_prefix=2),  # common.c:381
-    FieldSpec("GraceTime", 10, min_prefix=3),  # common.c:386
-    FieldSpec("GrpCPUs", 8, min_prefix=6),  # common.c:391
-    FieldSpec("GrpCPUMins", 11, min_prefix=7),  # common.c:396
-    FieldSpec("GrpTRES", 13, min_prefix=7),  # common.c:406
-    FieldSpec("GrpTRESMins", 13, min_prefix=7),  # common.c:411
-    FieldSpec("GrpTRESRunMins", 13, min_prefix=8),  # common.c:416
-    FieldSpec("GrpJobs", 7, min_prefix=4),  # common.c:422
-    FieldSpec("GrpMemory", 7, header="GrpMem", min_prefix=4),  # common.c:433
-    FieldSpec("GrpNodes", 8, min_prefix=4),  # common.c:438
-    FieldSpec("GrpSubmitJobs", 9, header="GrpSubmit", min_prefix=4),  # common.c:443
-    FieldSpec("GrpWall", 11, min_prefix=4),  # common.c:448
-    FieldSpec("ID", 6, min_prefix=2),  # common.c:453
-    FieldSpec("MaxCPUMinsPerJob", 11, header="MaxCPUMins", min_prefix=7),  # common.c:483
-    FieldSpec("MaxCPUsPerJob", 8, header="MaxCPUs", min_prefix=6),  # common.c:497
-    FieldSpec("MaxTRES", 13, min_prefix=7),  # common.c:511
+    FieldSpec("AdminLevel", 9, header="Admin", min_prefix=2),
+    FieldSpec("Classification", 9, header="Class", min_prefix=3),
+    FieldSpec("Clusters", 10, header="Cluster", min_prefix=2),
+    FieldSpec("ControlHost", 15, min_prefix=8),
+    FieldSpec("ControlPort", 12, min_prefix=8),
+    FieldSpec("DefaultAccount", 10, header="Def Acct", min_prefix=8),
+    FieldSpec("DefaultQOS", 9, header="Def QOS", min_prefix=8),
+    FieldSpec("Description", 20, header="Descr", min_prefix=3),
+    FieldSpec("Flags", 20, min_prefix=2),
+    FieldSpec("GraceTime", 10, min_prefix=3),
+    FieldSpec("GrpCPUs", 8, min_prefix=6),
+    FieldSpec("GrpCPUMins", 11, min_prefix=7),
+    FieldSpec("GrpTRES", 13, min_prefix=7),
+    FieldSpec("GrpTRESMins", 13, min_prefix=7),
+    FieldSpec("GrpTRESRunMins", 13, min_prefix=8),
+    FieldSpec("GrpJobs", 7, min_prefix=4),
+    FieldSpec("GrpMemory", 7, header="GrpMem", min_prefix=4),
+    FieldSpec("GrpNodes", 8, min_prefix=4),
+    FieldSpec("GrpSubmitJobs", 9, header="GrpSubmit", min_prefix=4),
+    FieldSpec("GrpWall", 11, min_prefix=4),
+    FieldSpec("ID", 6, min_prefix=2),
+    FieldSpec("MaxCPUMinsPerJob", 11, header="MaxCPUMins", min_prefix=7),
+    FieldSpec("MaxCPUsPerJob", 8, header="MaxCPUs", min_prefix=6),
+    FieldSpec("MaxTRES", 13, min_prefix=7),
     FieldSpec("MaxTRESPerJob", 13, header="MaxTRES", min_prefix=11),
-    FieldSpec("MaxTRESPerNode", 14, min_prefix=11),  # common.c:521
+    FieldSpec("MaxTRESPerNode", 14, min_prefix=11),
     FieldSpec("MaxTRESPN", 14, header="MaxTRESPerNode", min_prefix=9),
-    FieldSpec("MaxTRESMinsPerJob", 13, header="MaxTRESMins", min_prefix=11),  # common.c:529
+    FieldSpec("MaxTRESMinsPerJob", 13, header="MaxTRESMins", min_prefix=11),
     FieldSpec("MaxTRESRunMinsPerAccount", 16, header="MaxTRESRunMinsPA", min_prefix=16),
     FieldSpec("MaxTRESRunMinsPerAcct", 16, header="MaxTRESRunMinsPA", min_prefix=16),
-    FieldSpec("MaxTRESRunMinsPA", 16, min_prefix=16),  # common.c:537
+    FieldSpec("MaxTRESRunMinsPA", 16, min_prefix=16),
     FieldSpec("MaxTRESRunMinsPerUser", 16, header="MaxTRESRunMinsPU", min_prefix=16),
-    FieldSpec("MaxTRESRunMinsPU", 16, min_prefix=16),  # common.c:547
-    FieldSpec("MaxTRESPerAccount", 13, header="MaxTRESPA", min_prefix=11),  # common.c:555
+    FieldSpec("MaxTRESRunMinsPU", 16, min_prefix=16),
+    FieldSpec("MaxTRESPerAccount", 13, header="MaxTRESPA", min_prefix=11),
     FieldSpec("MaxTRESPerAcct", 13, header="MaxTRESPA", min_prefix=11),
     FieldSpec("MaxTRESPA", 13, min_prefix=9),
-    FieldSpec("MaxTRESPerUser", 13, header="MaxTRESPU", min_prefix=11),  # common.c:565
+    FieldSpec("MaxTRESPerUser", 13, header="MaxTRESPU", min_prefix=11),
     FieldSpec("MaxTRESPU", 13, min_prefix=9),
-    FieldSpec("MaxJobs", 7, min_prefix=4),  # common.c:573
-    FieldSpec("MaxJobsPerAccount", 9, header="MaxJobsPA", min_prefix=8),  # common.c:602
+    FieldSpec("MaxJobs", 7, min_prefix=4),
+    FieldSpec("MaxJobsPerAccount", 9, header="MaxJobsPA", min_prefix=8),
     FieldSpec("MaxJobsPerAcct", 9, header="MaxJobsPA", min_prefix=8),
     FieldSpec("MaxJobsPA", 9, min_prefix=8),
-    FieldSpec("MaxJobsPerUser", 9, header="MaxJobsPU", min_prefix=8),  # common.c:612
+    FieldSpec("MaxJobsPerUser", 9, header="MaxJobsPU", min_prefix=8),
     FieldSpec("MaxJobsPU", 9, min_prefix=8),
-    FieldSpec("MaxNodesPerJob", 8, header="MaxNodes", min_prefix=4),  # common.c:620
-    FieldSpec("MaxSubmitJobs", 9, header="MaxSubmit", min_prefix=4),  # common.c:640
+    FieldSpec("MaxNodesPerJob", 8, header="MaxNodes", min_prefix=4),
+    FieldSpec("MaxSubmitJobs", 9, header="MaxSubmit", min_prefix=4),
     FieldSpec("MaxSubmitJobsPerAccount", 11, header="MaxSubmitPA", min_prefix=11),
     FieldSpec("MaxSubmitJobsPerAcct", 11, header="MaxSubmitPA", min_prefix=11),
-    FieldSpec("MaxSubmitPA", 11, min_prefix=10),  # common.c:646
+    FieldSpec("MaxSubmitPA", 11, min_prefix=10),
     FieldSpec("MaxSubmitJobsPerUser", 11, header="MaxSubmitPU", min_prefix=11),
-    FieldSpec("MaxSubmitPU", 11, min_prefix=10),  # common.c:658
-    FieldSpec("MaxWallDurationPerJob", 11, header="MaxWall", min_prefix=4),  # common.c:668
-    FieldSpec("MinTRESPerJob", 13, header="MinTRES", min_prefix=7),  # common.c:680
-    FieldSpec("Name", 10, min_prefix=2),  # common.c:686
-    FieldSpec("Organization", 20, header="Org", min_prefix=1),  # common.c:706
-    FieldSpec("ParentName", 10, min_prefix=7),  # common.c:716
-    FieldSpec("Partition", 10, min_prefix=4),  # common.c:721
-    FieldSpec("PreemptMode", 11, min_prefix=8),  # common.c:726
-    FieldSpec("Preempt", 10, min_prefix=7),  # common.c:732
-    FieldSpec("PreemptExemptTime", 19, min_prefix=8),  # common.c:737
-    FieldSpec("Priority", 10, min_prefix=3),  # common.c:743
-    FieldSpec("QOSLevel", 20, header="QOS", min_prefix=3),  # common.c:753
-    FieldSpec("RPC", 5, min_prefix=1),  # common.c:769
-    FieldSpec("Share", 9, min_prefix=1),  # common.c:779
+    FieldSpec("MaxSubmitPU", 11, min_prefix=10),
+    FieldSpec("MaxWallDurationPerJob", 11, header="MaxWall", min_prefix=4),
+    FieldSpec("MinTRESPerJob", 13, header="MinTRES", min_prefix=7),
+    FieldSpec("Name", 10, min_prefix=2),
+    FieldSpec("Organization", 20, header="Org", min_prefix=1),
+    FieldSpec("ParentName", 10, min_prefix=7),
+    FieldSpec("Partition", 10, min_prefix=4),
+    FieldSpec("PreemptMode", 11, min_prefix=8),
+    FieldSpec("Preempt", 10, min_prefix=7),
+    FieldSpec("PreemptExemptTime", 19, min_prefix=8),
+    FieldSpec("Priority", 10, min_prefix=3),
+    FieldSpec("QOSLevel", 20, header="QOS", min_prefix=3),
+    FieldSpec("RPC", 5, min_prefix=1),
+    FieldSpec("Share", 9, min_prefix=1),
     FieldSpec("FairShare", 9, header="Share", min_prefix=2),
-    FieldSpec("Type", 8, min_prefix=2),  # common.c:831
-    FieldSpec("UsageFactor", 11, min_prefix=6),  # common.c:838
-    FieldSpec("UsageThreshold", 10, header="UsageThres", min_prefix=6),  # common.c:843
-    FieldSpec("User", 10, min_prefix=1),  # common.c:867
+    FieldSpec("Type", 8, min_prefix=2),
+    FieldSpec("UsageFactor", 11, min_prefix=6),
+    FieldSpec("UsageThreshold", 10, header="UsageThres", min_prefix=6),
+    FieldSpec("User", 10, min_prefix=1),
 ]
 
 # Default format strings, verbatim from real sacctmgr.
-_ACCOUNT_DEFAULT = "Acc,Des,O"  # account_functions.c:400
-_ACCOUNT_WITHASSOC = (  # account_functions.c:402-408
+_ACCOUNT_DEFAULT = "Acc,Des,O"  # slurm://src/sacctmgr/account_functions.c#sacctmgr_list_account
+_ACCOUNT_WITHASSOC = (  # slurm://src/sacctmgr/account_functions.c#sacctmgr_list_account
     "Cl,ParentN,U,Share,Priority,GrpJ,GrpN,GrpCPUs,GrpMEM,GrpS,GrpWall,"
     "GrpCPUMins,MaxJ,MaxN,MaxCPUs,MaxS,MaxW,MaxCPUMins,QOS,DefaultQOS"
 )
-_USER_DEFAULT = "U,DefaultA,Ad"  # user_functions.c:968
-_ASSOC_DEFAULT = (  # association_functions.c:793-801
+_USER_DEFAULT = "U,DefaultA,Ad"  # slurm://src/sacctmgr/user_functions.c#sacctmgr_list_user
+_ASSOC_DEFAULT = (  # slurm://src/sacctmgr/association_functions.c#sacctmgr_list_assoc
     "Cluster,Account,User,Part,Share,Priority,GrpJ,GrpTRES,GrpS,GrpWall,"
     "GrpTRESMins,MaxJ,MaxTRES,MaxTRESPerN,MaxS,MaxW,MaxTRESMins,QOS,"
     "DefaultQOS,GrpTRESRunMins"
 )
-_CLUSTER_DEFAULT = (  # cluster_functions.c:482-489
+_CLUSTER_DEFAULT = (  # slurm://src/sacctmgr/cluster_functions.c#sacctmgr_list_cluster
     "Cl,Controlh,Controlp,RPC,Fa,GrpJ,GrpTRES,GrpS,MaxJ,MaxTRES,MaxS,MaxW,QOS,DefaultQOS"
 )
-_QOS_DEFAULT = (  # qos_functions.c:1178-1193
+_QOS_DEFAULT = (  # slurm://src/sacctmgr/qos_functions.c#sacctmgr_list_qos
     "Name,Prio,GraceT,Preempt,PreemptE,PreemptM,Flags%40,UsageThres,"
     "UsageFactor,GrpTRES,GrpTRESMins,GrpTRESRunMins,GrpJ,GrpS,GrpW,"
     "MaxTRES,MaxTRESPerN,MaxTRESMins,MaxW,MaxTRESPerUser,MaxJobsPerUser,"
     "MaxSubmitJobsPerUser,MaxTRESPerAcct,MaxTRESRunMinsPerAcct%22,"
     "MaxTRESRunMinsPerUser%22,MaxJobsPerAcct,MaxSubmitJobsPerAcct,MinTRES"
 )
-_TRES_DEFAULT = "Type,Name%15,ID"  # tres_function.c:152
+_TRES_DEFAULT = "Type,Name%15,ID"  # slurm://src/sacctmgr/tres_function.c#sacctmgr_list_tres
 
 
 def _split_list_operator(key: str) -> tuple[str, str]:
@@ -155,7 +155,7 @@ def _split_list_operator(key: str) -> tuple[str, str]:
 
     Real sacctmgr list-valued fields (QosLevel, account ``qos``) accept the
     ``=`` (replace), ``+=`` (add) and ``-=`` (remove) operators handled by
-    ``slurm_addto_char_list_with_case`` (src/common/xstring.c) via the
+    ``slurm_addto_char_list_with_case`` (slurm://src/common/slurm_protocol_defs.c#slurm_addto_char_list_with_case) via the
     trailing ``+``/``-`` on the token. Returns e.g. ("qos", "+") for
     ``qos+``. A plain key returns ("qos", "").
     """
@@ -198,12 +198,12 @@ def _combine_tres_string(current: str, incoming: str, known_tres: list[str]) -> 
 
     Real ``sacctmgr modify qos … set GrpTRESMins=cpu=1`` does **not** replace
     the stored list. The client resolves names to TRES ids with
-    ``slurmdb_format_tres_str`` (qos_functions.c ``_set_rec`` →
+    ``slurmdb_format_tres_str`` (slurm://src/sacctmgr/qos_functions.c#_set_rec →
     ``sacctmgr_set_tres_rec_field``) — an unknown name is
     ``error: no TRES known by type <name>``, exit 1, nothing modified — and
     only concatenates the values from that one command line
     (``TRES_STR_FLAG_REPLACE``). slurmdbd then folds the new string onto the
-    stored row: ``mod_tres_str`` (accounting_storage_mysql.c) starts from the
+    stored row: slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#mod_tres_str starts from the
     *new* string and appends the old one with ``TRES_STR_FLAG_REMOVE``;
     ``slurmdb_tres_list_from_string`` keeps the first occurrence (the new
     count) and ``slurmdb_make_tres_string`` drops any TRES whose count is
@@ -238,7 +238,7 @@ def _combine_tres_string(current: str, incoming: str, known_tres: list[str]) -> 
 
 
 def _parse_raw_usage(value: str) -> float:
-    """Parse a ``RawUsage=`` value the way qos_functions.c ``_set_rec`` does.
+    """Parse a ``RawUsage=`` value the way slurm://src/sacctmgr/qos_functions.c#_set_rec does.
 
     ``get_double`` maps a negative number to INFINITE, which ``_set_rec``
     then rejects — so anything that is not a non-negative number is
@@ -255,7 +255,7 @@ def _set_qos_field(qos: QOS, key: str, value: str, known_tres: list[str]) -> boo
 
     Shared by ``add qos`` (which errors on an unknown key) and ``modify qos``
     (which ignores one), so both accept the same field set. Keys are the
-    lower-cased sacctmgr option names (qos_functions.c ``_set_rec``).
+    lower-cased sacctmgr option names (slurm://src/sacctmgr/qos_functions.c#_set_rec).
     """
     if key == "flags":
         qos.flags = value
@@ -322,7 +322,7 @@ class SacctmgrEmulator:
     def __init__(self, database: SlurmDatabase, time_engine: TimeEngine):
         self.database = database
         self.time_engine = time_engine
-        # Mirrors sacctmgr's global ``exit_code`` (sacctmgr.c:61): reset to 0 at
+        # Mirrors sacctmgr's global ``exit_code`` (slurm://src/sacctmgr/sacctmgr.c#exit_code): reset to 0 at
         # the start of each command, set to 1 by any error path. The dispatcher
         # propagates it to the process exit status and routes failing output
         # to stderr.
@@ -342,9 +342,9 @@ class SacctmgrEmulator:
         """No-op modify: message on stdout, process exit code 1.
 
         The modify branch prints "  Nothing modified" with printf and
-        returns SLURM_ERROR (account_functions.c:727-729), and
+        returns SLURM_ERROR (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account), and
         _modify_it() turns any non-SUCCESS error_code into the global
-        exit_code=1 (sacctmgr.c:982-984) — so the process exits 1 even
+        exit_code=1 (slurm://src/sacctmgr/sacctmgr.c#_modify_it) — so the process exits 1 even
         though the message goes to stdout.
         """
         self.exit_code = 1
@@ -362,7 +362,7 @@ class SacctmgrEmulator:
         try:
             return self._dispatch(args)
         except UnknownFieldError as e:
-            # common.c:882-885: bare "Unknown field '%s'" on stderr, exit 1.
+            # slurm://src/sacctmgr/common.c#"Unknown field": bare "Unknown field '%s'" on stderr, exit 1.
             return self._fail(f"Unknown field '{e.token}'")
 
     def _dispatch(self, args: list[str]) -> str:
@@ -530,7 +530,7 @@ class SacctmgrEmulator:
                 organization = arg.split("=", 1)[1].strip('"')
             elif arg.startswith("parent="):
                 # Real sacctmgr runs the value through strip_quotes()
-                # (association_functions.c:512), same as description/organization.
+                # (slurm://src/sacctmgr/association_functions.c#sacctmgr_set_assoc_rec), same as description/organization.
                 parent = arg.split("=", 1)[1].strip("\"'")
             elif arg.startswith("cluster="):
                 target_cluster = arg.split("=", 1)[1]
@@ -554,7 +554,7 @@ class SacctmgrEmulator:
                 return f" Adding Account(s)\n  {account_name}\n Settings\n  Cluster    = {target_cluster}"
             # Re-adding an existing account is NOT an error in real sacctmgr:
             # SLURM_NO_CHANGE_IN_DATA prints slurm_strerror(rc) to stdout and
-            # exits 0 (account_functions.c:342-343, slurm_errno.c:205-207).
+            # exits 0 (slurm://src/sacctmgr/account_functions.c#sacctmgr_add_account, slurm://src/common/slurm_errno.c#SLURM_NO_CHANGE_IN_DATA).
             return " Data has not changed since time specified"
 
         # Add global account (also creates the account-level association on the
@@ -633,7 +633,7 @@ class SacctmgrEmulator:
             if not self.database.get_account(account):
                 return self._fail(f" error: Account {account} does not exist")
             # One association row per partition (matches
-            # _add_assoc_cond_partition in as_mysql_assoc.c — no base
+            # slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_add_assoc_cond_partition — no base
             # row is created when partitions are given).
             if partitions:
                 for part in partitions:
@@ -701,16 +701,16 @@ class SacctmgrEmulator:
                 set_pairs.append((key.lower(), value))
 
         # ``set parent=`` reparents the account-level association. Match real
-        # sacctmgr semantics (account_functions.c:715-748): a condition that
+        # sacctmgr semantics (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account): a condition that
         # matches no account, or a no-op change, prints "  Nothing modified"
         # to stdout but exits 1 — the branch returns SLURM_ERROR and
-        # _modify_it() sets the global exit_code (sacctmgr.c:982-984); a
+        # _modify_it() sets the global exit_code (slurm://src/sacctmgr/sacctmgr.c#_modify_it); a
         # missing parent account is its own error with exit 1; a real
         # change prints "Modified account associations...".
         parent_value = next((v for k, v in set_pairs if k == "parent"), None)
         if parent_value is not None:
             # Real sacctmgr strips quotes from the parent value (strip_quotes,
-            # association_functions.c:512) before resolving the account.
+            # slurm://src/sacctmgr/association_functions.c#sacctmgr_set_assoc_rec) before resolving the account.
             parent_value = parent_value.strip("\"'")
             # Parent is an account name — fold so a case-only "change" is
             # correctly seen as a no-op against the stored lower-cased parent.
@@ -742,7 +742,7 @@ class SacctmgrEmulator:
                     modifications.append(f"fairshare={value}")
                 elif base_key in {"qos", "qoslevel"}:
                     # Account QoS list with =/+=/-= operators. Real account modify
-                    # routes through QosLevel (association_functions.c:518,
+                    # routes through QosLevel (slurm://src/sacctmgr/association_functions.c#sacctmgr_set_assoc_rec,
                     # MAX(command_len, 1)), so the "qos" prefix and the canonical
                     # "QosLevel" both match. += / -= mutate the list in place so an
                     # operational QoS (e.g. the pause/downscale swap) can be layered
@@ -788,7 +788,7 @@ class SacctmgrEmulator:
                     modifications.append(f"GrpTRES={value}")
                 elif key.startswith("grpsubmit"):
                     # Scalar GrpSubmitJobs cap (blocks new job submission when 0).
-                    # Mirror real sacctmgr get_uint (common.c:1508-1528): an empty
+                    # Mirror real sacctmgr get_uint (slurm://src/sacctmgr/common.c#get_uint): an empty
                     # value parses as 0; a negative value clears the limit; a
                     # non-numeric value is a graceful error (exit 1), not a crash.
                     try:
@@ -1072,7 +1072,7 @@ class SacctmgrEmulator:
                     f"sacctmgr: error: slurmdb_format_tres_str: no TRES known by type {e}"
                 )
             except ValueError:
-                # qos_functions.c _set_rec: exit_code=1, " Bad RawUsage value: …"
+                # slurm://src/sacctmgr/qos_functions.c#_set_rec: exit_code=1, " Bad RawUsage value: …"
                 return self._fail(f" Bad RawUsage value: {value}")
 
         if raw_usage is not None:
@@ -1131,7 +1131,7 @@ class SacctmgrEmulator:
     # --- List/show rendering ---
 
     def _list_qos(self, args: list[str]) -> str:
-        """List QOS (real default format from qos_functions.c:1178-1193)."""
+        """List QOS (real default format from slurm://src/sacctmgr/qos_functions.c#sacctmgr_list_qos)."""
         fields = self._resolve(_QOS_DEFAULT, args)
 
         positional = [a for a in args if "=" not in a and a.lower() != "where"]
@@ -1159,7 +1159,7 @@ class SacctmgrEmulator:
         return render_table(fields, [_row(q) for q in qos_items], self._mode)
 
     def _list_clusters(self, args: list[str]) -> str:
-        """List clusters (real default format from cluster_functions.c:482-489)."""
+        """List clusters (real default format from slurm://src/sacctmgr/cluster_functions.c#sacctmgr_list_cluster)."""
         fields = self._resolve(_CLUSTER_DEFAULT, args)
 
         rows = []
@@ -1205,7 +1205,7 @@ class SacctmgrEmulator:
         return render_table(fields, rows, self._mode)
 
     def _list_associations(self, args: list[str]) -> str:
-        """List associations (real default from association_functions.c:793-801)."""
+        """List associations (real default from slurm://src/sacctmgr/association_functions.c#sacctmgr_list_assoc)."""
         fields = self._resolve(_ASSOC_DEFAULT, args)
 
         account_filter = None
@@ -1240,7 +1240,7 @@ class SacctmgrEmulator:
             "User": assoc.user,
             "Partition": assoc.partition or "",
             # parent_acct lives on the account-level row (empty User);
-            # user rows print blank (as_mysql_assoc.c:2116-2126).
+            # user rows print blank (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_cluster_get_assocs).
             "ParentName": (assoc.parent or "") if assoc.user == "" else "",
             "QOS": qos,
             "Def QOS": assoc.def_qos,
@@ -1268,7 +1268,7 @@ class SacctmgrEmulator:
     def _show_account(self, args: list[str]) -> str:
         """Show account command.
 
-        Mirrors ``sacctmgr show account`` (account_functions.c:436-572):
+        Mirrors ``sacctmgr show account`` (slurm://src/sacctmgr/account_functions.c#sacctmgr_list_account):
 
         - Without ``WithAssoc`` the account's associations are not loaded, so
           association fields such as ``ParentName`` print blank (the ``default:``

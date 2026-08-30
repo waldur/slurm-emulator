@@ -1,21 +1,21 @@
 """sacct command emulator for usage reporting.
 
-Output formatting and exit codes mirror real Slurm 26.11:
+Output formatting and exit codes mirror real Slurm 26.05:
 
 * default fields are ``JobID,JobName,Partition,Account,AllocCPUS,
-  State,ExitCode`` (src/sacct/sacct.h:66) with the widths from the
-  field table in src/sacct/sacct.c:43-169 (negative = left-aligned);
+  State,ExitCode`` (slurm://src/sacct/sacct.h#DEFAULT_FIELDS) with the widths from the
+  field table in slurm://src/sacct/sacct.c#fields (negative = left-aligned);
 * header + dashed underline, ``-p``/``-P``/``-n`` parsable/noheader
   modes, and ``value[:width-1]+'+'`` truncation come from the shared
   print_fields module (src/common/print_fields.c semantics);
 * ``Elapsed`` renders ``[D-]HH:MM:SS`` (``secs2time_str``,
-  src/common/parse_time.c:849-874);
+  slurm://src/common/parse_time.c#secs2time_str);
 * an invalid time spec prints ``Invalid time specification (pos=N):
-  <str>`` to stderr — no ``sacct:`` prefix, parse_time.c:626-631 — and
+  <str>`` to stderr — no ``sacct:`` prefix, slurm://src/common/parse_time.c#parse_time — and
   exits 1; an unknown format field prints ``sacct: error: Invalid field
-  requested: "X"`` and exits 1 (options.c:1215-1216);
+  requested: "X"`` and exits 1 (slurm://src/sacct/options.c#parse_command_line);
 * without ``-S``/``-E`` the window is Midnight → Now on the simulated
-  clock (slurmdb_job_cond_def_start_end, slurmdb_defs.c:350-395);
+  clock (slurmdb_job_cond_def_start_end, slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end);
 * one job row per usage record: numeric JobID from the database,
   standard TRES string (``cpu=...,mem=...G,node=1,billing=...``) in
   TRES-id order — the emulator-internal ``node-hours`` key is not
@@ -45,34 +45,34 @@ from emulator.commands.print_fields import (
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
 
-# Subset of the real field table (src/sacct/sacct.c:43-169), in table
-# order so prefix matching resolves like options.c:1204-1208 (first
+# Subset of the real field table (slurm://src/sacct/sacct.c#fields), in table
+# order so prefix matching resolves like slurm://src/sacct/options.c#parse_command_line (first
 # match wins, no minimum prefix length).
 _REGISTRY: list[FieldSpec] = [
-    FieldSpec("Account", 10),  # sacct.c:44
-    FieldSpec("AllocCPUS", 10, truncate=False),  # sacct.c:46
-    FieldSpec("AllocNodes", 10),  # sacct.c:47
-    FieldSpec("AllocTRES", 10),  # sacct.c:48
-    FieldSpec("Cluster", 10),  # sacct.c:58
-    FieldSpec("Elapsed", 10),  # sacct.c:69
-    FieldSpec("ElapsedRaw", 10, truncate=False),  # sacct.c:70
-    FieldSpec("End", 19),  # sacct.c:72
-    FieldSpec("ExitCode", 8),  # sacct.c:74
-    FieldSpec("JobID", -12),  # sacct.c:80
-    FieldSpec("JobIDRaw", -12),  # sacct.c:81
-    FieldSpec("JobName", 10),  # sacct.c:82
-    FieldSpec("NNodes", 8, truncate=False),  # sacct.c:105
-    FieldSpec("NodeList", 15),  # sacct.c:106
-    FieldSpec("Partition", 10),  # sacct.c:110
-    FieldSpec("ReqTRES", 10),  # sacct.c:126
-    FieldSpec("Start", 19),  # sacct.c:133
-    FieldSpec("State", 10),  # sacct.c:134
-    FieldSpec("Submit", 19),  # sacct.c:138
-    FieldSpec("Timelimit", 10),  # sacct.c:143
-    FieldSpec("User", 9),  # sacct.c:163
+    FieldSpec("Account", 10),
+    FieldSpec("AllocCPUS", 10, truncate=False),
+    FieldSpec("AllocNodes", 10),
+    FieldSpec("AllocTRES", 10),
+    FieldSpec("Cluster", 10),
+    FieldSpec("Elapsed", 10),
+    FieldSpec("ElapsedRaw", 10, truncate=False),
+    FieldSpec("End", 19),
+    FieldSpec("ExitCode", 8),
+    FieldSpec("JobID", -12),
+    FieldSpec("JobIDRaw", -12),
+    FieldSpec("JobName", 10),
+    FieldSpec("NNodes", 8, truncate=False),
+    FieldSpec("NodeList", 15),
+    FieldSpec("Partition", 10),
+    FieldSpec("ReqTRES", 10),
+    FieldSpec("Start", 19),
+    FieldSpec("State", 10),
+    FieldSpec("Submit", 19),
+    FieldSpec("Timelimit", 10),
+    FieldSpec("User", 9),
 ]
 
-_DEFAULT_FORMAT = "JobID,JobName,Partition,Account,AllocCPUS,State,ExitCode"  # sacct.h:66
+_DEFAULT_FORMAT = "JobID,JobName,Partition,Account,AllocCPUS,State,ExitCode"  # slurm://src/sacct/sacct.h#DEFAULT_FIELDS
 
 # Standard node config used by the usage simulator
 # (usage_simulator.py:156-165): fallback rates when a record carries no
@@ -118,7 +118,7 @@ class SacctEmulator:
         try:
             fields = resolve_format(parse_format_spec(config.format_spec), _REGISTRY)
         except UnknownFieldError as e:
-            # options.c:1215-1216 via error(): "sacct: error: ..." on stderr.
+            # slurm://src/sacct/options.c#parse_command_line via error(): "sacct: error: ..." on stderr.
             print(f'sacct: error: Invalid field requested: "{e.token}"', file=sys.stderr)
             self.exit_code = 1
             raise SystemExit(1) from None
@@ -239,7 +239,7 @@ class SacctEmulator:
 
         Supports the common parse_time() forms: ISO dates/datetimes,
         ``HH:MM[:SS]`` (today), ``now[{+|-}count[unit]]``, ``today``,
-        ``midnight``. Failure mirrors parse_time.c:626-631: the message
+        ``midnight``. Failure mirrors slurm://src/common/parse_time.c#parse_time: the message
         goes to stderr without a ``sacct:`` prefix and the process
         exits 1.
         """
@@ -320,7 +320,7 @@ class SacctEmulator:
             return records
 
         # Default window: Midnight -> Now on the simulated clock
-        # (slurmdb_job_cond_def_start_end, slurmdb_defs.c:371-394).
+        # (slurmdb_job_cond_def_start_end, slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end).
         now = self.time_engine.get_current_time()
         start = config.start_time or now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = config.end_time or now
@@ -388,7 +388,7 @@ class SacctEmulator:
 
 
 def _secs2time_str(secs: int) -> str:
-    """Port of secs2time_str (src/common/parse_time.c:849-874)."""
+    """Port of secs2time_str (slurm://src/common/parse_time.c#secs2time_str)."""
     if secs < 0:
         return "INVALID"
     days, rem = divmod(secs, 86400)

@@ -12,6 +12,18 @@ repos:
       - id: check-merge-conflict
       - id: end-of-file-fixer
 
+  - repo: local
+    hooks:
+      - id: check-slurm-refs
+        # Validates slurm://path#symbol references against the cached Slurm
+        # source (docs/slurm-parity.md). Without a cache it still rejects
+        # legacy file.c:123 refs and bad grammar; CI runs it with --strict.
+        name: check slurm:// source references
+        entry: uv run scripts/check_slurm_refs.py
+        language: system
+        pass_filenames: true
+        files: ^(emulator|tests|scripts|docs)/.*\.(py|md)$|^(README|CLAUDE|AGENTS|CHANGELOG)\.md$
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.12.2
     hooks:

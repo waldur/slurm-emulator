@@ -83,6 +83,10 @@ spec:
             - name: SLURM_EMULATOR_PARTITION_QOS
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.slurmVersion }}
+            - name: SLURM_EMULATOR_SLURM_VERSION
+              value: {{ . | quote }}
+            {{- end }}
             - name: SLURM_EMULATOR_JOB_CLOCK
               value: {{ .Values.jobs.clock | quote }}
             - name: SLURM_EMULATOR_JOB_RUN_DELAY

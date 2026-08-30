@@ -1,10 +1,10 @@
-"""Response envelope and error helpers mirroring slurmrestd v0.0.46.
+"""Response envelope and error helpers mirroring slurmrestd v0.0.45.
 
 Every JSON response carries the openapi_resp envelope — payload key
-first, then ``meta``/``errors``/``warnings`` (parsers.c:12898-12904).
+first, then ``meta``/``errors``/``warnings`` (slurm://src/plugins/data_parser/v0.0.45/parsers.c#OPENAPI_RESP@26.05+).
 Auth failures and unknown URLs are rejected with *plain-text* bodies
 and ``Connection: Close``, exactly like ``_operations_router_reject``
-(src/slurmrestd/operations.c:222).
+(slurm://src/slurmrestd/operations.c#_operations_router_reject).
 """
 
 from __future__ import annotations
@@ -14,10 +14,22 @@ from typing import Any, Optional
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-SLURM_RELEASE = "26.11.0"
-SLURM_VERSION = {"major": "26", "micro": "0", "minor": "11"}
-API_VERSION = "v0.0.46"
-DATA_PARSER = f"data_parser/{API_VERSION}"
+from emulator.slurm_version import current
+
+
+def api_version() -> str:
+    """data_parser version served by the active Slurm target (e.g. ``v0.0.45``)."""
+    return current().api_version
+
+
+def slurm_release() -> str:
+    """``meta.slurm.release`` of the active Slurm target (e.g. ``26.05.3``)."""
+    return current().release
+
+
+def data_parser() -> str:
+    return f"data_parser/{api_version()}"
+
 
 SLURMDBD_PLUGIN = ("openapi/slurmdbd", "Slurm OpenAPI slurmdbd")
 SLURMCTLD_PLUGIN = ("openapi/slurmctld", "Slurm OpenAPI slurmctld")
@@ -33,7 +45,7 @@ ESLURM_REST_UNKNOWN_URL_METHOD = 9007
 ESLURM_REST_AUTH_FAIL = 9008
 ESLURM_REST_BAD_REQUEST = 9009
 
-# slurm_strerror() texts (src/common/slurm_errno.c:1380-1397).
+# slurm_strerror() texts (slurm://src/common/slurm_errno.c#ESLURM_REST_INVALID_QUERY).
 _STRERROR = {
     ESLURM_INVALID_JOB_ID: "Invalid job id specified",
     ESLURM_REST_INVALID_QUERY: "Query empty or incorrect type",
@@ -51,7 +63,7 @@ _STRERROR = {
     ESLURM_REST_BAD_REQUEST: "Request failed to be processed",
 }
 
-# http_status_from_error() subset (src/slurmrestd/operations.c).
+# http_status_from_error() subset (slurm://src/slurmrestd/operations.c#http_status_from_error@25.11+).
 _HTTP_STATUS = {
     ESLURM_INVALID_JOB_ID: 404,
     ESLURM_REST_INVALID_QUERY: 400,
@@ -88,9 +100,10 @@ def validate_version(version: str) -> None:
     """Reject any URL version this build does not serve.
 
     Real slurmrestd never registers paths for unloaded data_parser
-    plugins, so e.g. ``/slurmdb/v0.0.45/...`` is an unknown URL.
+    plugins, so with a 26.05 target ``/slurmdb/v0.0.44/...`` is an
+    unknown URL (and vice versa for a 25.11 target).
     """
-    if version != API_VERSION:
+    if version != api_version():
         raise SlurmrestdRejectError(ESLURM_REST_UNKNOWN_URL)
 
 
@@ -102,14 +115,14 @@ def build_meta(request: Request, plugin: tuple[str, str], cluster: str) -> dict[
         "plugin": {
             "type": plugin[0],
             "name": plugin[1],
-            "data_parser": DATA_PARSER,
+            "data_parser": data_parser(),
             "accounting_storage": "accounting_storage/slurmdbd",
         },
         "client": {"source": source, "user": user, "group": user},
         "command": [],
         "slurm": {
-            "version": dict(SLURM_VERSION),
-            "release": SLURM_RELEASE,
+            "version": current().version_parts,
+            "release": slurm_release(),
             "cluster": cluster,
         },
     }
@@ -125,7 +138,7 @@ def slurm_error(description: str, error_number: int, source: str) -> dict[str, A
 
 
 def found_nothing_warning(function: str, request: Request) -> dict[str, Any]:
-    """Real empty-GET warning (plugins/openapi/slurmdbd/api.c:718-760)."""
+    """Real empty-GET warning (slurm://src/slurmrestd/plugins/openapi/slurmdbd/api.c#db_query_list_funcname)."""
     return {"description": f"{function} found nothing", "source": request.url.path}
 
 

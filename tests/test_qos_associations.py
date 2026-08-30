@@ -1,8 +1,8 @@
 """Tests for per-association QoS grants and account QoS-list mutation in sacctmgr.
 
-Validates emulator parity with real Slurm (/Users/ilja/workspace/slurm):
+Validates emulator parity with real Slurm (see docs/slurm-parity.md):
 
-- An association (slurmdb_assoc_rec_t, slurm/slurmdb.h:594) carries a
+- An association (slurmdb_assoc_rec_t, slurm://slurm/slurmdb.h#slurmdb_assoc_rec_t) carries a
   ``qos_list`` (QosLevel — the set a user may request) and ``def_qos_id``
   (DefaultQOS). ``sacctmgr add/modify user … QosLevel=… DefaultQOS=…`` sets
   them, per partition-scoped row.

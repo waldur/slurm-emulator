@@ -1,11 +1,11 @@
 """Tests for partition-aware user associations in sacctmgr.
 
 Validates emulator parity with real Slurm
-(/Users/ilja/workspace/slurm):
+(see docs/slurm-parity.md):
 
 - ``sacctmgr add user … Partitions=p1,p2`` creates one association
   per partition (see ``_add_assoc_cond_partition`` in
-  ``src/plugins/accounting_storage/mysql/as_mysql_assoc.c``).
+  ``slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c``).
 - ``Partition=`` (singular) reaches the same handler via real
   Slurm's xstrncasecmp prefix match.
 - ``DefaultPartition=`` is NOT a real ``sacctmgr add user`` option —
@@ -45,7 +45,7 @@ class TestAddUserPartitionParsing:
         rows = em.database.list_user_associations("alice", "acct1")
         partitions = sorted(r.partition for r in rows)
         assert partitions == ["zen3", "zen5"]
-        # No non-partition base row — matches as_mysql_assoc.c:2869-2875
+        # No non-partition base row — matches slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_add_assoc_cond_partition
         # where _add_assoc_cond_user_internal is bypassed when
         # partition_list is non-empty.
         assert em.database.get_association("alice", "acct1", partition=None) is None
@@ -104,7 +104,7 @@ class TestListAssociationsPartitionFormat:
         em.handle_command(["add", "user", "alice", "account=acct1", "Partitions=zen3"])
         out = em.handle_command(["list", "associations", "format=account,user,partitions"])
         assert "Unknown field 'partitions'" in out
-        # common.c:882-885: exit_code=1 when a format token is bogus.
+        # slurm://src/sacctmgr/common.c#"Unknown field": exit_code=1 when a format token is bogus.
         assert em.exit_code == 1
 
     def test_defaultpartition_format_rejected(self, tmp_path):
@@ -138,7 +138,7 @@ class TestShowAssociationPartitionFormat:
 
     def test_show_default_format_matches_real_sacctmgr(self, tmp_path):
         """Without format=, the real 20-field default applies
-        (association_functions.c:793-801): Cluster, Account, User,
+        (slurm://src/sacctmgr/association_functions.c#sacctmgr_list_assoc): Cluster, Account, User,
         Partition lead the row."""
         em = _emulator(tmp_path)
         em.handle_command(["add", "user", "alice", "account=acct1", "Partitions=zen3"])

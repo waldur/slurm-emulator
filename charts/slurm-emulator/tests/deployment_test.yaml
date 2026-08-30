@@ -85,6 +85,26 @@ tests:
             name: SLURM_EMULATOR_PARTITIONS
           any: true
 
+  - it: omits the Slurm version env var by default
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_SLURM_VERSION
+          any: true
+
+  - it: passes the Slurm version through when set
+    template: templates/deployment.yaml
+    set:
+      slurmVersion: "25.11"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_SLURM_VERSION
+            value: "25.11"
+
   - it: passes partition topology and QoS gates through
     template: templates/deployment.yaml
     set:

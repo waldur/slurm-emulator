@@ -1,6 +1,6 @@
 """slurmrestd authentication emulation (rest_auth/jwt semantics).
 
-Token sources match src/slurmrestd/plugins/auth/jwt/jwt.c:
+Token sources match slurm://src/slurmrestd/plugins/auth/jwt/jwt.c:
 ``X-SLURM-USER-TOKEN`` header or ``Authorization: Bearer``, with the
 optional ``X-SLURM-USER-NAME`` hint. By default any non-empty token is
 accepted; setting ``SLURM_EMULATOR_JWT_KEY`` switches on real HS256

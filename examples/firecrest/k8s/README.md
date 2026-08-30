@@ -18,7 +18,7 @@ FireCREST talks to a cluster over two planes, and the emulator serves both from 
 
 | Plane | Port | Used for | Chart default |
 |---|---|---|---|
-| slurmrestd (`v0.0.46`) | 6820 | submit / list / cancel jobs, accounting | **on** |
+| slurmrestd (`v0.0.45`) | 6820 | submit / list / cancel jobs, accounting | **on** |
 | SSH login node | 2222 | filesystem browse, upload, download, `get_job_metadata` | **off** — `ssh.enabled` |
 | Control API + dashboard | 8080 | not used by FireCREST | on, keep internal |
 
@@ -172,13 +172,13 @@ Fill in `waldur_api_url`, `waldur_api_token` and `waldur_offering_uuid` for your
 
 ### Two things to get right
 
-**`api_version` must be `v0.0.46`, with the `v`.** The SLURM plugin interpolates this value verbatim into `/slurmdb/{api_version}/...`, and its default is `v0.0.43`. The emulator serves `v0.0.46` only, so the default produces:
+**`api_version` must be `v0.0.45`, with the `v`.** The SLURM plugin interpolates this value verbatim into `/slurmdb/{api_version}/...`, and its default is `v0.0.43`. The emulator serves `v0.0.45` only, so the default produces:
 
 ```
 BackendError slurmrestd error (GET /slurm/v0.0.43/ping/): HTTP 404
 ```
 
-This is the **opposite convention from FireCREST**, which builds `/slurm/v{api_version}/` and therefore wants `0.0.46` with no prefix. The same cluster, two configs, two spellings — [`values-firecrest-api.yaml`](values-firecrest-api.yaml) and [`values-site-agent.yaml`](values-site-agent.yaml) each carry a comment saying so.
+This is the **opposite convention from FireCREST**, which builds `/slurm/v{api_version}/` and therefore wants `0.0.45` with no prefix. The same cluster, two configs, two spellings — [`values-firecrest-api.yaml`](values-firecrest-api.yaml) and [`values-site-agent.yaml`](values-site-agent.yaml) each carry a comment saying so.
 
 **`cluster_name` is required in rest mode**, because every REST association payload carries an explicit cluster. Omitting it fails at startup with `cluster_name is required when SLURM execution_mode is 'rest'`.
 
@@ -198,7 +198,7 @@ helm test cluster-emulator -n firecrest
 kubectl -n firecrest run f7t-probe --rm -it --restart=Never \
   --image=curlimages/curl:8.10.1 -- \
   curl -fsS -H 'X-SLURM-USER-TOKEN: any' \
-  http://cluster-emulator:6820/slurm/v0.0.46/ping/
+  http://cluster-emulator:6820/slurm/v0.0.45/ping/
 
 # The SSH plane is listening.
 kubectl -n firecrest run ssh-probe --rm -it --restart=Never \
@@ -253,11 +253,11 @@ screenshots.
 | Uploads succeed but the directory is always empty, and files vanish on restart | `file_systems[].path` is `/home` instead of `/data/fs/home` | Item 3 |
 | Clock and accounting reset by themselves | Persistence off, pod restarted | `--set persistence.enabled=true` |
 | Whole pod in `CrashLoopBackOff` after setting a non-root `securityContext` | The SSH host key must be readable by the runtime user; when asyncssh cannot read it the entrypoint's `wait -n` takes the healthy planes down too | Add a matching `fsGroup`, or drop the custom `securityContext` |
-| Job submit rejected with a schema error | `scheduler.api_version` is not `0.0.46` | The emulator serves one data_parser version; pin it |
+| Job submit rejected with a schema error | `scheduler.api_version` is not `0.0.45` | The emulator serves one data_parser version; pin it |
 | Two clusters show identical node lists | Both releases use the default topology | Give each its own `partitions` |
-| Site agent: `slurmrestd error (GET /slurm/v0.0.43/ping/): HTTP 404` | `rest_api.api_version` left at the plugin default | Set `v0.0.46`, with the `v` |
+| Site agent: `slurmrestd error (GET /slurm/v0.0.43/ping/): HTTP 404` | `rest_api.api_version` left at the plugin default | Set `v0.0.45`, with the `v` |
 | Site agent: `cluster_name is required when SLURM execution_mode is 'rest'` | Missing `backend_settings.cluster_name` | Set it to the emulator's cluster name |
-| FireCREST requests hit `/slurm/vv0.0.46/` | `api_version` given as `v0.0.46` on the FireCREST side | Drop the `v` — FireCREST prepends it |
+| FireCREST requests hit `/slurm/vv0.0.45/` | `api_version` given as `v0.0.45` on the FireCREST side | Drop the `v` — FireCREST prepends it |
 | FireCREST pod CrashLoopBackOff, `ValidationError: clusters.0.probing Field required` | Setting `clusters` replaces the chart's default list wholesale, so required fields must all be present | Keep the `probing` block — it is in the overlay for exactly this reason |
 | Editing the overlay does not change FireCREST's behaviour | The chart has no config checksum annotation, so a ConfigMap change alone leaves the pod running the old config | `kubectl rollout restart deploy/<release>-firecrest` |
 | Every request 500s with `first_name Input should be a valid string` | The IdP emits no `given_name` claim | Item 5 above |
@@ -273,7 +273,7 @@ published chart `slurm-emulator 0.9.2` and `firecrest-v2/firecrest-api 2.5.6` �
 deployed, not just rendered:
 
 - both values files install; the pod becomes Ready and `helm test` passes
-- `slurmrestd` answers `/slurm/v0.0.46/ping/` with an arbitrary token, and 401s
+- `slurmrestd` answers `/slurm/v0.0.45/ping/` with an arbitrary token, and 401s
   with none
 - setting `auth.jwtKey` makes *both* an RS256 Keycloak-shaped token and an opaque
   one 401 — clearing it restores 200

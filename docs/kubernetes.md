@@ -121,8 +121,8 @@ The slurmrestd plane needs its own port-forward and a token header:
 ```bash
 kubectl -n se port-forward svc/slurm-emulator 6820:6820 &
 
-curl -s -H 'X-SLURM-USER-TOKEN: any' http://localhost:6820/slurm/v0.0.46/ping/
-curl -s -H 'X-SLURM-USER-TOKEN: any' http://localhost:6820/slurmdb/v0.0.46/accounts
+curl -s -H 'X-SLURM-USER-TOKEN: any' http://localhost:6820/slurm/v0.0.45/ping/
+curl -s -H 'X-SLURM-USER-TOKEN: any' http://localhost:6820/slurmdb/v0.0.45/accounts
 ```
 
 (Stop the port-forwards with `kill %1 %2` when you're done.)
@@ -162,7 +162,7 @@ kubectl delete ns consumer
 
 ### Both planes share one state — with one caveat
 
-The control API, the slurmrestd emulation, the CLI commands (`sacct`, `sacctmgr`, `sinfo`, `sshare`), and the SSH plane all read and write the same JSON state and clock files, so an account created over `POST /api/accounts` shows up at `/slurmdb/v0.0.46/accounts` right away.
+The control API, the slurmrestd emulation, the CLI commands (`sacct`, `sacctmgr`, `sinfo`, `sshare`), and the SSH plane all read and write the same JSON state and clock files, so an account created over `POST /api/accounts` shows up at `/slurmdb/v0.0.45/accounts` right away.
 
 The reverse does not hold. They are separate processes, and only the slurmrestd app reloads state per request — the control API on 8080 loads it once at startup ([`emulator_server.py`](../emulator/api/emulator_server.py) `__init__`). So a write made over slurmrestd, `sacctmgr`, or the SSH plane is **not** reflected in `GET /api/status` or the dashboard until the pod restarts. An in-cluster integration test that creates an account over `/slurmdb` and then asserts on the control API will read stale data; drive both from the control API, or restart the Deployment between the write and the read.
 

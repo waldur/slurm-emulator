@@ -1325,7 +1325,7 @@ wheels = [
 
 [[package]]
 name = "slurm-emulator"
-version = "0.9.0"
+version = "0.9.3"
 source = { editable = "." }
 dependencies = [
     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -1348,6 +1348,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "types-python-dateutil" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
@@ -1373,6 +1374,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.1" },
+    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.0" },
     { name = "types-python-dateutil", marker = "extra == 'dev'" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
     { name = "types-requests", marker = "extra == 'dev'" },

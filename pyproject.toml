@@ -51,6 +51,7 @@ dev = [
     "types-requests",
     "types-PyYaml",
     "types-python-dateutil",
+    "tomli>=2.0; python_version < '3.11'",  # scripts/slurm_parity_config.py
 ]
 
 [project.scripts]
@@ -76,6 +77,18 @@ include = ["emulator"]
 
 [tool.hatch.build.targets.wheel]
 include = ["emulator"]
+
+[tool.slurm-parity]
+# Real Slurm source the emulator is traced against (see docs/slurm-parity.md).
+# `primary` is the release whose behaviour the emulator claims by default;
+# `versions` are every release a slurm:// reference is checked against unless
+# it carries an explicit @version suffix. "master" is the next release's
+# pre-release branch — tracked as an early warning for upstream changes.
+remote = "https://github.com/SchedMD/slurm.git"
+primary = "26.05"
+versions = ["master", "26.05", "25.11", "25.05", "24.11"]
+# Where scripts/check_slurm_refs.py looks for references and legacy line refs.
+scan_paths = ["emulator", "tests", "scripts", "docs", "README.md", "CLAUDE.md", "AGENTS.md", "CHANGELOG.md"]
 
 [tool.ruff]
 line-length = 100
@@ -155,6 +168,9 @@ classmethod-decorators = ["pydantic.validator", "pydantic.root_validator"]
 convention = "google"
 
 [tool.ruff.lint.extend-per-file-ignores]
+"scripts/*.py" = [
+  "INP001", # standalone scripts, not a package
+]
 "tests/**/*.py" = [
   "S101",   # we can (and MUST!) use 'assert' in test files.
   "ANN001", # annotations for fixtures are sometimes a pain for test files

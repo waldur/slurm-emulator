@@ -56,6 +56,42 @@ Run tests v3.13:
   extends: .test-base
   image: registry.hpc.ut.ee/mirror/library/python:3.13-bullseye
 
+Run tests as Slurm version:
+  # The emulator can be launched as any tracked Slurm release
+  # (SLURM_EMULATOR_SLURM_VERSION, docs/slurm-parity.md); the default job
+  # above runs as the primary (26.05). This matrix runs the whole suite as
+  # each other tracked version so version-gated behaviour and
+  # @pytest.mark.slurm_version expectations are exercised.
+  extends: .test-base
+  image: registry.hpc.ut.ee/mirror/library/python:3.12-bullseye
+  parallel:
+    matrix:
+      - SLURM_EMULATOR_SLURM_VERSION: ["24.11", "25.05", "25.11", "master"]
+
+Check Slurm source references:
+  # Every parity claim cites real Slurm source as slurm://path#symbol[@versions]
+  # (docs/slurm-parity.md). This job shallow-clones each tracked SchedMD branch
+  # ([tool.slurm-parity] in pyproject.toml) and fails if a cited file or symbol
+  # is missing in a version the reference claims to hold for.
+  extends: .uv-setup
+  stage: test
+  interruptible: true
+  rules:
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - when: on_success
+  variables:
+    SLURM_SRC_CACHE: "$CI_PROJECT_DIR/.slurm-src-cache"
+  cache:
+    key: slurm-src-cache
+    paths:
+      - .slurm-src-cache/
+  script:
+    - uv run scripts/slurm_src.py update --shallow
+    - uv run scripts/check_slurm_refs.py --strict --summary
+
 Lint Helm chart:
   image:
     name: "registry.hpc.ut.ee/mirror/alpine/helm:3.12.3"
