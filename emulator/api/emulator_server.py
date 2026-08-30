@@ -89,6 +89,9 @@ class UsageReportRequest(BaseModel):
     users: Optional[dict[str, dict[str, float]]] = None
     raw_tres_usage: Optional[dict[str, int]] = None
     cluster: Optional[str] = "default"
+    # Partition the usage ran in — selects the per-partition node power
+    # (SLURM_EMULATOR_PARTITION_POWER_W) when no explicit ``energy`` is given.
+    partition: Optional[str] = None
 
 
 class ClusterCreateRequest(BaseModel):
@@ -265,41 +268,54 @@ class EmulatorServer:
                 billing_period = request.billing_period
                 period = self._parse_billing_period(billing_period)
 
-                # Inject usage for each user
-                if request.users:
-                    for user, user_usage in request.users.items():
-                        for tres_type, usage_value in user_usage.items():
-                            # Convert to node-hours if needed
-                            if tres_type == "billing":
-                                node_hours = usage_value
-                            else:
-                                # Convert from raw TRES to billing units
-                                weight = self.usage_simulator.billing_weights.get(tres_type, 1.0)
-                                node_hours = usage_value * weight
+                when = datetime.fromisoformat(request.date.replace("Z", "+00:00"))
+                partition = request.partition
 
-                            self.usage_simulator.inject_usage(
-                                resource_id,
-                                user,
-                                node_hours,
-                                datetime.fromisoformat(request.date.replace("Z", "+00:00")),
-                                cluster=cluster,
-                            )
-                else:
-                    # Use aggregate usage data
-                    for tres_type, usage_value in request.usage.items():
+                def inject(user: str, tres_usage: dict[str, float]) -> None:
+                    # ``energy`` (joules) is not a billing input: it seeds the
+                    # ``energy`` TRES exactly so ``sreport -T energy`` reports
+                    # the figure the scenario expects. When given, the power
+                    # model is bypassed for every record of this report.
+                    usage = dict(tres_usage)
+                    energy = usage.pop("energy", None)
+                    seed = None if energy is None else int(energy)
+                    for tres_type, usage_value in usage.items():
                         if tres_type == "billing":
                             node_hours = usage_value
                         else:
+                            # Convert from raw TRES to billing units
                             weight = self.usage_simulator.billing_weights.get(tres_type, 1.0)
                             node_hours = usage_value * weight
-
                         self.usage_simulator.inject_usage(
                             resource_id,
-                            "aggregate_user",
+                            user,
                             node_hours,
-                            datetime.fromisoformat(request.date.replace("Z", "+00:00")),
+                            when,
                             cluster=cluster,
+                            partition=partition,
+                            energy_joules=seed,
                         )
+                        if seed is not None:
+                            seed = 0
+                    if seed is not None and seed > 0:
+                        # Energy-only report: a zero node-hour record carries it.
+                        self.usage_simulator.inject_usage(
+                            resource_id,
+                            user,
+                            0.0,
+                            when,
+                            cluster=cluster,
+                            partition=partition,
+                            energy_joules=seed,
+                        )
+
+                # Inject usage for each user
+                if request.users:
+                    for user, user_usage in request.users.items():
+                        inject(user, user_usage)
+                else:
+                    # Use aggregate usage data
+                    inject("aggregate_user", request.usage)
 
                 print(f"📊 Received usage report for {resource_id}")
                 print(f"   Period: {billing_period}")

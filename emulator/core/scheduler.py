@@ -28,6 +28,7 @@ import os
 from datetime import datetime, timedelta
 
 from emulator.core.database import SlurmDatabase, UsageRecord
+from emulator.core.energy import energy_joules
 from emulator.core.time_engine import TimeEngine
 
 
@@ -124,8 +125,11 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
             billing_units=node_hours,
             timestamp=sim_now,
             period=_period_for(sim_now),
-            raw_tres={},
+            # Submitted jobs carry no GRES, so only the node term of the
+            # power model applies (emulator/core/energy.py).
+            raw_tres={"energy": energy_joules(node_hours, 0, job.partition)},
             cluster=job.cluster,
+            partition=job.partition,
             job_id=jid,
             state="COMPLETED",
         )

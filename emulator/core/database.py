@@ -169,8 +169,12 @@ class UsageRecord:
     billing_units: float
     timestamp: datetime
     period: str
+    # ``raw_tres`` values are ``<count>-hours`` (CPU, Mem in GB, GRES/gpu)
+    # except ``energy``, which is consumed energy in joules — the unit the
+    # ``energy`` TRES has in real slurmdbd (slurm://src/common/slurmdb_defs.h#TRES_ENERGY).
     raw_tres: dict[str, int] = field(default_factory=dict)
     cluster: str = "default"
+    partition: str = "compute"
     # Numeric job id (real sacct JobIDs are numeric); assigned by the
     # database when None so direct construction stays backward compatible.
     job_id: Optional[int] = None
@@ -228,7 +232,8 @@ class SlurmDatabase:
         self.usage_records: list[UsageRecord] = []
         self.jobs: dict[str, Job] = {}
         self.qos_list: dict[str, QOS] = {}
-        self.tres_types = ["CPU", "Mem", "GRES/gpu", "billing"]
+        # ``energy`` sits at id 3 (slurm://src/common/slurmdb_defs.h#TRES_ENERGY).
+        self.tres_types = ["CPU", "Mem", "energy", "GRES/gpu", "billing"]
         self.state_file = Path(
             os.environ.get("SLURM_EMULATOR_STATE_FILE", "/tmp/slurm_emulator_db.json")
         )
@@ -841,4 +846,5 @@ class SlurmDatabase:
         data["timestamp"] = datetime.fromisoformat(data["timestamp"])
         data.setdefault("job_id", None)
         data.setdefault("state", "COMPLETED")
+        data.setdefault("partition", "compute")
         return UsageRecord(**data)

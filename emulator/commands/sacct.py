@@ -19,7 +19,16 @@ Output formatting and exit codes mirror real Slurm 26.05:
 * one job row per usage record: numeric JobID from the database,
   standard TRES string (``cpu=...,mem=...G,node=1,billing=...``) in
   TRES-id order — the emulator-internal ``node-hours`` key is not
-  exposed.
+  exposed;
+* ``ConsumedEnergyRaw`` is the job's ``energy`` TRES in joules
+  (``slurmdb_find_tres_count_in_string(job->tres_alloc_str, TRES_ENERGY)``,
+  slurm://src/sacct/print.c#PRINT_CONSUMED_ENERGY_RAW), ``ConsumedEnergy``
+  the same value through ``convert_num_unit2(…, 1000, …)`` — aggressive
+  K/M/G scaling, ``--noconvert`` keeps the raw number
+  (slurm://src/common/slurm_protocol_api.c#convert_num_unit2). The value is
+  ``raw_tres["energy"]`` from the power model (``emulator/core/energy.py``).
+  The ``energy`` TRES is deliberately *not* added to the ReqTRES/AllocTRES
+  string so the site-agent invocation shape stays byte-identical.
 
 Documented simplifications: ``-X``/``--allocations`` is a no-op (the
 emulator has no job steps, and real ``-X`` only filters step rows);
@@ -27,7 +36,6 @@ emulator has no job steps, and real ``-X`` only filters step rows);
 (``node001``, partition ``compute``, matching the sinfo emulator).
 """
 
-import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -42,6 +50,7 @@ from emulator.commands.print_fields import (
     render_table,
     resolve_format,
 )
+from emulator.commands.slurm_time import parse_time_spec
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
 
@@ -54,6 +63,8 @@ _REGISTRY: list[FieldSpec] = [
     FieldSpec("AllocNodes", 10),
     FieldSpec("AllocTRES", 10),
     FieldSpec("Cluster", 10),
+    FieldSpec("ConsumedEnergy", 14),
+    FieldSpec("ConsumedEnergyRaw", 17, truncate=False),
     FieldSpec("Elapsed", 10),
     FieldSpec("ElapsedRaw", 10, truncate=False),
     FieldSpec("End", 19),
@@ -252,47 +263,7 @@ class SacctEmulator:
 
     def _parse_time_inner(self, time_str: str) -> datetime:
         """Parse one time spec; raises ValueError on anything bogus."""
-        now = self.time_engine.get_current_time()
-        text = time_str.strip()
-        lowered = text.lower()
-
-        if lowered in {"today", "midnight"}:
-            return now.replace(hour=0, minute=0, second=0, microsecond=0)
-        if lowered.startswith("now"):
-            rest = lowered[3:]
-            if not rest:
-                return now
-            match = re.fullmatch(r"([+-])(\d+)([a-z]*)", rest)
-            if match is None:
-                raise ValueError(rest)
-            sign = 1 if match.group(1) == "+" else -1
-            count = int(match.group(2))
-            unit = match.group(3)
-            seconds_per = {
-                "": 60,  # bare count = minutes, like parse_time()
-                "seconds": 1,
-                "minutes": 60,
-                "hours": 3600,
-                "days": 86400,
-                "weeks": 604800,
-            }
-            for name, secs in seconds_per.items():
-                if name.startswith(unit) and (name or not unit):
-                    return now + timedelta(seconds=sign * count * secs)
-            raise ValueError(unit)
-        if "T" in text:
-            return datetime.fromisoformat(text)
-        if "-" in text:
-            try:
-                return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                return datetime.strptime(text, "%Y-%m-%d")
-        if ":" in text:
-            parts = [int(p) for p in text.split(":")]
-            hour, minute = parts[0], parts[1]
-            second = parts[2] if len(parts) > 2 else 0
-            return now.replace(hour=hour, minute=minute, second=second, microsecond=0)
-        raise ValueError(text)
+        return parse_time_spec(time_str, self.time_engine.get_current_time())
 
     def _get_filtered_records(self, config: _Config) -> list[UsageRecord]:
         """Get usage records based on filters."""
@@ -335,9 +306,13 @@ class SacctEmulator:
         tres = self._tres_string(record, config.noconvert)
         job_id = str(record.job_id)
 
+        energy = _energy_joules(record)
+
         return {
             "JobID": job_id,
             "JobIDRaw": job_id,
+            "ConsumedEnergy": str(energy) if config.noconvert else _convert_num_unit(energy),
+            "ConsumedEnergyRaw": str(energy),
             "JobName": f"job_{record.job_id}",
             "Partition": "compute",
             "Account": record.account,
@@ -385,6 +360,34 @@ class SacctEmulator:
         if gpus:
             parts.append(f"gres/gpu={gpus}")
         return ",".join(parts)
+
+
+def _energy_joules(record: UsageRecord) -> int:
+    for key, value in record.raw_tres.items():
+        if key.lower() == "energy":
+            return int(value)
+    return 0
+
+
+def _convert_num_unit(number: int, divisor: int = 1000) -> str:
+    """Port of slurm://src/common/slurm_protocol_api.c#convert_num_unit2 (no flags).
+
+    Scales aggressively while ``num >= divisor``; integral results print
+    without decimals, fractional ones with two.
+    """
+    if number == 0:
+        return "0"
+    units = "\0KMGTP?"
+    num = float(number)
+    order = 0
+    while num >= divisor:
+        num /= divisor
+        order += 1
+    unit = units[order] if order < len(units) else "?"
+    unit = "" if unit == "\0" else unit
+    if float(int(num)) == num:
+        return f"{int(num)}{unit}"
+    return f"{num:.2f}{unit}"
 
 
 def _secs2time_str(secs: int) -> str:

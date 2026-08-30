@@ -61,6 +61,7 @@ slurm-ssh-emulator = "emulator.api.ssh.server:main"
 sacctmgr = "emulator.commands.dispatcher:sacctmgr_main"
 sacct = "emulator.commands.dispatcher:sacct_main"
 sshare = "emulator.commands.dispatcher:sshare_main"
+sreport = "emulator.commands.dispatcher:sreport_main"
 sinfo = "emulator.commands.dispatcher:sinfo_main"
 scancel = "emulator.commands.dispatcher:scancel_main"
 
