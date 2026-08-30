@@ -44,10 +44,13 @@ def parse_time_spec(time_str: str, now: datetime) -> datetime:
     if "T" in text:
         return datetime.fromisoformat(text)
     if "-" in text:
-        try:
-            return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            return datetime.strptime(text, "%Y-%m-%d")
+        # Seconds are optional in _get_time (slurm://src/common/parse_time.c#_get_time).
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+        raise ValueError(text)
     if ":" in text:
         parts = [int(p) for p in text.split(":")]
         hour, minute = parts[0], parts[1]

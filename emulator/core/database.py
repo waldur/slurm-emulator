@@ -180,6 +180,15 @@ class UsageRecord:
     job_id: Optional[int] = None
     state: str = "COMPLETED"
 
+    def __post_init__(self) -> None:
+        """Fold the account name like Account/Association do.
+
+        Records are queried by the folded account name everywhere (sacct,
+        sshare, sreport, ``get_usage_records``), so a record injected under
+        ``MyProj`` must be stored as ``myproj``.
+        """
+        self.account = fold_account(self.account)
+
 
 @dataclass
 class Job:
@@ -232,8 +241,10 @@ class SlurmDatabase:
         self.usage_records: list[UsageRecord] = []
         self.jobs: dict[str, Job] = {}
         self.qos_list: dict[str, QOS] = {}
-        # ``energy`` sits at id 3 (slurm://src/common/slurmdb_defs.h#TRES_ENERGY).
-        self.tres_types = ["CPU", "Mem", "energy", "GRES/gpu", "billing"]
+        # Static TRES in id order (slurm://src/common/slurmdb_defs.h#TRES_ENERGY:
+        # cpu=1, mem=2, energy=3, node=4, billing=5) then dynamic ones (>= 1001);
+        # ids are derived in emulator/core/tres.py.
+        self.tres_types = ["CPU", "Mem", "energy", "node", "billing", "GRES/gpu"]
         self.state_file = Path(
             os.environ.get("SLURM_EMULATOR_STATE_FILE", "/tmp/slurm_emulator_db.json")
         )

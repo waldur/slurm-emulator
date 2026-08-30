@@ -546,3 +546,113 @@ class TestDispatcher:
             dispatcher.sreport_main()
         assert exc.value.code == 1
         assert "unrecognized arguments: --immediate" in capsys.readouterr().err
+
+
+class TestReviewFixes:
+    """Review regressions: getopt clustering, empty time specs, node TRES, case folding."""
+
+    def test_clustered_short_flags(self, env):
+        _, _, sim, sreport = env
+        _seed(sim)
+        base = ["cluster", "AccountUtilizationByUser", *JAN, "accounts=proj", "-t", "Seconds"]
+        split = sreport.handle_command([*base, "-n", "-P", "-T", "energy"])
+        assert sreport.handle_command([*base, "-nP", "-Tenergy"]) == split
+        assert sreport.handle_command([*base, "-nPTenergy"]) == split
+        assert sreport.handle_command([*base, "-Pn", "--tres", "energy"]) == split
+        assert sreport.exit_code == 0
+
+    def test_help_prints_usage_and_exits_zero(self, env, capsys):
+        _, _, _, sreport = env
+        with pytest.raises(SystemExit) as exc:
+            sreport.handle_command(["-h"])
+        assert exc.value.code == 0
+        assert capsys.readouterr().out.startswith("Usage: sreport")
+
+    def test_invalid_clustered_option(self, env, capsys):
+        _, _, _, sreport = env
+        with pytest.raises(SystemExit) as exc:
+            sreport.handle_command(["-nx", "cluster", "AccountUtilizationByUser"])
+        assert exc.value.code == 1
+        assert "invalid option -- 'x'" in capsys.readouterr().err
+
+    def test_empty_start_end_use_default_window(self, env):
+        _, _, _, sreport = env
+        default = sreport.handle_command(["cluster", "AccountUtilizationByUser"])
+        assert (
+            sreport.handle_command(["cluster", "AccountUtilizationByUser", "start=", "end="])
+            == default
+        )
+        assert sreport.exit_code == 0
+
+    def test_time_spec_without_seconds(self, env):
+        _, _, _, sreport = env
+        out = sreport.handle_command(
+            [
+                "cluster",
+                "AccountUtilizationByUser",
+                "start=2024-01-01 10:00",
+                "end=2024-01-01 12:00",
+            ]
+        )
+        assert "2024-01-01T10:00:00 - 2024-01-01T11:59:59 (7200 secs)" in out
+
+    def test_node_tres(self, env):
+        _, _, sim, sreport = env
+        sim.inject_usage("proj", "alice", 3.0, datetime(2024, 1, 5))
+        out = sreport.handle_command(
+            [
+                "cluster",
+                "AccountUtilizationByUser",
+                *JAN,
+                "-T",
+                "node",
+                "-t",
+                "Hours",
+                "-P",
+                "-n",
+                "users=alice",
+            ]
+        )
+        assert _rows(out) == [["default", "proj", "alice", "", "node", "3"]]
+        assert "node" in {
+            r[4]
+            for r in _rows(
+                sreport.handle_command(
+                    [
+                        "cluster",
+                        "AccountUtilizationByUser",
+                        *JAN,
+                        "-T",
+                        "ALL",
+                        "-P",
+                        "-n",
+                        "users=alice",
+                    ]
+                )
+            )
+        }
+
+    def test_node_with_percent_format_is_fatal(self, env, capsys):
+        _, _, _, sreport = env
+        with pytest.raises(SystemExit) as exc:
+            sreport.handle_command(
+                ["cluster", "AccountUtilizationByUser", "-T", "node", "-t", "Percent"]
+            )
+        assert exc.value.code == 1
+        assert capsys.readouterr().err.strip() == (
+            "sreport: fatal: TRES node usage is no longer reported in percent format reports.  "
+            "Please use TRES CPU instead."
+        )
+
+    def test_mixed_case_account_is_folded(self, env):
+        db, _, sim, sreport = env
+        db.add_account("MyProj", "Mixed", "org")
+        sim.inject_usage("MyProj", "alice", 1.0, datetime(2024, 1, 5), energy_joules=77)
+        args = ["cluster", "AccountUtilizationByUser", *JAN, "-T", "energy", "-t", "S", "-P", "-n"]
+        assert _rows(sreport.handle_command([*args, "accounts=MyProj"])) == [
+            ["default", "myproj", "", "", "energy", "77"],
+            ["default", "myproj", "alice", "", "energy", "77"],
+        ]
+        assert ["default", "myproj", "alice", "", "energy", "77"] in _rows(
+            sreport.handle_command(args)
+        )

@@ -243,7 +243,7 @@ class TestClusterFlagParsing:
         assert args == ["list", "accounts"]
 
     def test_sacct_still_supports_dash_m(self):
-        """sacct should support -M flag for cluster filtering."""
+        """Sacct should support -M flag for cluster filtering."""
         emulator = SlurmEmulator()
         emulator.database.add_cluster("test-cluster")
         # sacct with -M should work (no error about nonexistent cluster)
@@ -251,14 +251,14 @@ class TestClusterFlagParsing:
         assert "does not exist" not in output
 
     def test_sshare_supports_cluster_flag(self):
-        """sshare should support --cluster flag for cluster filtering."""
+        """Sshare should support --cluster flag for cluster filtering."""
         emulator = SlurmEmulator()
         emulator.database.add_cluster("test-cluster")
         output = emulator.execute_command("sshare", ["--cluster=test-cluster"])
         assert "does not exist" not in output
 
     def test_sacctmgr_ignores_dash_m(self):
-        """sacctmgr should NOT extract -M flag — it passes through as raw args."""
+        """Sacctmgr should NOT extract -M flag — it passes through as raw args."""
         emulator = SlurmEmulator()
         emulator.database.add_cluster("test-cluster")
         # -M is not extracted for sacctmgr, so it flows as args to sacctmgr handler
@@ -290,7 +290,8 @@ class TestClusterFlagParsing:
 
     def test_sshare_multi_cluster_emits_banner_per_cluster(self):
         """Real sshare (slurm://src/sshare/sshare.c#_multi_cluster) prints `CLUSTER: <name>`
-        before each cluster block in multi-cluster mode."""
+        before each cluster block in multi-cluster mode.
+        """
         emulator = SlurmEmulator()
         emulator.database.add_cluster("c1")
         emulator.database.add_cluster("c2")

@@ -70,7 +70,8 @@ class TestTresFormatting:
 
     def test_tres_string_standard_node_when_no_usage(self):
         """A zero-elapsed job still requested resources: the TRES string
-        falls back to the standard node config (64 CPU / 512G / 4 GPU)."""
+        falls back to the standard node config (64 CPU / 512G / 4 GPU).
+        """
         usage_record = UsageRecord(
             account="test_account",
             user="test_user",

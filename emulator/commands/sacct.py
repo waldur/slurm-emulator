@@ -314,7 +314,7 @@ class SacctEmulator:
             "ConsumedEnergy": str(energy) if config.noconvert else _convert_num_unit(energy),
             "ConsumedEnergyRaw": str(energy),
             "JobName": f"job_{record.job_id}",
-            "Partition": "compute",
+            "Partition": record.partition or "compute",
             "Account": record.account,
             "AllocCPUS": str(self._cpu_rate(record)),
             "AllocNodes": "1",
@@ -339,10 +339,21 @@ class SacctEmulator:
 
     @staticmethod
     def _rate(record: UsageRecord, key: str, default: int) -> int:
-        """Per-hour TRES rate: raw_tres values are <count>-hours totals."""
-        value = record.raw_tres.get(key)
-        if value is None or record.node_hours <= 0:
+        """Per-hour TRES rate: raw_tres values are <count>-hours totals.
+
+        The standard-node ``default`` applies only when the record carries
+        no breakdown for ``key`` (case-insensitive); a zero-node-hour record
+        with an explicit breakdown (an energy-only report) renders 0.
+        """
+        value = None
+        for raw_name, raw_value in record.raw_tres.items():
+            if raw_name.lower() == key.lower():
+                value = raw_value
+                break
+        if value is None:
             return default
+        if record.node_hours <= 0:
+            return 0
         return round(value / record.node_hours)
 
     def _tres_string(self, record: UsageRecord, noconvert: bool) -> str:

@@ -51,14 +51,19 @@ Behaviour mirrored from real Slurm 26.05 (same in every tracked version):
   account row carries the account's own plus its sub-accounts' usage
   and precedes its user rows.
 
-Intentional deviations: only ``cluster AccountUtilizationByUser`` is
-emulated (other real reports exit 1 with ``sreport: error: … is not
-emulated``); there is no interactive mode, so no arguments is an error;
-``Proper Name`` is always empty (no passwd database); a ``users=``
-filter drops the account total rows (real slurmdbd returns only the
-matching user associations); the cluster-wide total used by the
-percentage formats is the sum of all usage on the cluster in the
-window, not the cluster's capacity.
+Intentional deviations: only ``cluster AccountUtilizationByUser`` of the
+reports in slurm://src/sreport/sreport.c#_cluster_rep is emulated (the
+others exit 1 with ``sreport: error: … is not emulated``); there is no
+interactive mode (slurm://src/sreport/sreport.c#_get_command), so no
+arguments is an error; ``-h`` prints a one-line usage instead of
+slurm://src/sreport/sreport.c#_usage; ``-s`` is accepted and ignored;
+``Proper Name`` is always empty (no passwd database behind ``getpwnam``
+in slurm://src/sreport/cluster_reports.c#_cluster_account_by_user_tres_report);
+a ``users=`` filter drops the account total rows (the ``user_list``
+condition in slurm://src/sreport/cluster_reports.c#_set_assoc_cond
+returns only the matching user associations); the cluster-wide total
+used by the percentage formats is the sum of all usage on the cluster in
+the window, not the cluster's capacity.
 """
 
 from __future__ import annotations
@@ -192,7 +197,7 @@ class SreportEmulator:
 
         self._parse_conditions(positional[2:], cfg)
         start, end = self._window(cfg)
-        tres_list = self._build_tres_list(cfg.tres_spec)
+        tres_list = self._build_tres_list(cfg.tres_spec, cfg.time_format)
 
         spec = cfg.format_spec or (_DEFAULT_FORMAT_TRES if cfg.tres_spec else _DEFAULT_FORMAT_CPU)
         try:
@@ -221,43 +226,59 @@ class SreportEmulator:
     # --------------------------------------------------------------- parsing
 
     def _parse_options(self, args: list[str]) -> tuple[_Config, list[str]]:
-        """getopt_long("aM:hnpPQs:t:T:vV") with the long names from sreport.c."""
+        """getopt_long("aM:hnpPQs:t:T:vV") with the long names from sreport.c.
+
+        Short options cluster like getopt: ``-nP``, ``-an``, ``-nTenergy``
+        (a value option consumes the rest of the token or the next argument).
+        """
         cfg = _Config()
         positional: list[str] = []
-        value_opts = {
-            "-M": "cluster",
-            "--cluster": "cluster",
-            "-T": "tres",
-            "--tres": "tres",
-            "-t": "time",
-            "-s": "sort",
+        long_value = {"--cluster": "M", "--tres": "T"}
+        long_flag = {
+            "--all_clusters": "a",
+            "--noheader": "n",
+            "--parsable": "p",
+            "--parsable2": "P",
+            "--version": "V",
+            "--help": "h",
+            "--usage": "h",
+            "--quiet": "Q",
+            "--verbose": "v",
+            "--federation": "",
+            "--local": "",
         }
-        flag_opts = {
-            "-a": "all_clusters",
-            "--all_clusters": "all_clusters",
-            "-n": "noheader",
-            "--noheader": "noheader",
-            "-p": "parsable",
-            "--parsable": "parsable",
-            "-P": "parsable2",
-            "--parsable2": "parsable2",
-            "-V": "version",
-            "--version": "version",
-            "-Q": "noop",
-            "--quiet": "noop",
-            "-v": "noop",
-            "--verbose": "noop",
-            "--federation": "noop",
-            "--local": "noop",
-        }
+        value_shorts = "MTts"
+        flag_shorts = "ahnpPQvV"
 
-        def apply(key: str, value: str) -> None:
-            if key == "cluster":
+        def apply_flag(opt: str) -> None:
+            if opt == "a":
+                cfg.all_clusters = True
+            elif opt == "n":
+                cfg.mode.noheader = True
+            elif opt == "p":
+                cfg.mode.parsable = "p"
+            elif opt == "P":
+                cfg.mode.parsable = "P"
+            elif opt == "V":
+                cfg.version = True
+            elif opt == "h":
+                # Real _usage() prints the full option list; the emulator
+                # prints a one-line reminder of the emulated subset.
+                print(
+                    "Usage: sreport [-a] [-M cluster] [-n] [-p|-P] [-t FORMAT] [-T TRES] "
+                    "cluster AccountUtilizationByUser [start=…] [end=…] [accounts=…] [users=…]"
+                )
+                raise SystemExit(0)
+
+        def apply_value(opt: str, value: str) -> None:
+            if opt == "M":
                 cfg.clusters = [c for c in value.split(",") if c]
-            elif key == "tres":
+            elif opt == "T":
                 cfg.tres_spec = value
-            elif key == "time":
+            elif opt == "t":
                 self._set_time_format(cfg, value)
+            # "s" (sort) is accepted and ignored: rows are already in the
+            # hierarchical order sreport sorts into.
 
         i = 0
         while i < len(args):
@@ -265,44 +286,49 @@ class SreportEmulator:
             if arg == "--":
                 positional.extend(args[i + 1 :])
                 break
-            if arg in flag_opts:
-                action = flag_opts[arg]
-                if action == "all_clusters":
-                    cfg.all_clusters = True
-                elif action == "noheader":
-                    cfg.mode.noheader = True
-                elif action == "parsable":
-                    cfg.mode.parsable = "p"
-                elif action == "parsable2":
-                    cfg.mode.parsable = "P"
-                elif action == "version":
-                    cfg.version = True
-                i += 1
-                continue
-            if arg.startswith("--") and "=" in arg and arg.split("=", 1)[0] in value_opts:
-                name, value = arg.split("=", 1)
-                apply(value_opts[name], value)
-                i += 1
-                continue
-            if arg in value_opts:
-                if i + 1 >= len(args):
-                    self._error(f"sreport: option requires an argument -- '{arg.lstrip('-')}'")
-                    self._error('Try "sreport --help" for more information')
-                    raise SystemExit(1)
-                apply(value_opts[arg], args[i + 1])
-                i += 2
-                continue
-            if len(arg) > 2 and arg[:2] in value_opts and arg[1] != "-":
-                apply(value_opts[arg[:2]], arg[2:])
+            if arg.startswith("--"):
+                name, eq, value = arg.partition("=")
+                if name in long_value:
+                    if not eq:
+                        if i + 1 >= len(args):
+                            self._bad_option(f"option '{name}' requires an argument")
+                        value = args[i + 1]
+                        i += 1
+                    apply_value(long_value[name], value)
+                elif name in long_flag:
+                    apply_flag(long_flag[name])
+                else:
+                    self._bad_option(f"unrecognized option '{arg}'")
                 i += 1
                 continue
             if arg.startswith("-") and len(arg) > 1:
-                self._error(f"sreport: invalid option -- '{arg.lstrip('-')}'")
-                self._error('Try "sreport --help" for more information')
-                raise SystemExit(1)
+                j = 1
+                while j < len(arg):
+                    opt = arg[j]
+                    if opt in value_shorts:
+                        rest = arg[j + 1 :]
+                        if not rest:
+                            if i + 1 >= len(args):
+                                self._bad_option(f"option requires an argument -- '{opt}'")
+                            rest = args[i + 1]
+                            i += 1
+                        apply_value(opt, rest)
+                        break
+                    if opt in flag_shorts:
+                        apply_flag(opt)
+                        j += 1
+                        continue
+                    self._bad_option(f"invalid option -- '{opt}'")
+                i += 1
+                continue
             positional.append(arg)
             i += 1
         return cfg, positional
+
+    def _bad_option(self, message: str) -> None:
+        self._error(f"sreport: {message}")
+        self._error('Try "sreport --help" for more information')
+        raise SystemExit(1)
 
     def _set_time_format(self, cfg: _Config, value: str) -> None:
         for name, min_prefix, _label in _TIME_FORMATS:
@@ -333,11 +359,12 @@ class SreportEmulator:
             elif _prefix(key, "Clusters", 1):
                 cfg.clusters.extend(_csv(value))
             elif _prefix(key, "End", 1):
-                cfg.end = self._parse_time(value)
+                # parse_time("") is 0 = "nothing specified" -> default window.
+                cfg.end = self._parse_time(value) if value else None
             elif _prefix(key, "Format", 1):
                 cfg.format_spec = value
             elif _prefix(key, "Start", 1):
-                cfg.start = self._parse_time(value)
+                cfg.start = self._parse_time(value) if value else None
             else:
                 self._error(f" Unknown condition: {arg}\nUse keyword set to modify value")
                 self.exit_code = 1
@@ -366,7 +393,7 @@ class SreportEmulator:
             end = start + timedelta(hours=1)
         return start, end
 
-    def _build_tres_list(self, tres_spec: Optional[str]) -> list[str]:
+    def _build_tres_list(self, tres_spec: Optional[str], time_format: str) -> list[str]:
         """slurm://src/sreport/sreport.c#_build_tres_list — canonical names."""
         known = [_canonical(t) for t in self.database.tres_types]
         if tres_spec is None:
@@ -379,11 +406,19 @@ class SreportEmulator:
             canon = _canonical(tok)
             if canon in known and canon not in selected:
                 selected.append(canon)
+        if "node" in selected and time_format in (_PER_FORMATS | {"Percent"}):
+            self._fatal(
+                "TRES node usage is no longer reported in percent format reports.  "
+                "Please use TRES CPU instead."
+            )
         if not selected:
-            self._error("sreport: fatal: No valid TRES given")
-            self.exit_code = 1
-            raise SystemExit(1)
+            self._fatal("No valid TRES given")
         return selected
+
+    def _fatal(self, message: str) -> None:
+        self._error(f"sreport: fatal: {message}")
+        self.exit_code = 1
+        raise SystemExit(1)
 
     # ----------------------------------------------------------- aggregation
 

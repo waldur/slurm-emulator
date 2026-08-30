@@ -272,42 +272,29 @@ class EmulatorServer:
                 partition = request.partition
 
                 def inject(user: str, tres_usage: dict[str, float]) -> None:
-                    # ``energy`` (joules) is not a billing input: it seeds the
-                    # ``energy`` TRES exactly so ``sreport -T energy`` reports
-                    # the figure the scenario expects. When given, the power
-                    # model is bypassed for every record of this report.
+                    # One usage record per user and report: every TRES key
+                    # is converted to node-hours (billing 1:1, the rest via
+                    # billing_weights) and summed. ``energy`` (joules) is not a
+                    # billing input — it seeds the record's ``energy`` TRES
+                    # exactly; when absent the power model fills it in.
                     usage = dict(tres_usage)
                     energy = usage.pop("energy", None)
-                    seed = None if energy is None else int(energy)
+                    node_hours = 0.0
                     for tres_type, usage_value in usage.items():
                         if tres_type == "billing":
-                            node_hours = usage_value
+                            node_hours += usage_value
                         else:
-                            # Convert from raw TRES to billing units
                             weight = self.usage_simulator.billing_weights.get(tres_type, 1.0)
-                            node_hours = usage_value * weight
-                        self.usage_simulator.inject_usage(
-                            resource_id,
-                            user,
-                            node_hours,
-                            when,
-                            cluster=cluster,
-                            partition=partition,
-                            energy_joules=seed,
-                        )
-                        if seed is not None:
-                            seed = 0
-                    if seed is not None and seed > 0:
-                        # Energy-only report: a zero node-hour record carries it.
-                        self.usage_simulator.inject_usage(
-                            resource_id,
-                            user,
-                            0.0,
-                            when,
-                            cluster=cluster,
-                            partition=partition,
-                            energy_joules=seed,
-                        )
+                            node_hours += usage_value * weight
+                    self.usage_simulator.inject_usage(
+                        resource_id,
+                        user,
+                        node_hours,
+                        when,
+                        cluster=cluster,
+                        partition=partition,
+                        energy_joules=None if energy is None else int(energy),
+                    )
 
                 # Inject usage for each user
                 if request.users:

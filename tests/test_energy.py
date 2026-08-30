@@ -13,8 +13,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from emulator.api.emulator_server import EmulatorServer
+from emulator.api.slurmrestd.schemas import dbd_job_to_dict
 from emulator.commands.sacct import SacctEmulator, _convert_num_unit
+from emulator.commands.sacctmgr import SacctmgrEmulator
 from emulator.commands.sreport import SreportEmulator
+from emulator.commands.sshare import SshareEmulator
 from emulator.core import energy
 from emulator.core.database import Job, SlurmDatabase, UsageRecord
 from emulator.core.scheduler import _ensure_usage_record
@@ -26,6 +29,7 @@ from emulator.scenarios.scenario_registry import (
     ActionType,
     ScenarioRegistry,
 )
+from emulator.slurm_version import current
 
 NOW = datetime(2024, 3, 15, 12, 0, 0)
 
@@ -138,7 +142,10 @@ class TestUsageRecords:
         rec = db.usage_records[-1]
         assert rec.node_hours == 2.0
         assert rec.partition == "gpu"
-        assert rec.raw_tres["energy"] == 2 * 3600 * 500  # no GRES on submitted jobs
+        # Standard node (4 GPUs) like injected usage: 2 Nh at 500 W + 8 GPU-h at 300 W.
+        assert rec.raw_tres["energy"] == 2 * 3600 * 500 + 8 * 3600 * 300
+        assert rec.raw_tres["CPU"] == 128
+        assert rec.raw_tres["GRES/gpu"] == 8
 
 
 class TestSacctEnergyFields:
@@ -324,3 +331,91 @@ class TestScenario:
         for user, _nh, _part, joules in REGULAR_ACCESS_ENERGY_USERS:
             assert rows[user] == joules
         assert sum(v for k, v in rows.items() if k) == rows[""]
+
+
+class TestReviewFixes:
+    """Review regressions: one record per report, 0-Nh rows, TRES ids, sshare energy."""
+
+    @pytest.fixture
+    def server(self, state_env):
+        server = EmulatorServer()
+        server.time_engine.set_time(NOW)
+        server.database.add_account("proj", "Project", "org")
+        return server
+
+    def _post(self, server, **body):
+        payload = {
+            "resource_id": "proj",
+            "usage": {},
+            "billing_period": "2024-03",
+            "date": "2024-03-10T00:00:00",
+        }
+        payload.update(body)
+        resp = TestClient(server.app).post("/api/submit-report", json=payload)
+        assert resp.status_code == 200, resp.text
+        return server.database.usage_records
+
+    def test_multi_tres_report_is_one_record(self, server):
+        records = self._post(server, usage={"billing": 20, "GRES/gpu": 4})
+        assert len(records) == 1
+        assert records[0].node_hours == 21.0  # 20 + 4 GPU-hours * 0.25
+        assert records[0].raw_tres["energy"] == energy.energy_joules(21.0, gpu_hours=84)
+
+    def test_seed_is_independent_of_key_order(self, server):
+        a = self._post(server, usage={"GRES/gpu": 4, "billing": 20, "energy": 5000})[-1]
+        b = self._post(server, usage={"energy": 5000, "billing": 20, "GRES/gpu": 4})[-1]
+        assert a.raw_tres["energy"] == b.raw_tres["energy"] == 5000
+        assert a.node_hours == b.node_hours == 21.0
+
+    def test_energy_only_and_zero_energy(self, server):
+        records = self._post(
+            server, users={"carol": {"energy": 250}, "dave": {"billing": 1, "energy": 0}}
+        )
+        by_user = {r.user: r for r in records}
+        assert by_user["carol"].node_hours == 0.0
+        assert by_user["carol"].raw_tres["energy"] == 250
+        assert by_user["dave"].raw_tres["energy"] == 0
+        sacct = SacctEmulator(server.database, server.time_engine)
+        out = sacct.handle_command(
+            [
+                "--format=User,ReqTRES,Elapsed,ConsumedEnergyRaw",
+                "-n",
+                "-P",
+                "-S",
+                "2024-03-01",
+                "-u",
+                "carol",
+            ]
+        )
+        assert out == "carol|cpu=0,mem=0G,node=1,billing=0|00:00:00|250"
+
+    def test_partition_rendered_by_sacct_and_rest(self, server):
+        self._post(server, usage={"billing": 1}, partition="gpu")
+        sacct = SacctEmulator(server.database, server.time_engine)
+        assert sacct.handle_command(["--format=Partition", "-n", "-P", "-S", "2024-03-01"]) == "gpu"
+        assert dbd_job_to_dict(server.database.usage_records[0])["partition"] == "gpu"
+
+    def test_tres_ids_agree_between_sacctmgr_and_rest(self, env, restd, auth_headers):
+        db, te, _ = env
+        out = SacctmgrEmulator(db, te).handle_command(["show", "tres", "-P", "-n"])
+        cli = {
+            f"{t}/{n}" if n else t: int(i)
+            for t, n, i in (line.split("|") for line in out.splitlines())
+        }
+        assert cli == {"CPU": 1, "Mem": 2, "energy": 3, "node": 4, "billing": 5, "GRES/gpu": 1001}
+        resp = restd.get(f"/slurmdb/{current().api_version}/tres/", headers=auth_headers)
+        rest = {
+            f"{t['type']}/{t['name']}" if t["name"] else t["type"]: t["id"]
+            for t in resp.json()["TRES"]
+        }
+        assert rest == {k.lower(): v for k, v in cli.items()}
+
+    def test_sshare_energy_is_joules_over_sixty(self, env):
+        db, te, sim = env
+        sim.inject_usage("proj", "alice", 10.0, energy_joules=61_200_000)
+        db.add_association("alice", "proj")
+        out = SshareEmulator(db, te).handle_command(
+            ["--accounts=proj", "-o", "Account,GrpTRESRaw", "-P", "-n"]
+        )
+        values = dict(item.split("=") for item in out.splitlines()[0].split("|")[1].split(","))
+        assert values["energy"] == str(61_200_000 // 60)

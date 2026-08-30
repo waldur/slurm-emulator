@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- `sshare GrpTRESRaw` renders the `energy` TRES as joules/60 (it was hours×60,
+  3600× too large) — `usage_tres_raw[i] / 60` in slurm://src/sshare/process.c#process.
+- `sacctmgr show tres` and `GET /slurmdb/v0.0.4x/tres/` derive TRES ids from one
+  table (`emulator/core/tres.py`: static 1–8, dynamic from 1001); `node` is now
+  listed, so `sreport -T node` works and `-T node -t Percent` fails like real
+  sreport (slurm://src/sreport/sreport.c#_build_tres_list).
+- Usage records fold the account name like accounts/associations do, so usage
+  injected under `MyProj` shows up in `sreport`/`sacct`/`sshare`.
+- `sacct Partition` and slurmrestd `partition` render the record's partition.
+- `POST /api/submit-report` creates one usage record per user and report (all
+  TRES keys summed into node-hours), so an explicit `energy` lands on that
+  record regardless of key order and the power model is applied once; a
+  zero-node-hour (energy-only) record renders `cpu=0,…` rather than a full node.
+- Scheduler-completed jobs carry the standard-node TRES breakdown (incl. 4 GPUs)
+  so their energy matches injected usage of the same size.
+- `sreport` accepts clustered short flags (`-nP`, `-nTenergy`), `-h`, empty
+  `start=`/`end=` (default window, `parse_time("")` = 0) and
+  `YYYY-MM-DD HH:MM` (slurm://src/common/parse_time.c#_get_time).
+
 ### Added
 - `sreport cluster AccountUtilizationByUser` emulation as an aggregate usage
   source for portal energy reporting (`emulator/commands/sreport.py`,
