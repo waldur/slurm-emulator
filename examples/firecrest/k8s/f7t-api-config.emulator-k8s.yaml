@@ -28,12 +28,12 @@ clusters:
     scheduler:
       type: "slurm"
       connection_mode: "rest"
-      version: "26.11.0"
+      version: "26.05.3"
       api_url: "http://cluster-emulator.firecrest.svc.cluster.local:6820"
-      # Must stay 0.0.46 — it is the emulator's data_parser version, and the
+      # Must stay 0.0.45 — it is the emulator's data_parser version, and the
       # submit dialect (script inside the job body, environment as a list)
       # differs in other versions.
-      api_version: "0.0.46"
+      api_version: "0.0.45"
       timeout: 10
     service_account:
       client_id: "firecrest-cluster"
@@ -61,9 +61,9 @@ clusters:
     scheduler:
       type: "slurm"
       connection_mode: "rest"
-      version: "26.11.0"
+      version: "26.05.3"
       api_url: "http://cluster-emulator-2.firecrest.svc.cluster.local:6820"
-      api_version: "0.0.46"
+      api_version: "0.0.45"
       timeout: 10
     service_account:
       client_id: "firecrest-cluster"

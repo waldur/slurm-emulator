@@ -1,7 +1,7 @@
 """sshare command emulator.
 
-Models real Slurm's ``sshare`` (see ``src/sshare/sshare.c`` and
-``src/sshare/process.c``):
+Models real Slurm's ``sshare`` (see ``slurm://src/sshare/sshare.c`` and
+``slurm://src/sshare/process.c``):
 
 * one row per association: the parent account row aggregates child
   usage; each user under the account gets its own row;
@@ -55,7 +55,7 @@ _CANONICAL_TRES: tuple[str, ...] = (
 )
 
 
-# Widths copied from /Users/ilja/workspace/slurm/src/sshare/process.c:51-68.
+# Widths copied from slurm://src/sshare/process.c#fields.
 # Signed C-style widths: negative = left-aligned.
 _FIELDS: list[FieldSpec] = [
     FieldSpec("Account", -20),
@@ -111,7 +111,7 @@ class SshareEmulator:
         self.database = database
         self.time_engine = time_engine
         # 0 unless an error path ran; multi-cluster iteration sets 1 when
-        # any cluster fails (sshare.c:296-316).
+        # any cluster fails (slurm://src/sshare/sshare.c#_multi_cluster).
         self.exit_code = 0
 
     def handle_command(self, args: list[str]) -> str:
@@ -140,9 +140,9 @@ class SshareEmulator:
         """Resolve the requested cluster list like real sshare.
 
         Unknown names get a per-name stderr error
-        (slurmdb_defs.c:1511) and are skipped; if none of the requested
+        (slurm://src/common/slurmdb_defs.c#slurmdb_get_info_cluster) and are skipped; if none of the requested
         clusters exist, print_db_notok + fatal() end the process with
-        exit 1 (sshare.c:147-152, proc_args.c:1426-1430). A mix of
+        exit 1 (slurm://src/sshare/sshare.c#"case 'M'", slurm://src/common/proc_args.c#print_db_notok). A mix of
         valid and invalid names proceeds with the valid ones, exit 0.
         """
         if not cfg.clusters:
@@ -334,7 +334,7 @@ def _parse_format(value: str) -> list[tuple[str, Optional[int]]]:
 
 
 def _default_format(long_flag: bool, partition: bool) -> list[tuple[str, Optional[int]]]:
-    """Real-Slurm default (non-fair-tree path), process.c:138-164."""
+    """Real-Slurm default (non-fair-tree path), slurm://src/sshare/process.c#process."""
     base: list[str] = ["Account", "User"]
     if partition:
         base.append("Partition")
@@ -385,7 +385,7 @@ def _format_tres(values: dict[str, int]) -> str:
     """Stable comma-separated ``tres=value`` rendering.
 
     ``slurmdb_make_tres_string_from_arrays`` only drops entries whose
-    value is ``INFINITE64`` (``slurmdb_defs.c:3851``), so we keep zeros.
+    value is ``INFINITE64`` (``slurm://src/common/slurmdb_defs.c#slurmdb_make_tres_string_from_arrays``), so we keep zeros.
     """
     ordered = [f"{k}={values[k]}" for k in _CANONICAL_TRES if k in values]
     extras = [f"{k}={values[k]}" for k in sorted(values) if k not in _CANONICAL_TRES]

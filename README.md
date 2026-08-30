@@ -214,8 +214,8 @@ curl -X POST "http://localhost:8080/api/time/advance?months=3"
 
 ## SLURM REST API Emulation (slurmrestd)
 
-The emulator also serves the Slurm 26.11 REST API (`slurmrestd`,
-data parser `v0.0.46`) on port 6820, backed by the same state as the
+The emulator also serves the Slurm 26.05 REST API (`slurmrestd`,
+data parser `v0.0.45`) on port 6820, backed by the same state as the
 CLI commands and the control API:
 
 ```bash
@@ -225,18 +225,18 @@ uv run slurmrestd-emulator
 
 ### Endpoint families
 
-- `/slurmdb/v0.0.46/...` — accounting: `accounts`, `users`,
+- `/slurmdb/v0.0.45/...` — accounting: `accounts`, `users`,
   `associations`, `qos`, `tres`, `clusters`, `jobs` (one job per usage
   record, matching `sacct` output), `ping`, `diag`, `config`. Write
   support (POST/DELETE) covers everything Waldur drives via `sacctmgr`.
-- `/slurm/v0.0.46/...` — controller read paths: `jobs` (+ `DELETE
+- `/slurm/v0.0.45/...` — controller read paths: `jobs` (+ `DELETE
   /job/{job_id}` as the `scancel` equivalent), `nodes`, `partitions`
   (static topology matching `sinfo`), `shares`, `ping`, `diag`, `conf`;
   `reservations`/`licenses` are empty stubs.
 - `/openapi.json`, `/openapi`, `/openapi/v3` — generated self-description.
 
 Responses use the real envelope (`meta`/`errors`/`warnings`, payload
-keys and field names from the v0.0.46 data parser). Unsupported URL
+keys and field names from the v0.0.45 data parser). Unsupported URL
 versions (e.g. `v0.0.45`), unknown paths, and auth failures reject
 with slurmrestd's plain-text errors and exit statuses.
 
@@ -252,7 +252,7 @@ enforce real HS256 verification. Mint tokens via the control API
 curl -X POST http://localhost:8080/api/token \
   -H "Content-Type: application/json" -d '{"username": "alice"}'
 
-curl http://localhost:6820/slurmdb/v0.0.46/accounts/ \
+curl http://localhost:6820/slurmdb/v0.0.45/accounts/ \
   -H "X-SLURM-USER-TOKEN: <token>"
 ```
 
@@ -634,6 +634,25 @@ slurm-emulator/
 ```bash
 uv run pytest
 ```
+
+### Launching as a specific Slurm release
+
+```bash
+SLURM_EMULATOR_SLURM_VERSION=25.11 uv run slurmrestd-emulator   # serves /slurm/v0.0.44/, release 25.11.7
+SLURM_EMULATOR_SLURM_VERSION=24.11 uv run pytest                 # run the suite as 24.11
+```
+
+Tracked releases: `24.11`, `25.05`, `25.11`, `26.05` (default), `master`. The
+choice drives the slurmrestd URL prefix, `meta.slurm.release`, and the few
+response shapes that changed between releases (`emulator/slurm_version.py`).
+
+### Parity with real Slurm
+
+Every emulated behaviour cites SchedMD's source as `slurm://<path>#<symbol>[@versions]`
+and is checked against several Slurm releases (26.05 primary; 25.11, 25.05, 24.11 and
+`master`). `uv run scripts/slurm_src.py update` builds the local source cache,
+`uv run scripts/check_slurm_refs.py --summary` verifies the references. See
+[`docs/slurm-parity.md`](docs/slurm-parity.md).
 
 ### Releasing
 

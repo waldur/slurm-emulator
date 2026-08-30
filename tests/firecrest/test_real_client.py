@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from emulator.slurm_version import current
+
 from emulator.core.database import SlurmDatabase
 
 FIRECREST_SRC = os.environ.get("FIRECREST_SRC")
@@ -107,7 +109,7 @@ def emulator(tmp_path):
     )
     base = f"http://127.0.0.1:{port}"
     try:
-        _wait_ready(f"{base}/slurm/v0.0.46/ping/")
+        _wait_ready(f"{base}/slurm/{current().api_version}/ping/")
         yield base
     finally:
         proc.terminate()
@@ -128,7 +130,10 @@ def _wait_ready(url: str, timeout: float = 20.0) -> None:
 
 def _client(base: str) -> SlurmRestClient:
     return SlurmRestClient(
-        api_url=base, api_version="0.0.46", timeout=30, username_claim=USERNAME_CLAIM
+        api_url=base,
+        api_version=current().api_version.lstrip("v"),
+        timeout=30,
+        username_claim=USERNAME_CLAIM,
     )
 
 

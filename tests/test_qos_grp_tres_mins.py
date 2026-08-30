@@ -4,17 +4,17 @@ Consumer: ``waldur/waldur-site-agent!541`` (``apply_limits_to_qos``) issues
 ``modify qos <name> set GrpTRESMins=…``, ``show qos <name>
 format=Name,GrpTRESMins`` and ``modify qos <name> set RawUsage=0``.
 
-Parity references (real Slurm 26.11 source):
-- ``GrpTRESMins`` merge, not replace: qos_functions.c ``_set_rec`` →
+Parity references (real Slurm 26.05 source):
+- ``GrpTRESMins`` merge, not replace: slurm://src/sacctmgr/qos_functions.c#_set_rec →
   ``sacctmgr_set_tres_rec_field`` (client side, ``TRES_STR_FLAG_REPLACE``),
-  then accounting_storage_mysql.c ``mod_tres_str`` (new string first, old
+  then slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#mod_tres_str (new string first, old
   appended, ``TRES_STR_FLAG_REMOVE``): first occurrence wins, ``-1`` drops
   the TRES. Output sorted by TRES id (``TRES_STR_FLAG_SORT_ID``).
-- Unknown TRES name: slurmdb_defs.c ``slurmdb_format_tres_str`` →
+- Unknown TRES name: slurm://src/common/slurmdb_defs.c#slurmdb_format_tres_str →
   ``error("no TRES known by type %s")``, exit 1, nothing sent.
 - Any bad set-field aborts the whole modify before the RPC
   (``sacctmgr_modify_qos``: ``if (exit_code) return SLURM_ERROR``).
-- ``RawUsage`` is a QoS option (qos_functions.c ``_set_rec`` "RawUsage",
+- ``RawUsage`` is a QoS option (slurm://src/sacctmgr/qos_functions.c#_set_rec "RawUsage",
   ``get_double``; negative → INFINITE → rejected) but takes a separate path:
   ``sacctmgr_modify_qos`` short-circuits into ``sacctmgr_update_qos_usage``
   (common.c), which prints only "No cluster specified, resetting on local

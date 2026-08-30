@@ -4,6 +4,40 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- The emulator can be launched as any tracked Slurm release via
+  `SLURM_EMULATOR_SLURM_VERSION` (`24.11`, `25.05`, `25.11`, `26.05` default,
+  `master`; Helm value `slurmVersion`). The slurmrestd plane then serves that
+  release's data_parser prefix (`/slurm/v0.0.42/` … `/slurm/v0.0.46/`), reports
+  its release in `meta.slurm` and `/conf`, and renders the tables that changed
+  across releases in the matching dialect: `CONTROLLER_PING` (`pinged`/`mode`
+  through v0.0.44, `status` from v0.0.45), `SLURMDBD_PING` (`status` from
+  v0.0.45), `PARTITION_INFO` memory-per-CPU limits (dropped on master).
+  `tests/test_slurmrestd_dialects.py` covers every dialect; CI runs the full
+  suite once per tracked version.
+- Slurm source-parity tooling: `scripts/slurm_src.py` keeps a local cache of
+  https://github.com/SchedMD/slurm (bare clone + one worktree per tracked
+  version, `[tool.slurm-parity]` in `pyproject.toml`: 26.05 primary, plus
+  25.11, 25.05, 24.11 and `master`), and `scripts/check_slurm_refs.py` verifies
+  every `slurm://path#symbol[@versions]` reference against each version, in
+  pre-commit and CI. See `docs/slurm-parity.md`.
+- `emulator.slurm_version` (`SLURM_EMULATOR_SLURM_VERSION`) and the
+  `slurm_version` pytest marker for version-dependent parity behaviour.
+
+### Changed
+- slurmrestd emulation now claims Slurm 26.05 / data_parser `v0.0.45` (the current
+  stable release) instead of the unreleased 26.11 / `v0.0.46`: URL prefixes are
+  `/slurm/v0.0.45/` and `/slurmdb/v0.0.45/`, `meta.slurm.release` is `26.05.3`,
+  and the FireCREST examples set `api_version: 0.0.45`. The field tables the
+  emulator serves are identical between the two parser versions
+  (slurm://src/plugins/data_parser/v0.0.45/parsers.c@26.05+).
+- All real-Slurm source references in code, tests and docs migrated from
+  `file.c:<line>` to symbol-anchored `slurm://` references (line numbers had
+  already drifted); per-row line comments on the `sacctmgr`/`sacct` field
+  tables replaced by one table-level reference.
+
 ## [0.9.3] - 2026-08-28
 
 ### Added

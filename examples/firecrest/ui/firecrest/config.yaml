@@ -1,7 +1,7 @@
 # FireCREST v2 API config for the slurm-emulator UI stack.
 # Adapted from firecrest-v2's f7t-api-config.local-env.yaml: kept the Keycloak
 # auth block (realm kcrealm), reduced to a single cluster pointed at the
-# emulator (slurmrestd :6820 + SSH :22), and set api_version to 0.0.46 (what the
+# emulator (slurmrestd :6820 + SSH :22), and set api_version to 0.0.45 (what the
 # emulator serves). Hosts are docker service names on the compose network.
 apis_root_path: ""
 doc_servers:
@@ -48,9 +48,9 @@ clusters:
       # client unwired, so those two operations 501.
       type: "slurm"
       connection_mode: "hybrid"
-      version: "26.11.0"
+      version: "26.05.3"
       api_url: "http://slurm:6820"
-      api_version: "0.0.46"
+      api_version: "0.0.45"
       timeout: 10
     service_account:
       client_id: "firecrest-health-check"
@@ -98,9 +98,9 @@ clusters:
     scheduler:
       type: "slurm"
       connection_mode: "hybrid"
-      version: "26.11.0"
+      version: "26.05.3"
       api_url: "http://slurm2:6820"
-      api_version: "0.0.46"
+      api_version: "0.0.45"
       timeout: 10
     service_account:
       client_id: "firecrest-health-check"

@@ -1,16 +1,19 @@
 """Tests for per-association QoS grants over the slurmrestd REST plane.
 
-Validates emulator parity with real Slurm (/Users/ilja/workspace/slurm):
+Validates emulator parity with real Slurm (see docs/slurm-parity.md):
 
 - A user association (slurmdb_assoc_rec_t) carries its own ``qos_list`` and
-  ``def_qos_id``. Over data_parser v0.0.46 these are the ASSOC ``qos`` list
-  and ``default/qos`` fields (parsers.c:8780-8790). POST /associations/ for a
+  ``def_qos_id``. Over data_parser {V} these are the ASSOC ``qos`` list
+  and ``default/qos`` fields (slurm://src/plugins/data_parser/{V}/parsers.c#"default/qos"@26.05+). POST /associations/ for a
   user row now stores them on the association, and GET renders them from the
   association (falling back to the account QOS when the row has no grant).
 """
 
 from emulator.api.slurmrestd import schemas
 from emulator.core.database import Account, Association
+from emulator.slurm_version import current
+
+V = current().api_version
 
 
 class TestAssocToDictGrant:
@@ -34,14 +37,14 @@ class TestAssocToDictGrant:
 class TestAssocQosRestRoundTrip:
     def _create_account(self, restd, auth_headers, name="proj1"):
         restd.post(
-            "/slurmdb/v0.0.46/accounts/",
+            f"/slurmdb/{V}/accounts/",
             headers=auth_headers,
             json={"accounts": [{"name": name, "description": name, "organization": "org1"}]},
         )
 
     def _user_assoc(self, restd, auth_headers, user="alice", name="proj1"):
         assocs = restd.get(
-            "/slurmdb/v0.0.46/associations/",
+            f"/slurmdb/{V}/associations/",
             headers=auth_headers,
             params={"account": name, "user": user},
         ).json()["associations"]
@@ -50,7 +53,7 @@ class TestAssocQosRestRoundTrip:
     def test_user_assoc_qos_list_roundtrip(self, restd, auth_headers):
         self._create_account(restd, auth_headers)
         restd.post(
-            "/slurmdb/v0.0.46/associations/",
+            f"/slurmdb/{V}/associations/",
             headers=auth_headers,
             json={
                 "associations": [
@@ -70,7 +73,7 @@ class TestAssocQosRestRoundTrip:
     def test_user_assoc_partition_scoped_qos(self, restd, auth_headers):
         self._create_account(restd, auth_headers)
         restd.post(
-            "/slurmdb/v0.0.46/associations/",
+            f"/slurmdb/{V}/associations/",
             headers=auth_headers,
             json={
                 "associations": [
@@ -84,7 +87,7 @@ class TestAssocQosRestRoundTrip:
             },
         )
         assocs = restd.get(
-            "/slurmdb/v0.0.46/associations/",
+            f"/slurmdb/{V}/associations/",
             headers=auth_headers,
             params={"account": "proj1", "user": "alice", "partition": "gpu"},
         ).json()["associations"]

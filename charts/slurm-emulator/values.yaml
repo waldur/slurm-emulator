@@ -58,6 +58,14 @@ jobs:
 # Sets SLURM_EMULATOR_DEBUG=1.
 debug: false
 
+# Which Slurm release the emulator presents itself as
+# (SLURM_EMULATOR_SLURM_VERSION): one of the versions tracked in the repo's
+# pyproject [tool.slurm-parity] — "24.11", "25.05", "25.11", "26.05", "master".
+# Decides the slurmrestd URL prefix (/slurm/v0.0.4X/), meta.slurm.release and
+# the few response shapes that changed between releases. Empty keeps the
+# image default (the primary release, currently 26.05).
+slurmVersion: ""
+
 # Optional persistence. Off by default because the demo/sandbox use case is
 # ephemeral — without it, time travel and accounting reset on every restart.
 persistence:

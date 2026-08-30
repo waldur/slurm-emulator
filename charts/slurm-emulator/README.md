@@ -16,7 +16,7 @@ The pod runs `scripts/docker-entrypoint.sh`, which serves two HTTP planes from o
 | Port | Plane | Notes |
 |---|---|---|
 | 8080 | Waldur control API + web dashboard at `/ui/` | Dashboard behind HTTP Basic auth |
-| 6820 | slurmrestd emulation (Slurm 26.11, `v0.0.46`) | `X-SLURM-USER-TOKEN` required |
+| 6820 | slurmrestd emulation (Slurm 26.05, `v0.0.45`) | `X-SLURM-USER-TOKEN` required |
 | 2222 | SSH filesystem plane | Opt-in via `ssh.enabled` |
 
 The planes are separate processes sharing the same JSON state files, so an account created over the control API shows up in `/slurmdb` immediately. The reverse lags: only the slurmrestd app reloads state per request, while the control API reads it once at startup — see [`docs/kubernetes.md`](../../docs/kubernetes.md#both-planes-share-one-state--with-one-caveat).
@@ -37,6 +37,7 @@ The planes are separate processes sharing the same JSON state files, so an accou
 | `ssh.timeoutSeconds` | `30` | Per-command shell timeout. |
 | `ssh.hostKeySecret` | `""` | Secret with an `ssh_host_key` entry. Without it a new key is generated at every pod start. |
 | `partitions` | `""` | Cluster topology, e.g. `gpu:8,compute:32` or `debug:1-4,compute:5-100`. Empty keeps the image default (`debug:1-4,compute:5-100`). |
+| `slurmVersion` | `""` | Slurm release the emulator presents as (`24.11`, `25.05`, `25.11`, `26.05`, `master`): sets the slurmrestd URL prefix, `meta.slurm.release` and version-specific response shapes. Empty = image default (26.05). |
 | `partitionQos` | `""` | Per-partition QoS gates, e.g. `gpu=allow:normal,high;gpu=qos:normal`. |
 | `jobs.clock` | `wall` | `wall` (real time) or `time` (emulator clock) for submitted-job progression. |
 | `jobs.runDelaySeconds` / `jobs.runDurationSeconds` | `2` / `8` | PENDING → RUNNING → COMPLETED timings. |

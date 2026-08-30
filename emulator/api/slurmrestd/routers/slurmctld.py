@@ -1,4 +1,4 @@
-"""/slurm/v0.0.46 endpoints (openapi/slurmctld plugin emulation).
+"""/slurm/v0.0.45 endpoints (openapi/slurmctld plugin emulation).
 
 Read paths plus DELETE /job/{job_id} (the scancel equivalent).
 Nodes/partitions are served from the static topology in schemas.py —
@@ -20,6 +20,7 @@ from emulator.api.slurmrestd.envelope import (
     found_nothing_warning,
     make_response,
     slurm_error,
+    slurm_release,
     validate_version,
 )
 from emulator.api.slurmrestd.schemas import (
@@ -33,6 +34,7 @@ from emulator.api.slurmrestd.schemas import (
 from emulator.api.slurmrestd.state import StateDep
 from emulator.core.database import Job, SlurmDatabase
 from emulator.core.scheduler import advance_job_states, job_clock_now
+from emulator.slurm_version import at_least
 
 router = APIRouter(
     prefix="/slurm/{version}",
@@ -88,25 +90,34 @@ def _env_to_dict(value: object) -> dict[str, str]:
 # --- ping / diag / conf ---
 
 
+def controller_ping_entry() -> dict[str, Any]:
+    """One CONTROLLER_PING row in the active target's dialect.
+
+    - 24.11 to 25.11 (slurm://src/plugins/data_parser/v0.0.44/parsers.c#CONTROLLER_PING@25.11+):
+      ``hostname``, deprecated ``pinged`` ("UP") and ``mode`` ("primary"),
+      ``responding``, ``latency``, ``primary``.
+    - 26.05+ (slurm://src/plugins/data_parser/v0.0.45/parsers.c#CONTROLLER_PING@26.05+):
+      the deprecated aliases are gone and ``status`` (ERROR string) is added.
+    """
+    entry: dict[str, Any] = {"hostname": "localhost"}
+    if not at_least("26.05"):
+        entry["pinged"] = "UP"
+    entry["responding"] = True
+    entry["latency"] = 123
+    if not at_least("26.05"):
+        entry["mode"] = "primary"
+    entry["primary"] = "primary"
+    if at_least("26.05"):
+        entry["status"] = "No error"
+    return entry
+
+
 @router.get("/ping/")
 async def ping(
     request: Request,
     state: StateDep,
 ):
-    pings = [
-        {
-            "hostname": "localhost",
-            "responding": True,
-            # "pinged" is the deprecated alias real slurm emitted through
-            # data_parser v0.0.44 (dropped for "responding" in v0.0.46); kept
-            # so older-dialect clients still read a ping result.
-            "pinged": "UP",
-            "latency": 123,
-            "primary": "primary",
-            "status": "No error",
-        }
-    ]
-    return _respond(request, state, {"pings": pings})
+    return _respond(request, state, {"pings": [controller_ping_entry()]})
 
 
 @router.get("/diag/")
@@ -140,7 +151,7 @@ async def conf(
 ):
     config = {
         "cluster_name": state.cluster,
-        "slurm_version": "26.11.0",
+        "slurm_version": slurm_release(),
         "accounting_storage_type": "accounting_storage/slurmdbd",
         "scheduler_type": "sched/backfill",
         "select_type": "select/cons_tres",
@@ -166,9 +177,9 @@ async def submit_job(
     """Job submission endpoint (openapi_job_submit).
 
     Accepts ``{"job": {...}}`` with the batch ``script`` inside the job body
-    (data_parser >= 0.0.41, incl. v0.0.46) as well as the pre-0.0.41 sibling
+    (data_parser >= 0.0.41, incl. v0.0.45) as well as the pre-0.0.41 sibling
     ``script``. The response mirrors OPENAPI_JOB_SUBMIT_RESPONSE
-    (parsers.c:12959): top-level ``job_id`` / ``step_id`` /
+    (slurm://src/plugins/data_parser/v0.0.45/parsers.c#OPENAPI_JOB_SUBMIT_RESPONSE@26.05+): top-level ``job_id`` / ``step_id`` /
     ``job_submit_user_msg``.
     """
     body = await _json_body(request)

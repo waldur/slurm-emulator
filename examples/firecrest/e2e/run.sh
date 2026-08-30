@@ -44,7 +44,7 @@ trap cleanup EXIT
 echo ">> Waiting for the emulator slurmrestd to answer"
 for _ in $(seq 1 30); do
     if curl -fsS -H 'X-SLURM-USER-TOKEN: x' \
-        http://localhost:6820/slurm/v0.0.46/ping/ >/dev/null 2>&1; then
+        http://localhost:6820/slurm/v0.0.45/ping/ >/dev/null 2>&1; then
         echo "   slurmrestd is up"
         break
     fi
@@ -53,7 +53,7 @@ done
 
 echo ">> Emulator scheduler-plane smoke (direct)"
 curl -fsS -H 'X-SLURM-USER-TOKEN: x' -H 'Content-Type: application/json' \
-    -X POST http://localhost:6820/slurm/v0.0.46/job/submit \
+    -X POST http://localhost:6820/slurm/v0.0.45/job/submit \
     -d '{"job":{"name":"e2e","partition":"compute","current_working_directory":"/home/root","script":"#!/bin/bash\necho hi"}}'
 echo
 

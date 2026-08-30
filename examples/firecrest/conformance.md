@@ -36,7 +36,7 @@ Field-shape notes (verified by the contract test):
 - `job_state` is a list; `state.current` in accounting is a list.
 - `start_time`/`end_time`/`time_limit`/`priority` are `{set, infinite, number}` structs.
 - `job_resources.nodes.count` is present (FireCREST's `SlurmJob` reads it).
-- API version is `v0.0.46`; set FireCREST `scheduler.api_version: "0.0.46"` so the
+- API version is `v0.0.45`; set FireCREST `scheduler.api_version: "0.0.45"` so the
   request dialect matches (script inside the job body, `environment` as a list).
 
 ## SSH plane (filesystem + job metadata)

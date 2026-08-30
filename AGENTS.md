@@ -17,6 +17,12 @@ Site Agent tests.
 - Do not change package version or release metadata unless explicitly asked.
 - Preserve existing command-emulator behavior unless the task requires a
   compatibility fix.
+- Every behaviour claim about real Slurm (command output, exit codes, REST
+  field shapes) must cite SchedMD source as `slurm://<path>#<symbol>[@versions]`
+  in the code comment and in the covering test — never `file.c:<line>`, never a
+  local path. Verify with `uv run scripts/check_slurm_refs.py`; refresh the
+  cache with `uv run scripts/slurm_src.py update`. Tracked versions are in
+  `[tool.slurm-parity]` (`pyproject.toml`); see `docs/slurm-parity.md`.
 
 ## Common Commands
 
@@ -26,6 +32,8 @@ uv run pytest
 uv run --with ruff ruff format .
 uv run --with ruff ruff check emulator/ --fix
 uv run --with mypy mypy emulator/
+uv run scripts/slurm_src.py update          # refresh the real-Slurm source cache
+uv run scripts/check_slurm_refs.py --summary  # verify slurm:// references
 ```
 
 ## Command Emulators
@@ -34,7 +42,7 @@ uv run --with mypy mypy emulator/
 - `sacct` lives in `emulator/commands/sacct.py`.
 - Command dispatch and script entry points live in
   `emulator/commands/dispatcher.py`.
-- The slurmrestd REST API emulation (Slurm 26.11, v0.0.46, port 6820)
+- The slurmrestd REST API emulation (Slurm 26.05, v0.0.45, port 6820)
   lives in `emulator/api/slurmrestd/`; it must stay consistent with the
   command emulators (shared `SlurmDatabase`, sacct job math, sinfo
   topology).

@@ -1,6 +1,6 @@
-"""/slurmdb/v0.0.46 endpoints (openapi/slurmdbd plugin emulation).
+"""/slurmdb/v0.0.45 endpoints (openapi/slurmdbd plugin emulation).
 
-Endpoint set mirrors src/slurmrestd/plugins/openapi/slurmdbd/api.c.
+Endpoint set mirrors slurm://src/slurmrestd/plugins/openapi/slurmdbd/api.c.
 GET handlers never write state; POST/DELETE handlers call
 ``state.commit()`` once at the end, like the sacctmgr emulator.
 """
@@ -36,6 +36,7 @@ from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacct import _Config as SacctConfig
 from emulator.core.database import QOS, Association, fold_account
 from emulator.core.scheduler import advance_job_states
+from emulator.slurm_version import at_least
 
 router = APIRouter(
     prefix="/slurmdb/{version}",
@@ -81,7 +82,7 @@ def _limits_from_rec_set(rec_set: dict[str, Any]) -> dict[str, int]:
     """Map flat ASSOC_REC_SET TRES_STR fields onto emulator limit keys.
 
     ``association_condition.association`` carries sacctmgr-style flat
-    names with CSV TRES strings (ASSOC_REC_SET, parsers.c:8685-8732),
+    names with CSV TRES strings (ASSOC_REC_SET, slurm://src/plugins/data_parser/v0.0.45/parsers.c#ASSOC_REC_SET@26.05+),
     unlike the nested ``max`` subtree of plain ASSOC objects.
     """
     limits: dict[str, int] = {}
@@ -139,17 +140,18 @@ async def ping(
     request: Request,
     state: StateDep,
 ):
-    pings = [
-        {
-            "hostname": "localhost",
-            "responding": True,
-            "pinged": "UP",
-            "latency": 123,
-            "primary": "primary",
-            "status": "No error",
-        }
-    ]
-    return _respond(request, state, {"pings": pings})
+    # SLURMDBD_PING never had the deprecated aliases; ``status`` arrives with
+    # v0.0.45 (slurm://src/plugins/data_parser/v0.0.45/parsers.c#SLURMDBD_PING@26.05+,
+    # slurm://src/plugins/data_parser/v0.0.44/parsers.c#SLURMDBD_PING@25.11+).
+    entry: dict[str, Any] = {
+        "hostname": "localhost",
+        "responding": True,
+        "latency": 123,
+        "primary": "primary",
+    }
+    if at_least("26.05"):
+        entry["status"] = "No error"
+    return _respond(request, state, {"pings": [entry]})
 
 
 @router.get("/diag/")
@@ -423,7 +425,7 @@ async def post_accounts_association(
     """``sacctmgr add account`` equivalent.
 
     Real request shape (OPENAPI_ACCOUNTS_ADD_COND_RESP /
-    ACCOUNTS_ADD_COND, parsers.c:11038-11046 + 13090-13096):
+    ACCOUNTS_ADD_COND, slurm://src/plugins/data_parser/v0.0.45/parsers.c#ACCOUNTS_ADD_COND@26.05+):
     ``{"association_condition": {"accounts": [...], "clusters": [...],
     "association": {<ASSOC_REC_SET>}}, "account": {"description": ...,
     "organization": ...}}``. The legacy emulator-only
@@ -569,7 +571,7 @@ async def post_users_association(
     """``sacctmgr add user`` equivalent.
 
     Real request shape (OPENAPI_USERS_ADD_COND_RESP / USERS_ADD_COND,
-    parsers.c:11061-11069 + 13100-13108):
+    slurm://src/plugins/data_parser/v0.0.45/parsers.c#USERS_ADD_COND@26.05+):
     ``{"association_condition": {"users": [...], "accounts": [...],
     "clusters": [...], "partitions": [...], "association":
     {<ASSOC_REC_SET>}}, "user": {"default": {"account": ...},
@@ -634,7 +636,7 @@ async def post_users_association(
 
 
 def _limits_from_assoc_body(entry: dict[str, Any]) -> dict[str, int]:
-    """Map the v0.0.46 ``max`` subtree onto emulator limit keys."""
+    """Map the v0.0.45 ``max`` subtree onto emulator limit keys."""
     limits: dict[str, int] = {}
     max_tree = entry.get("max", {})
     tres_tree = max_tree.get("tres", {})
@@ -694,7 +696,7 @@ def _upsert_association(state: RequestState, entry: dict[str, Any]) -> bool:
         # parent/limits/qos/fairshare updates on the existing row.
         # ASSOC parser fields qos ("qos"), default qos ("default/qos") and
         # shares_raw are settable via POST /associations/ in real
-        # slurmrestd (parsers.c:8780-8790).
+        # slurmrestd (slurm://src/plugins/data_parser/v0.0.45/parsers.c#"default/qos"@26.05+).
         if entry.get("parent_account"):
             state.database.set_account_parent(account, entry["parent_account"], cluster=cluster)
         account_obj = state.database.get_account(account)
@@ -738,7 +740,7 @@ def _filter_associations(
 def _removed_assoc_string(assoc: Association) -> str:
     """Removal strings as printed by real slurmdbd.
 
-    Format from as_mysql_assoc.c:1404-1409.
+    Format from slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_process_modify_assoc_results.
     """
     if not assoc.user:
         return f"C = {assoc.cluster:<10} A = {assoc.account:<20}"

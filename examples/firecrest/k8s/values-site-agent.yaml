@@ -70,9 +70,9 @@ secret:
               # WITH the "v" prefix, and it must be set. The plugin interpolates
               # this verbatim into /slurmdb/{api_version}/..., and its default is
               # v0.0.43 — which the emulator answers with 404, since it serves
-              # v0.0.46 only. Note this is the opposite convention from
+              # v0.0.45 only. Note this is the opposite convention from
               # FireCREST, which prepends the "v" itself.
-              api_version: "v0.0.46"
+              api_version: "v0.0.45"
               username: "waldur-agent"
               token_env: "SLURM_JWT"
               timeout: 30

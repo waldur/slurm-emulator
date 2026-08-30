@@ -7,7 +7,7 @@
 #
 # Key points:
 #   scheduler.connection_mode: rest   -> job ops go over slurmrestd
-#   scheduler.api_version: "0.0.46"   -> matches the emulator's data_parser,
+#   scheduler.api_version: "0.0.45"   -> matches the emulator's data_parser,
 #                                        so the submit dialect lines up
 #                                        (script inside the job body, env as list)
 #   ssh.host: <emulator>              -> filesystem + get_job_metadata + submit-by-path
@@ -24,9 +24,9 @@ clusters:
     scheduler:
       type: "slurm"
       connection_mode: "rest"
-      version: "26.11.0"
+      version: "26.05.3"
       api_url: "http://slurm:6820"
-      api_version: "0.0.46"
+      api_version: "0.0.45"
       timeout: 10
     service_account:
       client_id: "firecrest-cluster"

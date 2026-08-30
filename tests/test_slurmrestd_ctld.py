@@ -3,6 +3,9 @@
 from datetime import datetime
 
 from emulator.core.database import Job, SlurmDatabase
+from emulator.slurm_version import current
+
+V = current().api_version
 
 
 def _seed_job(state="RUNNING"):
@@ -25,7 +28,7 @@ def _seed_job(state="RUNNING"):
 
 class TestNodesPartitions:
     def test_nodes_match_sinfo_topology(self, restd, auth_headers):
-        body = restd.get("/slurm/v0.0.46/nodes/", headers=auth_headers).json()
+        body = restd.get(f"/slurm/{V}/nodes/", headers=auth_headers).json()
         nodes = body["nodes"]
         assert len(nodes) == 100
         names = {n["name"] for n in nodes}
@@ -36,18 +39,16 @@ class TestNodesPartitions:
         assert body["last_update"]["set"] is True
 
     def test_single_node(self, restd, auth_headers):
-        node = restd.get("/slurm/v0.0.46/node/node007", headers=auth_headers).json()["nodes"][0]
+        node = restd.get(f"/slurm/{V}/node/node007", headers=auth_headers).json()["nodes"][0]
         assert node["partitions"] == ["compute"]
 
     def test_unknown_node_warns(self, restd, auth_headers):
-        body = restd.get("/slurm/v0.0.46/node/node999", headers=auth_headers).json()
+        body = restd.get(f"/slurm/{V}/node/node999", headers=auth_headers).json()
         assert body["nodes"] == []
         assert body["warnings"]
 
     def test_partitions(self, restd, auth_headers):
-        partitions = restd.get("/slurm/v0.0.46/partitions/", headers=auth_headers).json()[
-            "partitions"
-        ]
+        partitions = restd.get(f"/slurm/{V}/partitions/", headers=auth_headers).json()["partitions"]
         by_name = {p["name"]: p for p in partitions}
         assert set(by_name) == {"debug", "compute"}
         assert by_name["debug"]["nodes"]["total"] == 4
@@ -63,7 +64,7 @@ class TestCtldJobs:
         # RUNNING and this exercises serialization, not the lifecycle.
         monkeypatch.setenv("SLURM_EMULATOR_JOB_CLOCK", "time")
         _seed_job()
-        body = restd.get("/slurm/v0.0.46/jobs/", headers=auth_headers).json()
+        body = restd.get(f"/slurm/{V}/jobs/", headers=auth_headers).json()
         assert len(body["jobs"]) == 1
         job = body["jobs"][0]
         assert job["job_id"] == 42
@@ -74,11 +75,11 @@ class TestCtldJobs:
     def test_jobs_state(self, restd, auth_headers, state_env, monkeypatch):
         monkeypatch.setenv("SLURM_EMULATOR_JOB_CLOCK", "time")
         _seed_job()
-        jobs = restd.get("/slurm/v0.0.46/jobs/state/", headers=auth_headers).json()["jobs"]
+        jobs = restd.get(f"/slurm/{V}/jobs/state/", headers=auth_headers).json()["jobs"]
         assert jobs == [{"job_id": 42, "state": ["RUNNING"]}]
 
     def test_unknown_job_404_with_envelope(self, restd, auth_headers):
-        response = restd.get("/slurm/v0.0.46/job/9999", headers=auth_headers)
+        response = restd.get(f"/slurm/{V}/job/9999", headers=auth_headers)
         assert response.status_code == 404
         body = response.json()
         assert body["errors"][0]["error_number"] == 2017  # ESLURM_INVALID_JOB_ID
@@ -86,7 +87,7 @@ class TestCtldJobs:
 
     def test_cancel_job_persists(self, restd, auth_headers, state_env):
         _seed_job()
-        response = restd.delete("/slurm/v0.0.46/job/42", headers=auth_headers)
+        response = restd.delete(f"/slurm/{V}/job/42", headers=auth_headers)
         assert response.status_code == 200
         status = response.json()["status"][0]
         assert status["job_id"]["number"] == 42
@@ -99,28 +100,28 @@ class TestCtldJobs:
         assert job.end_time is not None
 
     def test_cancel_unknown_job(self, restd, auth_headers):
-        response = restd.delete("/slurm/v0.0.46/job/9999", headers=auth_headers)
+        response = restd.delete(f"/slurm/{V}/job/9999", headers=auth_headers)
         assert response.status_code == 404
         assert response.json()["errors"][0]["error_number"] == 2017
 
 
 class TestStubs:
     def test_reservations_empty(self, restd, auth_headers):
-        body = restd.get("/slurm/v0.0.46/reservations/", headers=auth_headers).json()
+        body = restd.get(f"/slurm/{V}/reservations/", headers=auth_headers).json()
         assert body["reservations"] == []
         assert "last_update" in body
 
     def test_licenses_empty(self, restd, auth_headers):
-        body = restd.get("/slurm/v0.0.46/licenses/", headers=auth_headers).json()
+        body = restd.get(f"/slurm/{V}/licenses/", headers=auth_headers).json()
         assert body["licenses"] == []
 
     def test_diag(self, restd, auth_headers):
-        statistics = restd.get("/slurm/v0.0.46/diag/", headers=auth_headers).json()["statistics"]
+        statistics = restd.get(f"/slurm/{V}/diag/", headers=auth_headers).json()["statistics"]
         assert statistics["server_thread_count"] == 1
 
     def test_conf(self, restd, auth_headers):
-        config = restd.get("/slurm/v0.0.46/conf", headers=auth_headers).json()["config"]
-        assert config["slurm_version"] == "26.11.0"
+        config = restd.get(f"/slurm/{V}/conf", headers=auth_headers).json()["config"]
+        assert config["slurm_version"] == current().release
         assert config["cluster_name"] == "default"
 
     def test_shares(self, restd, auth_headers, state_env):
@@ -130,7 +131,7 @@ class TestStubs:
         database.add_association("alice", "proj1")
         database.save_state()
 
-        shares = restd.get("/slurm/v0.0.46/shares", headers=auth_headers).json()["shares"]["shares"]
+        shares = restd.get(f"/slurm/{V}/shares", headers=auth_headers).json()["shares"]["shares"]
         names = {(s["name"], tuple(s["type"])) for s in shares}
         assert ("proj1", ("account",)) in names
         assert ("alice", ("user",)) in names

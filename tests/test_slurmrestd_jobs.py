@@ -4,6 +4,9 @@ from datetime import datetime
 
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
+from emulator.slurm_version import current
+
+V = current().api_version
 
 
 def _seed_records():
@@ -42,7 +45,7 @@ def _seed_records():
 class TestSlurmdbJobs:
     def test_one_job_per_usage_record(self, restd, auth_headers, state_env):
         _seed_records()
-        jobs = restd.get("/slurmdb/v0.0.46/jobs/", headers=auth_headers).json()["jobs"]
+        jobs = restd.get(f"/slurmdb/{V}/jobs/", headers=auth_headers).json()["jobs"]
         assert len(jobs) == 2
         assert {j["user"] for j in jobs} == {"alice", "bob"}
         assert all(j["account"] == "proj1" for j in jobs)
@@ -50,7 +53,7 @@ class TestSlurmdbJobs:
     def test_fields_match_sacct_math(self, restd, auth_headers, state_env):
         _seed_records()
         jobs = restd.get(
-            "/slurmdb/v0.0.46/jobs/", headers=auth_headers, params={"users": "alice"}
+            f"/slurmdb/{V}/jobs/", headers=auth_headers, params={"users": "alice"}
         ).json()["jobs"]
         job = jobs[0]
         # 2 node-hours → 7200s elapsed, ending at the record timestamp.
@@ -69,7 +72,7 @@ class TestSlurmdbJobs:
     def test_account_filter(self, restd, auth_headers, state_env):
         _seed_records()
         jobs = restd.get(
-            "/slurmdb/v0.0.46/jobs/", headers=auth_headers, params={"account": "other"}
+            f"/slurmdb/{V}/jobs/", headers=auth_headers, params={"account": "other"}
         ).json()
         assert jobs["jobs"] == []
         assert any("found nothing" in w["description"] for w in jobs["warnings"])
@@ -77,7 +80,7 @@ class TestSlurmdbJobs:
     def test_time_window_filter(self, restd, auth_headers, state_env):
         _seed_records()
         jobs = restd.get(
-            "/slurmdb/v0.0.46/jobs/",
+            f"/slurmdb/{V}/jobs/",
             headers=auth_headers,
             params={"start_time": "2024-03-15T12:30:00", "end_time": "2024-03-15T14:00:00"},
         ).json()["jobs"]
@@ -89,7 +92,7 @@ class TestSlurmdbJobs:
         start = int(datetime(2024, 3, 15, 0, 0, 0).timestamp())
         end = int(datetime(2024, 3, 16, 0, 0, 0).timestamp())
         jobs = restd.get(
-            "/slurmdb/v0.0.46/jobs/",
+            f"/slurmdb/{V}/jobs/",
             headers=auth_headers,
             params={"start_time": str(start), "end_time": str(end)},
         ).json()["jobs"]
@@ -98,7 +101,7 @@ class TestSlurmdbJobs:
     def test_bad_time_spec(self, restd, auth_headers, state_env):
         _seed_records()
         response = restd.get(
-            "/slurmdb/v0.0.46/jobs/", headers=auth_headers, params={"start_time": "bogus"}
+            f"/slurmdb/{V}/jobs/", headers=auth_headers, params={"start_time": "bogus"}
         )
         assert response.status_code == 400
         assert response.json()["errors"][0]["error_number"] == 9000
@@ -106,6 +109,6 @@ class TestSlurmdbJobs:
     def test_single_job_lookup(self, restd, auth_headers, state_env):
         database = _seed_records()
         job_id = database.usage_records[0].job_id
-        jobs = restd.get(f"/slurmdb/v0.0.46/job/{job_id}", headers=auth_headers).json()["jobs"]
+        jobs = restd.get(f"/slurmdb/{V}/job/{job_id}", headers=auth_headers).json()["jobs"]
         assert len(jobs) == 1
         assert jobs[0]["job_id"] == job_id

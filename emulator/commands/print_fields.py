@@ -1,12 +1,12 @@
 """Shared fixed-width/parsable field rendering for command emulators.
 
-Mirrors real Slurm's ``src/common/print_fields.c``:
+Mirrors real Slurm's ``slurm://src/common/print_fields.c``:
 
 * default mode prints a header row plus a dash row, each column padded
   with ``printf("%*.*s ", len, abs_len, value)`` semantics — note the
   trailing space after *every* column, including the last one;
 * string cells longer than the column are truncated to
-  ``value[:width-1] + "+"`` (``print_fields.c:147-160``); numeric cells
+  ``value[:width-1] + "+"`` (``slurm://src/common/print_fields.c#print_fields_str``); numeric cells
   are never truncated, they overflow the column like ``printf`` min
   widths do;
 * ``-p``/``--parsable`` joins cells with ``|`` and keeps a trailing
