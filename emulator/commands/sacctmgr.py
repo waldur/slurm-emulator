@@ -45,6 +45,7 @@ from emulator.core.database import (
     fold_account,
 )
 from emulator.core.time_engine import TimeEngine
+from emulator.core.tres import STATIC_TRES_IDS, tres_id
 
 # Field registry mirroring the prefix-match chain in
 # slurm://src/sacctmgr/common.c#_get_print_field. Order matters: tokens resolve to the
@@ -166,19 +167,8 @@ def _split_list_operator(key: str) -> tuple[str, str]:
     return key, ""
 
 
-# Static TRES ids (slurm/slurmdb.h ``tres_types_t``): cpu=1, mem=2, energy=3,
-# node=4, billing=5, fs/disk=6, vmem=7, pages=8. Dynamic TRES (gres/*,
-# license/*, …) get ids >= 1001 in creation order.
-_STATIC_TRES_IDS = {
-    "cpu": 1,
-    "mem": 2,
-    "energy": 3,
-    "node": 4,
-    "billing": 5,
-    "fs/disk": 6,
-    "vmem": 7,
-    "pages": 8,
-}
+# TRES ids live in emulator/core/tres.py (shared with slurmrestd).
+_STATIC_TRES_IDS = STATIC_TRES_IDS
 
 
 class UnknownTresError(ValueError):
@@ -1253,16 +1243,22 @@ class SacctmgrEmulator:
         }
 
     def _list_tres(self, args: list[str]) -> str:
-        """List TRES types (real default ``Type,Name%15,ID``)."""
+        """List TRES types (real default ``Type,Name%15,ID``); ids from core/tres.py."""
         fields = self._resolve(_TRES_DEFAULT, args)
 
         rows = []
-        for idx, tres_type in enumerate(self.database.tres_types, start=1):
+        for tres_type in self.database.tres_types:
             if "/" in tres_type:
                 type_part, name_part = tres_type.split("/", 1)
             else:
                 type_part, name_part = tres_type, ""
-            rows.append({"Type": type_part, "Name": name_part, "ID": str(idx)})
+            rows.append(
+                {
+                    "Type": type_part,
+                    "Name": name_part,
+                    "ID": str(tres_id(tres_type, self.database.tres_types)),
+                }
+            )
         return render_table(fields, rows, self._mode)
 
     def _show_account(self, args: list[str]) -> str:

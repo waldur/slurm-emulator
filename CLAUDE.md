@@ -69,7 +69,7 @@ Use these commands:
 - **slurmrestd API**: `uv run slurmrestd-emulator` (Slurm 26.05 REST API v0.0.45 on port 6820)
 - **SSH filesystem plane**: `uv run --extra ssh slurm-ssh-emulator` (asyncssh server on port 2222;
   filesystem ops + Slurm CLI dispatch; for running FireCREST v2 against the emulator)
-- **Direct commands**: `uv run sacctmgr`, `uv run sacct`, `uv run sinfo`
+- **Direct commands**: `uv run sacctmgr`, `uv run sacct`, `uv run sshare`, `uv run sreport`, `uv run sinfo`
 
 ### Helm Chart
 
@@ -235,6 +235,8 @@ This approach ensures code quality while keeping development velocity for an emu
 
 - **sacctmgr** (`emulator/commands/sacctmgr.py`) - Account management
 - **sacct** (`emulator/commands/sacct.py`) - Usage reporting
+- **sreport** (`emulator/commands/sreport.py`) - `cluster AccountUtilizationByUser` aggregates
+  (incl. `-T energy`; see README "Energy accounting and sreport")
 - **sinfo** - Cluster information
 - **scancel** - Job cancellation
 
@@ -403,6 +405,9 @@ so they also appear in the accounting (`/slurmdb` / `sacct`) view. Configurable 
 - `SLURM_EMULATOR_JOB_CLOCK` = `wall` (default, real-time) or `time` (simulated clock)
 - `SLURM_EMULATOR_JOB_RUN_DELAY` (default 2s to RUNNING), `SLURM_EMULATOR_JOB_RUN_DURATION`
   (default 8s to COMPLETED)
+- `SLURM_EMULATOR_NODE_POWER_W` (500), `SLURM_EMULATOR_PARTITION_POWER_W` (`gpu=900,...`),
+  `SLURM_EMULATOR_GPU_POWER_W` (300) = power model behind the `energy` TRES
+  (`emulator/core/energy.py`); joules = node_hours×3600×W (+ GPU-hours×3600×W)
 
 ### Running FireCREST v2 against the emulator
 The emulator can stand in for a real cluster for eth-cscs/firecrest-v2 (scheduler

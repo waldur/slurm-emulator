@@ -8,6 +8,7 @@ from emulator import __version__
 from emulator.api.slurmrestd.schemas import PARTITION_RANGES
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacctmgr import SacctmgrEmulator
+from emulator.commands.sreport import SreportEmulator
 from emulator.commands.sshare import SshareEmulator
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
@@ -22,6 +23,7 @@ class SlurmEmulator:
         self.sacctmgr = SacctmgrEmulator(self.database, self.time_engine)
         self.sacct = SacctEmulator(self.database, self.time_engine)
         self.sshare = SshareEmulator(self.database, self.time_engine)
+        self.sreport = SreportEmulator(self.database, self.time_engine)
 
         # Load existing state
         self.database.load_state()
@@ -31,6 +33,7 @@ class SlurmEmulator:
         "sacctmgr": {"--parsable", "--parsable2", "--noheader", "--immediate"},
         "sacct": {"--parsable", "--parsable2", "--noheader"},
         "sshare": {"--parsable", "--parsable2", "--noheader"},
+        "sreport": {"--parsable", "--parsable2", "--noheader"},
         "scancel": set(),
         "id": set(),
         "sinfo": {"-V"},
@@ -96,6 +99,8 @@ class SlurmEmulator:
                 return self.sacct.handle_command(args)
             if command_name == "sshare":
                 return self.sshare.handle_command(args)
+            if command_name == "sreport":
+                return self.sreport.handle_command(args)
             if command_name == "sinfo":
                 return self._handle_sinfo(args)
             if command_name == "scancel":
@@ -263,6 +268,30 @@ def sshare_main():
     sys.exit(emulator.sshare.exit_code)
 
 
+def sreport_main():
+    """Entry point for sreport command."""
+    emulator = get_emulator()
+    args = sys.argv[1:]
+
+    try:
+        emulator.validate_flags("sreport", args)
+    except SystemExit as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+    # sreport honours -n/-p/-P internally (real-sreport parity).
+    try:
+        output = emulator.execute_command("sreport", args)
+        if output:
+            print(output)
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"sreport: error: {e}", file=sys.stderr)
+        sys.exit(1)
+    sys.exit(emulator.sreport.exit_code)
+
+
 def sinfo_main():
     """Entry point for sinfo command."""
     emulator = get_emulator()
@@ -306,6 +335,8 @@ if __name__ == "__main__":
         sacct_main()
     elif command_name == "sshare":
         sshare_main()
+    elif command_name == "sreport":
+        sreport_main()
     elif command_name == "sinfo":
         sinfo_main()
     elif command_name == "scancel":

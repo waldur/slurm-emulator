@@ -355,7 +355,11 @@ def _run_scenario_headless(server: EmulatorServer, scenario: ScenarioDefinition)
                     server.time_engine.advance_time(**{unit: params["amount"]})
             elif action.type == ActionType.USAGE_INJECT:
                 server.usage_simulator.inject_usage(
-                    params.get("account", "default_account"), params["user"], params["amount"]
+                    params.get("account", "default_account"),
+                    params["user"],
+                    params["amount"],
+                    partition=params.get("partition"),
+                    energy_joules=params.get("energy"),
                 )
             elif action.type == ActionType.ACCOUNT_CREATE:
                 name = params["name"]

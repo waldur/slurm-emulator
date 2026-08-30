@@ -139,7 +139,8 @@ class TestShowAssociationPartitionFormat:
     def test_show_default_format_matches_real_sacctmgr(self, tmp_path):
         """Without format=, the real 20-field default applies
         (slurm://src/sacctmgr/association_functions.c#sacctmgr_list_assoc): Cluster, Account, User,
-        Partition lead the row."""
+        Partition lead the row.
+        """
         em = _emulator(tmp_path)
         em.handle_command(["add", "user", "alice", "account=acct1", "Partitions=zen3"])
         out = em.handle_command(

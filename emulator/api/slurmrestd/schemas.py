@@ -23,20 +23,12 @@ from emulator.commands.sacct import (
     SacctEmulator,
 )
 from emulator.core.database import QOS, Account, Association, Job, UsageRecord, User
+from emulator.core.tres import DYNAMIC_TRES_FIRST_ID, STATIC_TRES_IDS, tres_id
 from emulator.slurm_version import at_least
 
-# Canonical TRES ids as initialized by slurmdbd (tres_str.c defaults).
-_TRES_IDS = {
-    "cpu": 1,
-    "mem": 2,
-    "energy": 3,
-    "node": 4,
-    "billing": 5,
-    "fs/disk": 6,
-    "vmem": 7,
-    "pages": 8,
-    "gres/gpu": 1001,
-}
+# Canonical TRES ids as initialized by slurmdbd (emulator/core/tres.py);
+# dynamic ids are resolved against the database's TRES list when one is given.
+_TRES_IDS = {**STATIC_TRES_IDS, "gres/gpu": DYNAMIC_TRES_FIRST_ID}
 
 
 def uint_no_val(number: Optional[int] = None, infinite: bool = False) -> dict[str, Any]:
@@ -48,13 +40,19 @@ def uint_no_val(number: Optional[int] = None, infinite: bool = False) -> dict[st
     return {"set": True, "infinite": False, "number": int(number)}
 
 
-def tres_entry(tres_type: str, count: int) -> dict[str, Any]:
+def tres_entry(
+    tres_type: str, count: int, tres_types: Optional[list[str]] = None
+) -> dict[str, Any]:
     base_type = tres_type.split("/", 1)[0]
     name = tres_type.split("/", 1)[1] if "/" in tres_type else ""
+    if tres_types is not None:
+        tid = tres_id(tres_type, tres_types)
+    else:
+        tid = _TRES_IDS.get(tres_type.lower(), 0)
     return {
         "type": base_type,
         "name": name,
-        "id": _TRES_IDS.get(tres_type, 0),
+        "id": tid,
         "count": int(count),
     }
 
@@ -335,7 +333,7 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
         "kill_request_user": "",
         "name": f"job_{record.job_id}",
         "nodes": "node001",
-        "partition": "compute",
+        "partition": record.partition or "compute",
         "qos": "normal",
         "state": {"current": [state], "reason": "None"},
         "steps": [],

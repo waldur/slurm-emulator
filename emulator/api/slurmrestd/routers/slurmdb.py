@@ -172,7 +172,7 @@ def _config_dump(state: RequestState) -> dict[str, Any]:
     db = state.database
     return {
         "clusters": [_cluster_to_dict(c) for c in db.list_clusters()],
-        "tres": [tres_entry(t.lower(), 0) for t in db.tres_types],
+        "tres": [tres_entry(t.lower(), 0, db.tres_types) for t in db.tres_types],
         "accounts": [
             account_to_dict(a, _account_assocs(state, a.name)) for a in db.list_accounts()
         ],
@@ -219,7 +219,7 @@ async def get_tres(
     request: Request,
     state: StateDep,
 ):
-    tres = [tres_entry(t.lower(), 0) for t in state.database.tres_types]
+    tres = [tres_entry(t.lower(), 0, state.database.tres_types) for t in state.database.tres_types]
     return _respond(request, state, {"TRES": tres})
 
 

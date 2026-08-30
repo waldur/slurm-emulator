@@ -140,6 +140,69 @@ JobID           JobName  Partition    Account  AllocCPUS      State ExitCode
 test-account|cpu=64,mem=512G,node=1,billing=64,gres/gpu=4|08:00:00|user1
 ```
 
+### Energy accounting and `sreport`
+
+Federated allocation portals ask sites for the **energy consumed per SLURM
+account** (optionally per user) each month, taken from SLURM's own account
+aggregation — `sreport cluster AccountUtilizationByUser -T energy` — rather
+than from job rows. The emulator reproduces that pipeline:
+
+- Every usage record carries an `energy` TRES in **joules** (the unit real
+  slurmdbd uses for `TRES_ENERGY`). It comes from a per-node power model
+  unless a scenario seeds an exact figure:
+
+  ```
+  joules = node_hours × 3600 × node_watts(partition) + gpu_hours × 3600 × gpu_watts
+  ```
+
+  | Variable | Default | Meaning |
+  |----------|---------|---------|
+  | `SLURM_EMULATOR_NODE_POWER_W` | `500` | watts per node for partitions not listed below |
+  | `SLURM_EMULATOR_PARTITION_POWER_W` | – | per-partition overrides, e.g. `compute=400,gpu=900` |
+  | `SLURM_EMULATOR_GPU_POWER_W` | `300` | extra watts per allocated GPU (`GRES/gpu` hours) |
+
+  Jobs completed through the scheduler (`sbatch` / `POST /job/submit`) use
+  the same model with their partition; `usage_inject` records run in
+  `compute`.
+
+- `POST /api/submit-report` accepts `energy` (joules) in `usage` or in each
+  `users` entry, plus an optional `partition`; an explicit value bypasses the
+  model so a month's total can be asserted exactly. The
+  `regular_access_energy` scenario seeds one month of CPU + GPU usage with
+  known energy for this purpose.
+
+- `sreport cluster AccountUtilizationByUser` is emulated with the real
+  client's grammar — `start=`/`end=` (same time specs as `sacct`, window on
+  the *simulated* clock, `end` exclusive, defaults yesterday→today),
+  `accounts=`, `users=`, `cluster=`/`-M`/`-a`, `format=`, `-T`/`--tres=`
+  (comma list; `cpu`, `mem`, `node`, `billing`, `gres/gpu`, `energy`, `ALL`),
+  `-t Seconds|Minutes|Hours|Percent|SecPer|MinPer|HourPer`, `-p`/`-P`/`-n`.
+  One row per association and TRES, the account total first, then its users,
+  then sub-accounts:
+
+  ```bash
+  $ sreport cluster AccountUtilizationByUser start=2024-03-01 end=2024-04-01 \
+      -T energy -t Seconds --parsable2 -n accounts=regular_access
+  default|regular_access|||energy|424800000
+  default|regular_access|alice||energy|180000000
+  default|regular_access|bob||energy|244800000
+  ```
+
+  Two things to know from the real source
+  (`src/sreport/sreport.c`): there is **no `-t Joules`** — the energy TRES is
+  stored in the same slot the time units divide, so joules are what
+  `-t Seconds` prints (`-t Minutes` gives joules/60; an unknown format prints
+  `unknown time format X` and the report continues in Minutes); and unknown
+  TRES names are silently dropped — only an empty list fails
+  (`sreport: fatal: No valid TRES given`, exit 1). Only this one report is
+  emulated; the header block is printed unless `-n`, also in parsable mode.
+
+- `sacct` gains the real `ConsumedEnergy` / `ConsumedEnergyRaw` columns
+  (joules per job, scaled K/M/G unless `--noconvert`). The ReqTRES/AllocTRES
+  string does not include `energy`, so the site agent's
+  `--format=Account,ReqTRES,Elapsed,User` output is unchanged. `sshare
+  GrpTRESRaw` sums it like any other TRES.
+
 ## Web Dashboard
 
 A lightweight, browser-based control console is mounted on the API server at
@@ -515,12 +578,14 @@ sacctmgr <args>                      # Run sacctmgr command
 sacct <args>                         # Run sacct command
 sinfo <args>                         # Run sinfo command
 sshare <args>                        # Run sshare command
+sreport <args>                       # Run sreport command (cluster AccountUtilizationByUser)
 
 # Examples:
 sacctmgr list accounts
 sacctmgr modify account test set fairshare=333
 sacct --accounts=test --format=Account,User,Elapsed --noheader --parsable2
 sshare -A test --parsable2
+sreport cluster AccountUtilizationByUser start=2024-01-01 end=2024-02-01 -T energy -t Seconds -P -n
 ```
 
 ## Testing Scenarios

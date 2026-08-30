@@ -4,7 +4,38 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from emulator.core.database import SlurmDatabase, UsageRecord
+from emulator.core.energy import DEFAULT_PARTITION, energy_joules
 from emulator.core.time_engine import TimeEngine
+
+# Standard node: 64 CPUs, 512 GB RAM, 4 GPUs (the same rates sacct and
+# slurmrestd fall back to when a record carries no breakdown).
+NODE_CPUS = 64
+NODE_MEM_GB = 512
+NODE_GPUS = 4
+
+
+def standard_node_raw_tres(
+    node_hours: float,
+    partition: str = DEFAULT_PARTITION,
+    energy: Optional[int] = None,
+) -> dict[str, int]:
+    """Raw TRES (``<count>-hours``; joules for ``energy``) of a standard-node job.
+
+    Shared by injected usage and by jobs the scheduler completes so that
+    every record path yields the same CPU/Mem/GPU breakdown and the same
+    power-model energy for the same node-hours.
+    """
+    gpu_hours = int(node_hours * NODE_GPUS)
+    return {
+        "node-hours": int(node_hours),  # Direct node-hours mapping for site agent
+        "CPU": int(node_hours * NODE_CPUS),
+        "Mem": int(node_hours * NODE_MEM_GB),  # GB
+        "GRES/gpu": gpu_hours,
+        # Joules rather than hours; see the power model in energy.py.
+        "energy": energy_joules(node_hours, gpu_hours, partition)
+        if energy is None
+        else int(energy),
+    }
 
 
 class UsageSimulator:
@@ -26,12 +57,20 @@ class UsageSimulator:
         node_hours: float,
         at_time: Optional[datetime] = None,
         cluster: Optional[str] = None,
+        partition: Optional[str] = None,
+        energy_joules: Optional[int] = None,
     ) -> None:
-        """Inject specific usage amount at given time."""
+        """Inject specific usage amount at given time.
+
+        ``energy_joules`` seeds an exact ``energy`` TRES value; when omitted
+        the power model in :mod:`emulator.core.energy` derives it from the
+        node-hours, the GPU-hours and the partition.
+        """
         if at_time is None:
             at_time = self.time_engine.get_current_time()
 
         cl = cluster or self.database.current_cluster
+        part = partition or DEFAULT_PARTITION
 
         # Ensure user and account exist
         if not self.database.get_user(user):
@@ -52,8 +91,9 @@ class UsageSimulator:
             billing_units=node_hours,  # 1:1 for node-hour billing
             timestamp=at_time,
             period=self.time_engine.get_current_quarter(),
-            raw_tres=self._convert_to_raw_tres(node_hours),
+            raw_tres=self._convert_to_raw_tres(node_hours, part, energy_joules),
             cluster=cl,
+            partition=part,
         )
 
         self.database.add_usage_record(usage_record)
@@ -153,16 +193,13 @@ class UsageSimulator:
             "percentage_used": (period_usage / allocation) * 100 if allocation > 0 else 0,
         }
 
-    def _convert_to_raw_tres(self, node_hours: float) -> dict[str, int]:
-        """Convert billing units to raw TRES based on standard node config."""
-        # Standard node: 64 CPUs, 512GB RAM, 4 GPUs
-        # Include "node" component for site agent compatibility
-        return {
-            "node-hours": int(node_hours),  # Direct node-hours mapping for site agent
-            "CPU": int(node_hours * 64),
-            "Mem": int(node_hours * 512),  # GB
-            "GRES/gpu": int(node_hours * 4),
-        }
+    def _convert_to_raw_tres(
+        self,
+        node_hours: float,
+        partition: str = DEFAULT_PARTITION,
+        energy: Optional[int] = None,
+    ) -> dict[str, int]:
+        return standard_node_raw_tres(node_hours, partition, energy)
 
     def _steady_pattern(self, account: str, user: str, config: dict) -> None:
         """Generate steady usage pattern over time period."""

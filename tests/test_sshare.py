@@ -99,7 +99,7 @@ class TestSshareGrpTRESRawUnits:
     def test_grptresraw_in_minutes(self):
         # 10 node-hours and 20 billing-hours: parent row should show
         # node=600, billing=1200, cpu=38400 (640*60), mem=307200 (5120*60),
-        # gres/gpu=2400 (40*60). Energy stays in the canonical set as 6000.
+        # gres/gpu=2400 (40*60). Energy is joules, so it is /60 (6000 J -> 100).
         _add_usage(
             self.db,
             self.te,
@@ -107,7 +107,7 @@ class TestSshareGrpTRESRawUnits:
             user="user1",
             node_hours=10.0,
             billing_units=20.0,
-            raw_tres={"CPU": 640, "Mem": 5120, "GRES/gpu": 40, "Energy": 100},
+            raw_tres={"CPU": 640, "Mem": 5120, "GRES/gpu": 40, "Energy": 6000},
         )
         self.db.add_association("user1", "acct1")
 
@@ -123,7 +123,7 @@ class TestSshareGrpTRESRawUnits:
         assert values["cpu"] == str(640 * 60)
         assert values["mem"] == str(5120 * 60)
         assert values["gres/gpu"] == str(40 * 60)
-        assert values["energy"] == str(100 * 60)
+        assert values["energy"] == "100"
         # Real Slurm keeps zeros in the array (TRES_STR_FLAG_REMOVE only
         # filters INFINITE64 entries).
         for zero_key in ("fs/disk", "vmem", "pages"):
@@ -329,7 +329,8 @@ class TestSshareDispatcherIntegration:
 
 class TestSshareBadClusters:
     """Real sshare bad-cluster semantics (slurm://src/sshare/sshare.c#"case 'M'",
-    slurm://src/common/slurmdb_defs.c#slurmdb_get_info_cluster, slurm://src/common/proc_args.c#print_db_notok)."""
+    slurm://src/common/slurmdb_defs.c#slurmdb_get_info_cluster, slurm://src/common/proc_args.c#print_db_notok).
+    """
 
     def setup_method(self):
         self.db = SlurmDatabase()

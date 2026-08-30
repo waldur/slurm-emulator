@@ -6,7 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- `sshare GrpTRESRaw` renders the `energy` TRES as joules/60 (it was hours×60,
+  3600× too large) — `usage_tres_raw[i] / 60` in slurm://src/sshare/process.c#process.
+- `sacctmgr show tres` and `GET /slurmdb/v0.0.4x/tres/` derive TRES ids from one
+  table (`emulator/core/tres.py`: static 1–8, dynamic from 1001); `node` is now
+  listed, so `sreport -T node` works and `-T node -t Percent` fails like real
+  sreport (slurm://src/sreport/sreport.c#_build_tres_list).
+- Usage records fold the account name like accounts/associations do, so usage
+  injected under `MyProj` shows up in `sreport`/`sacct`/`sshare`.
+- `sacct Partition` and slurmrestd `partition` render the record's partition.
+- `POST /api/submit-report` creates one usage record per user and report (all
+  TRES keys summed into node-hours), so an explicit `energy` lands on that
+  record regardless of key order and the power model is applied once; a
+  zero-node-hour (energy-only) record renders `cpu=0,…` rather than a full node.
+- Scheduler-completed jobs carry the standard-node TRES breakdown (incl. 4 GPUs)
+  so their energy matches injected usage of the same size.
+- `sreport` accepts clustered short flags (`-nP`, `-nTenergy`), `-h`, empty
+  `start=`/`end=` (default window, `parse_time("")` = 0) and
+  `YYYY-MM-DD HH:MM` (slurm://src/common/parse_time.c#_get_time).
+
 ### Added
+- `sreport cluster AccountUtilizationByUser` emulation as an aggregate usage
+  source for portal energy reporting (`emulator/commands/sreport.py`,
+  `uv run sreport`, SSH dispatch): `start=`/`end=` on the simulated clock,
+  `accounts=`/`users=`/`cluster=`/`format=`, `-T`/`--tres=` incl. `energy`,
+  `-t Seconds|Minutes|Hours|Percent|…`, `-p`/`-P`/`-n`; account total, per-user
+  and sub-account rows exactly as real sreport prints them
+  (slurm://src/sreport/cluster_reports.c#cluster_account_by_user,
+  slurm://src/sreport/common.c#sreport_get_time_str,
+  slurm://src/common/slurmdb_defs.c#slurmdb_report_set_start_end_time).
+  As in real Slurm there is no `-t Joules` (energy is what `-t Seconds`
+  prints) and an unknown TRES list is `sreport: fatal: No valid TRES given`.
+- `energy` TRES (joules, slurm://src/common/slurmdb_defs.h#TRES_ENERGY) on
+  every usage record from a per-node/per-partition/per-GPU power model
+  (`emulator/core/energy.py`: `SLURM_EMULATOR_NODE_POWER_W`,
+  `SLURM_EMULATOR_PARTITION_POWER_W`, `SLURM_EMULATOR_GPU_POWER_W`), for
+  injected usage and for jobs completed by the scheduler; `energy` listed in
+  `sacctmgr show tres`; `UsageRecord.partition`.
+- `POST /api/submit-report` takes `energy` (aggregate or per user) and
+  `partition` to seed exact monthly figures; `regular_access_energy` scenario.
+- `sacct ConsumedEnergy` / `ConsumedEnergyRaw`
+  (slurm://src/sacct/print.c#PRINT_CONSUMED_ENERGY_RAW,
+  slurm://src/common/slurm_protocol_api.c#convert_num_unit2). The ReqTRES
+  string is unchanged, so the site-agent invocation output is byte-identical.
 - The emulator can be launched as any tracked Slurm release via
   `SLURM_EMULATOR_SLURM_VERSION` (`24.11`, `25.05`, `25.11`, `26.05` default,
   `master`; Helm value `slurmVersion`). The slurmrestd plane then serves that

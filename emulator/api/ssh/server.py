@@ -7,7 +7,7 @@ stand in for a full cluster.
 
 This is NOT a real sshd. For each SSH ``exec`` request we either:
 
-* dispatch a Slurm command (``sacct``/``sacctmgr``/``sshare``/``sinfo``/
+* dispatch a Slurm command (``sacct``/``sacctmgr``/``sshare``/``sreport``/``sinfo``/
   ``scancel``/``sbatch``/``squeue``/``scontrol``/``id``) to the emulator's
   command layer, sharing the same JSON state as the REST plane; or
 * run the command line for real via ``bash -c`` in a per-user sandbox home
@@ -47,6 +47,7 @@ _SLURM_BINS = {
     "sacct",
     "sacctmgr",
     "sshare",
+    "sreport",
     "sinfo",
     "scancel",
     "id",
@@ -135,8 +136,8 @@ def _run_slurm(user: str, argv: list[str]) -> tuple[str, str, int]:
     try:
         with contextlib.redirect_stderr(err):
             emu = _new_emulator()
-            if name in {"sacct", "sacctmgr", "sshare", "sinfo", "scancel", "id"}:
-                if name in {"sacct", "sshare"}:
+            if name in {"sacct", "sacctmgr", "sshare", "sreport", "sinfo", "scancel", "id"}:
+                if name in {"sacct", "sshare", "sreport"}:
                     _advance(emu)
                 out = emu.execute_command(name, args)
                 code = getattr(getattr(emu, name, None), "exit_code", 0) or 0
