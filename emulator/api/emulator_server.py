@@ -89,6 +89,9 @@ class UsageReportRequest(BaseModel):
     users: Optional[dict[str, dict[str, float]]] = None
     raw_tres_usage: Optional[dict[str, int]] = None
     cluster: Optional[str] = "default"
+    # Partition the usage ran in — selects the per-partition node power
+    # (SLURM_EMULATOR_PARTITION_POWER_W) when no explicit ``energy`` is given.
+    partition: Optional[str] = None
 
 
 class ClusterCreateRequest(BaseModel):
@@ -265,41 +268,41 @@ class EmulatorServer:
                 billing_period = request.billing_period
                 period = self._parse_billing_period(billing_period)
 
+                when = datetime.fromisoformat(request.date.replace("Z", "+00:00"))
+                partition = request.partition
+
+                def inject(user: str, tres_usage: dict[str, float]) -> None:
+                    # One usage record per user and report: every TRES key
+                    # is converted to node-hours (billing 1:1, the rest via
+                    # billing_weights) and summed. ``energy`` (joules) is not a
+                    # billing input — it seeds the record's ``energy`` TRES
+                    # exactly; when absent the power model fills it in.
+                    usage = dict(tres_usage)
+                    energy = usage.pop("energy", None)
+                    node_hours = 0.0
+                    for tres_type, usage_value in usage.items():
+                        if tres_type == "billing":
+                            node_hours += usage_value
+                        else:
+                            weight = self.usage_simulator.billing_weights.get(tres_type, 1.0)
+                            node_hours += usage_value * weight
+                    self.usage_simulator.inject_usage(
+                        resource_id,
+                        user,
+                        node_hours,
+                        when,
+                        cluster=cluster,
+                        partition=partition,
+                        energy_joules=None if energy is None else int(energy),
+                    )
+
                 # Inject usage for each user
                 if request.users:
                     for user, user_usage in request.users.items():
-                        for tres_type, usage_value in user_usage.items():
-                            # Convert to node-hours if needed
-                            if tres_type == "billing":
-                                node_hours = usage_value
-                            else:
-                                # Convert from raw TRES to billing units
-                                weight = self.usage_simulator.billing_weights.get(tres_type, 1.0)
-                                node_hours = usage_value * weight
-
-                            self.usage_simulator.inject_usage(
-                                resource_id,
-                                user,
-                                node_hours,
-                                datetime.fromisoformat(request.date.replace("Z", "+00:00")),
-                                cluster=cluster,
-                            )
+                        inject(user, user_usage)
                 else:
                     # Use aggregate usage data
-                    for tres_type, usage_value in request.usage.items():
-                        if tres_type == "billing":
-                            node_hours = usage_value
-                        else:
-                            weight = self.usage_simulator.billing_weights.get(tres_type, 1.0)
-                            node_hours = usage_value * weight
-
-                        self.usage_simulator.inject_usage(
-                            resource_id,
-                            "aggregate_user",
-                            node_hours,
-                            datetime.fromisoformat(request.date.replace("Z", "+00:00")),
-                            cluster=cluster,
-                        )
+                    inject("aggregate_user", request.usage)
 
                 print(f"📊 Received usage report for {resource_id}")
                 print(f"   Period: {billing_period}")

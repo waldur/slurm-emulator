@@ -357,15 +357,23 @@ def _aggregate_raw_tres_minutes(records: list[UsageRecord]) -> dict[str, int]:
     /60.
     """
     totals: dict[str, int] = dict.fromkeys(_CANONICAL_TRES, 0)
+    energy_joules = 0
     for record in records:
         totals["node"] += int(record.node_hours)
         totals["billing"] += int(record.billing_units)
         for raw_name, value in record.raw_tres.items():
             key = _normalize_tres_name(raw_name)
+            if key == "energy":
+                # Joules, not hours: the raw usage already is the
+                # ``usage_tres_raw`` value slurmdbd keeps, so only /60 applies.
+                energy_joules += int(value)
+                continue
             if key not in totals:
                 totals[key] = 0
             totals[key] += int(value)
-    return {k: v * 60 for k, v in totals.items()}
+    minutes = {k: v * 60 for k, v in totals.items()}
+    minutes["energy"] = energy_joules // 60
+    return minutes
 
 
 def _normalize_tres_name(name: str) -> str:

@@ -30,9 +30,8 @@ from pathlib import Path
 
 import pytest
 
-from emulator.slurm_version import current
-
 from emulator.core.database import SlurmDatabase
+from emulator.slurm_version import current
 
 FIRECREST_SRC = os.environ.get("FIRECREST_SRC")
 if not FIRECREST_SRC:

@@ -1376,7 +1376,13 @@ Type 'help <command>' for detailed help on specific commands.
             user = action.parameters["user"]
             amount = action.parameters["amount"]
             account = action.parameters.get("account", "default_account")
-            self.usage_simulator.inject_usage(account, user, amount)
+            self.usage_simulator.inject_usage(
+                account,
+                user,
+                amount,
+                partition=action.parameters.get("partition"),
+                energy_joules=action.parameters.get("energy"),
+            )
 
         elif action.type == ActionType.ACCOUNT_CREATE:
             name = action.parameters["name"]

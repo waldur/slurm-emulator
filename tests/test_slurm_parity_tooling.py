@@ -26,7 +26,7 @@ def cfg():
 
 
 def test_primary_constant_matches_pyproject(cfg):
-    assert slurm_version.PRIMARY_VERSION == cfg.primary
+    assert cfg.primary == slurm_version.PRIMARY_VERSION
     assert cfg.primary in cfg.versions
 
 

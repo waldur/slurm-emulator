@@ -5,6 +5,14 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
+# (user, node-hours, partition, joules) seeded by the regular_access_energy
+# scenario: 100 Nh CPU at 500 W and 40 Nh GPU at 500 W + 4x300 W.
+REGULAR_ACCESS_ENERGY_USERS: list[tuple[str, float, str, int]] = [
+    ("alice", 100.0, "compute", 180_000_000),
+    ("bob", 40.0, "gpu", 244_800_000),
+]
+REGULAR_ACCESS_ENERGY_JOULES = sum(j for _u, _n, _p, j in REGULAR_ACCESS_ENERGY_USERS)
+
 
 class ScenarioType(Enum):
     """Types of scenarios."""
@@ -55,7 +63,10 @@ class ScenarioAction:
             user = self.parameters["user"]
             amount = self.parameters["amount"]
             account = self.parameters.get("account", "default")
-            return f"usage inject {user} {amount} {account}"
+            cmd = f"usage inject {user} {amount} {account}"
+            if "energy" in self.parameters:
+                cmd += f"  # energy={self.parameters['energy']} J"
+            return cmd
         if self.type == ActionType.ACCOUNT_CREATE:
             name = self.parameters["name"]
             desc = self.parameters.get("description", "Test Account")
@@ -189,6 +200,7 @@ class ScenarioRegistry:
         self._register_qos_threshold_scenario()
         self._register_carryover_testing_scenario()
         self._register_configuration_comparison_scenario()
+        self._register_regular_access_energy_scenario()
 
         # Register new limits configuration scenarios
         self._register_limits_configuration_scenarios()
@@ -597,6 +609,89 @@ class ScenarioRegistry:
             )
         )
         scenario.add_step(step3)
+
+        self.register_scenario(scenario)
+
+    def _register_regular_access_energy_scenario(self) -> None:
+        """One month of CPU + GPU usage with known energy for sreport demos.
+
+        Seeds a project so that
+        ``sreport cluster AccountUtilizationByUser start=2024-03-01
+        end=2024-04-01 -T energy -t Seconds -P -n accounts=regular_access``
+        reports exactly ``REGULAR_ACCESS_ENERGY_JOULES`` for the account,
+        split per user as listed in ``REGULAR_ACCESS_ENERGY_USERS``.
+        """
+        scenario = ScenarioDefinition(
+            name="regular_access_energy",
+            title="Regular Access: Monthly Energy Report",
+            description=(
+                "Seed one month (March 2024) of CPU and GPU usage for a regular-access "
+                "project with known energy so the aggregated sreport energy figure "
+                "used for carbon-footprint reporting can be verified."
+            ),
+            scenario_type=ScenarioType.USAGE_PATTERNS,
+            duration_estimate="3 minutes",
+            complexity="basic",
+            learning_objectives=[
+                "See how energy is attached to usage records (power model vs seeded)",
+                "Produce a monthly per-account / per-user energy aggregate with sreport",
+                "Report a previous month on demand with the simulated clock",
+            ],
+            key_concepts=[
+                "energy TRES in joules (sreport -T energy -t Seconds)",
+                "Account total = sum of per-user rows",
+                "Time-travel monthly windows",
+            ],
+        )
+
+        step1 = ScenarioStep(
+            name="seed_march",
+            description="Seed March 2024 usage with known energy",
+            time_point=datetime(2024, 3, 15),
+        )
+        step1.add_action(
+            ScenarioAction(
+                type=ActionType.ACCOUNT_CREATE,
+                description="Create the regular-access project account",
+                parameters={"name": "regular_access", "allocation": 5000},
+            )
+        )
+        for user, node_hours, partition, joules in REGULAR_ACCESS_ENERGY_USERS:
+            step1.add_action(
+                ScenarioAction(
+                    type=ActionType.USAGE_INJECT,
+                    description=f"{user}: {node_hours}Nh on {partition} = {joules} J",
+                    parameters={
+                        "user": user,
+                        "amount": node_hours,
+                        "account": "regular_access",
+                        "partition": partition,
+                        "energy": joules,
+                    },
+                )
+            )
+        scenario.add_step(step1)
+
+        step2 = ScenarioStep(
+            name="report_previous_month",
+            description="Move to April and report March",
+            time_point=datetime(2024, 4, 2),
+        )
+        step2.add_action(
+            ScenarioAction(
+                type=ActionType.VALIDATE,
+                description=(
+                    "sreport cluster AccountUtilizationByUser start=2024-03-01 "
+                    "end=2024-04-01 -T energy -t Seconds -P -n accounts=regular_access"
+                ),
+                parameters={"account": "regular_access"},
+                expected_outcome=(
+                    f"account total {REGULAR_ACCESS_ENERGY_JOULES} J, one row per user"
+                ),
+                validation={"energy_joules": REGULAR_ACCESS_ENERGY_JOULES},
+            )
+        )
+        scenario.add_step(step2)
 
         self.register_scenario(scenario)
 
