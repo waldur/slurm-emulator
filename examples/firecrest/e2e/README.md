@@ -24,7 +24,7 @@ scheduler smoke. Override with `FIRECREST_REF`, `SLURM_SERVICE`, `WORKDIR`.
   emulator image, enables the SSH plane, exposes `6820`/`22`, and replaces the
   `scontrol ping` healthcheck with the REST ping.
 - `f7t-api-config.emulator.yaml` — a FireCREST cluster entry pointing
-  `scheduler.api_url` at `http://slurm:6820`, `api_version: "0.0.46"`,
+  `scheduler.api_url` at `http://slurm:6820`, `api_version: "0.0.45"`,
   `connection_mode: rest`, and `ssh.host` at the emulator.
 
 ## Notes / caveats
@@ -32,7 +32,7 @@ scheduler smoke. Override with `FIRECREST_REF`, `SLURM_SERVICE`, `WORKDIR`.
 - **Service name**: the overlay assumes FireCREST's Slurm service is named
   `slurm`. Confirm in your FireCREST `docker-compose.yml` and set
   `SLURM_SERVICE` / rename the overlay key if it differs.
-- **api_version**: keep FireCREST's `scheduler.api_version` at `0.0.46` so the
+- **api_version**: keep FireCREST's `scheduler.api_version` at `0.0.45` so the
   submit request dialect matches the emulator (script inside the job body,
   `environment` as a list).
 - **Filesystem paths**: the overlay sets `SLURM_EMULATOR_FS_ROOT=/` so absolute

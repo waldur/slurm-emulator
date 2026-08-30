@@ -1,21 +1,21 @@
 """Tests for account parent / hierarchy parity with real Slurm.
 
-Validates emulator parity with real Slurm (/Users/ilja/workspace/slurm):
+Validates emulator parity with real Slurm (see docs/slurm-parity.md):
 
 - ``ParentName`` is an *association* field (``PRINT_PNAME`` →
-  ``assoc->parent_acct``, association_functions.c:732-734). On
+  ``assoc->parent_acct``, slurm://src/sacctmgr/association_functions.c#sacctmgr_print_assoc_rec). On
   ``sacctmgr show account`` the associations are only loaded with
   ``WithAssoc``; without it the ``default:`` branch prints NULL, so
-  ParentName is blank (account_functions.c:460-571).
+  ParentName is blank (slurm://src/sacctmgr/account_functions.c#sacctmgr_list_account).
 - For an association, ``parent_acct`` is populated only on the
   account-level row (empty ``User``); user rows leave it NULL and print
-  blank (as_mysql_assoc.c:2116-2126).
+  blank (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_cluster_get_assocs).
 - ``modify account ... set parent=`` reparents the account-level
   association. A no-op change or a condition matching no account prints
   "  Nothing modified" to stdout but exits 1 — the branch returns
-  SLURM_ERROR (account_functions.c:727-729) and ``_modify_it()`` sets
+  SLURM_ERROR (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account) and ``_modify_it()`` sets
   the global ``exit_code = 1`` on any non-SUCCESS error_code
-  (sacctmgr.c:982-984); a missing parent account is its own error with
+  (slurm://src/sacctmgr/sacctmgr.c#_modify_it); a missing parent account is its own error with
   exit 1; a real change prints "Modified account associations...".
 """
 
@@ -123,8 +123,8 @@ class TestModifyAccountParent:
         )
         assert out == "  Nothing modified"
         # Real sacctmgr exits 1 here: the branch returns SLURM_ERROR
-        # (account_functions.c:727-729) and _modify_it() sets the global
-        # exit_code on any non-SUCCESS error_code (sacctmgr.c:982-984).
+        # (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account) and _modify_it() sets the global
+        # exit_code on any non-SUCCESS error_code (slurm://src/sacctmgr/sacctmgr.c#_modify_it).
         # The message itself still goes to stdout.
         assert em.exit_code == 1
         assert em.stdout_error is True
@@ -149,7 +149,7 @@ class TestModifyAccountParent:
 
     def test_where_name_filter_form_is_parsed(self, tmp_path):
         # The agent uses ``where name=<acct>`` — real Slurm parses ``name=`` as
-        # the account-name condition (account_functions.c:103-116).
+        # the account-name condition (slurm://src/sacctmgr/account_functions.c#_set_cond).
         em = _emulator(tmp_path)
         em.handle_command(["add", "account", "c-new", "parent=root"])
         em.handle_command(["modify", "account", "where", "name=p-proj", "set", "parent=c-new"])
@@ -170,8 +170,8 @@ class TestParentValueQuoteStripping:
     """``parent=`` values are quote-stripped, matching real Slurm.
 
     Real sacctmgr runs the value through ``strip_quotes`` before storing it
-    (association_functions.c:512), exactly as it does for description and
-    organization (account_functions.c:224,243). The Waldur site agent quotes
+    (slurm://src/sacctmgr/association_functions.c#sacctmgr_set_assoc_rec), exactly as it does for description and
+    organization (slurm://src/sacctmgr/account_functions.c#_set_rec). The Waldur site agent quotes
     the value (``parent="acct"``) and passes it to subprocess without a shell,
     so the binary receives literal quotes; the emulator must strip them or the
     stored/returned parent carries quotes and parent comparisons break.
@@ -203,7 +203,7 @@ class TestAddExistingAccountIsNotAnError:
     """Re-adding an existing account must not set a non-zero exit code.
 
     Real sacctmgr reports SLURM_NO_CHANGE_IN_DATA and exits 0 in this case
-    (account_functions.c:341-343). Returning exit 1 here breaks idempotent
+    (slurm://src/sacctmgr/account_functions.c#sacctmgr_add_account). Returning exit 1 here breaks idempotent
     callers (e.g. the Waldur site agent's account provisioning), which is the
     regression that the 0.5.2 exit-code work introduced.
     """
@@ -212,7 +212,7 @@ class TestAddExistingAccountIsNotAnError:
         em = _emulator(tmp_path)
         out = em.handle_command(["add", "account", "c-org", "parent=root"])
         # Exact SLURM_NO_CHANGE_IN_DATA shape: printf(" %s", slurm_strerror(rc))
-        # to stdout (account_functions.c:342-343, slurm_errno.c:205-207).
+        # to stdout (slurm://src/sacctmgr/account_functions.c#sacctmgr_add_account, slurm://src/common/slurm_errno.c#SLURM_NO_CHANGE_IN_DATA).
         assert out == " Data has not changed since time specified"
         assert em.exit_code == 0
 
@@ -228,8 +228,8 @@ class TestAccountNameCaseInsensitivity:
 
     Real Slurm folds every account name and condition to lower case:
     sacctmgr adds them to the acct list via ``slurm_addto_char_list``
-    (account_functions.c:113,204), which normalises with ``xstrtolower``
-    (slurm_protocol_defs.c:523-525,537-539). So ``add account 2026_00A``
+    (slurm://src/sacctmgr/account_functions.c#_set_cond / slurm://src/sacctmgr/account_functions.c#_set_rec), which normalises with ``xstrtolower``
+    (slurm://src/common/slurm_protocol_defs.c#slurm_addto_char_list). So ``add account 2026_00A``
     is stored and reported as ``2026_00a``, and ``show assoc
     account=2026_00A`` still finds it. The emulator must reproduce this so
     the Waldur site agent's ``get_account_parent`` — which reads the

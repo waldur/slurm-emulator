@@ -1,10 +1,10 @@
 """Output and exit-code parity tests for the sacct emulator.
 
-Expected shapes come from real Slurm 26.11: default fields
-(src/sacct/sacct.h:66), field widths (src/sacct/sacct.c:43-169),
-header/dash/truncation bytes (src/common/print_fields.c:66-176),
-elapsed format (secs2time_str, src/common/parse_time.c:849-874), and
-error handling (src/sacct/options.c:591-593, 1215-1216).
+Expected shapes come from real Slurm 26.05: default fields
+(slurm://src/sacct/sacct.h#DEFAULT_FIELDS), field widths (slurm://src/sacct/sacct.c#fields),
+header/dash/truncation bytes (slurm://src/common/print_fields.c#print_fields_header),
+elapsed format (secs2time_str, slurm://src/common/parse_time.c#secs2time_str), and
+error handling (slurm://src/sacct/options.c#parse_command_line).
 """
 
 from datetime import datetime, timedelta
@@ -164,7 +164,7 @@ class TestErrors:
             sacct.handle_command(["--starttime=garbage"])
         assert exc.value.code == 1
         assert sacct.exit_code == 1
-        # parse_time.c:626-631: no "sacct:" prefix on this one.
+        # slurm://src/common/parse_time.c#parse_time: no "sacct:" prefix on this one.
         assert capsys.readouterr().err.startswith("Invalid time specification (pos=")
 
     def test_invalid_field_exits_one(self, env, capsys):

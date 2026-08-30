@@ -25,8 +25,9 @@ from __future__ import annotations
 import pytest
 
 from emulator.core.database import SlurmDatabase
+from emulator.slurm_version import current
 
-V = "v0.0.46"
+V = current().api_version
 
 
 def _no_val(field: dict) -> bool:

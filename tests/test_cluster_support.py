@@ -279,7 +279,7 @@ class TestClusterFlagParsing:
 
     def test_execute_command_nonexistent_cluster_sshare(self, capsys):
         # Real sshare: per-name error, then print_db_notok + fatal()
-        # → stderr + exit 1 (sshare.c:147-152, proc_args.c:1426-1430).
+        # → stderr + exit 1 (slurm://src/sshare/sshare.c#"case 'M'", slurm://src/common/proc_args.c#print_db_notok).
         emulator = SlurmEmulator()
         with pytest.raises(SystemExit) as exc:
             emulator.execute_command("sshare", ["--cluster=nope"])
@@ -289,7 +289,7 @@ class TestClusterFlagParsing:
         assert "sshare: fatal: Could not get cluster information" in err
 
     def test_sshare_multi_cluster_emits_banner_per_cluster(self):
-        """Real sshare (sshare.c:296-316) prints `CLUSTER: <name>`
+        """Real sshare (slurm://src/sshare/sshare.c#_multi_cluster) prints `CLUSTER: <name>`
         before each cluster block in multi-cluster mode."""
         emulator = SlurmEmulator()
         emulator.database.add_cluster("c1")
@@ -347,7 +347,7 @@ class TestSacctmgrClusterCommands:
         assert "dev" in output
         assert "RPC" in output  # New column
         # Classification is not part of the real default format
-        # (cluster_functions.c:482-489) — only reachable via format=.
+        # (slurm://src/sacctmgr/cluster_functions.c#sacctmgr_list_cluster) — only reachable via format=.
         assert "Class" not in output
 
     def test_list_clusters_format_cluster_returns_bare_names(self):

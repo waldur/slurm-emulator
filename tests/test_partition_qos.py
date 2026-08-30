@@ -1,13 +1,13 @@
 """Tests for partition-level QoS gating (AllowQos / DenyQos / assigned QOS).
 
-Validates emulator parity with real Slurm (/Users/ilja/workspace/slurm):
+Validates emulator parity with real Slurm (see docs/slurm-parity.md):
 
 - A partition gates which QoS a job may request via ``AllowQos`` /
-  ``DenyQos`` (part_record.h:65/79; slurm.conf.5 AllowQos/DenyQos). An
+  ``DenyQos`` (slurm://src/common/part_record.h#allow_qos, slurm://src/common/part_record.h#deny_qos; slurm.conf.5 AllowQos/DenyQos). An
   empty ``AllowQos`` means ALL QoS are permitted; if ``AllowQos`` is set,
   ``DenyQos`` is not enforced ("If AllowQos is used then DenyQos will not
   be enforced", slurm.conf.5).
-- A partition also owns a single ``QOS=`` (qos_char, part_record.h:106) —
+- A partition also owns a single ``QOS=`` (qos_char, slurm://src/common/part_record.h#qos_char) —
   limit-extension only — surfaced as the partition's assigned QoS.
 - The slurmrestd partition view exposes these under
   ``qos: {allowed, deny, assigned}`` (previously hardcoded empty).
@@ -17,8 +17,10 @@ Config seeding mirrors the topology (SLURM_EMULATOR_PARTITIONS): the
 ``name=mode:csv`` entries (mode ∈ allow|deny|qos) separated by ``;``.
 """
 
-
 from emulator.api.slurmrestd import schemas
+from emulator.slurm_version import current
+
+V = current().api_version
 
 
 class TestParsePartitionQos:
@@ -98,9 +100,7 @@ class TestPartitionQosRestEndpoint:
         monkeypatch.setattr(
             schemas, "PARTITION_QOS", {name: {"allowed": "a,b", "deny": "", "assigned": ""}}
         )
-        partitions = restd.get("/slurm/v0.0.46/partitions/", headers=auth_headers).json()[
-            "partitions"
-        ]
+        partitions = restd.get(f"/slurm/{V}/partitions/", headers=auth_headers).json()["partitions"]
         by_name = {p["name"]: p for p in partitions}
         assert by_name[name]["qos"]["allowed"] == "a,b"
 

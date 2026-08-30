@@ -18,10 +18,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from emulator import __version__
 from emulator.api.slurmrestd.envelope import (
-    API_VERSION,
     ESLURM_REST_UNKNOWN_URL,
     ESLURM_REST_UNKNOWN_URL_METHOD,
     SlurmrestdRejectError,
+    api_version,
     reject_response,
 )
 from emulator.api.slurmrestd.routers import slurmctld, slurmdb
@@ -32,15 +32,15 @@ DEFAULT_PORT = 6820
 def _build_openapi_spec(app: FastAPI) -> dict[str, Any]:
     """FastAPI auto-spec dressed up as the real self-description.
 
-    Real slurmrestd generates its spec at runtime (no v0.0.46 spec
-    file ships in the 26.11 tree), so we do the same rather than
+    Real slurmrestd generates its spec at runtime (no data_parser spec
+    file ships in the Slurm tree), so we do the same rather than
     vendoring the 15k-line v0.0.45 document.
     """
     spec = app.openapi()
     spec["info"]["title"] = "Slurm REST API"
-    spec["info"]["version"] = API_VERSION
+    spec["info"]["version"] = api_version()
     spec["paths"] = {
-        path.replace("{version}", API_VERSION): operations
+        path.replace("{version}", api_version()): operations
         for path, operations in spec.get("paths", {}).items()
     }
     return spec
@@ -49,7 +49,7 @@ def _build_openapi_spec(app: FastAPI) -> dict[str, Any]:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Slurm REST API",
-        version=f"{API_VERSION} (slurm-emulator {__version__})",
+        version=f"{api_version()} (slurm-emulator {__version__})",
         openapi_url=None,  # served manually at the real slurmrestd paths
         docs_url=None,
         redoc_url=None,
@@ -66,14 +66,14 @@ def create_app() -> FastAPI:
         _request: Request, exc: StarletteHTTPException
     ) -> PlainTextResponse:
         # Unknown paths and unsupported methods reject exactly like
-        # _operations_router_reject (operations.c:222).
+        # _operations_router_reject (slurm://src/slurmrestd/operations.c#_operations_router_reject).
         if exc.status_code == 404:
             return reject_response(ESLURM_REST_UNKNOWN_URL)
         if exc.status_code == 405:
             return reject_response(ESLURM_REST_UNKNOWN_URL_METHOD)
         return PlainTextResponse(str(exc.detail), status_code=exc.status_code)
 
-    # Real slurmrestd self-description paths (src/slurmrestd/openapi.c:312-330).
+    # Real slurmrestd self-description paths (slurm://src/slurmrestd/openapi.c#"/openapi/v3").
     @app.get("/openapi.json", include_in_schema=False)
     @app.get("/openapi", include_in_schema=False)
     @app.get("/openapi/v3", include_in_schema=False)

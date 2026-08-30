@@ -1,10 +1,10 @@
 """Byte-level output and exit-code parity tests for the sacctmgr emulator.
 
-Expected shapes come from real Slurm 26.11:
-- header/dash rows and column padding: src/common/print_fields.c:66-176
+Expected shapes come from real Slurm 26.05:
+- header/dash rows and column padding: slurm://src/common/print_fields.c#print_fields_header
   (every column is followed by a space, including the last);
 - default field sets: src/sacctmgr/*_functions.c;
-- field headers and widths: src/sacctmgr/common.c:219-891.
+- field headers and widths: slurm://src/sacctmgr/common.c#_get_print_field.
 """
 
 import pytest
@@ -29,7 +29,7 @@ class TestDefaultFixedWidthMode:
         out = em.handle_command(["list", "account"])
         lines = out.splitlines()
         # Account 10 | Descr 20 | Org 20, right-aligned, trailing space
-        # after every column (print_fields.c:90-91).
+        # after every column (slurm://src/common/print_fields.c#print_fields_header).
         assert lines[0] == "   Account                Descr                  Org "
         assert lines[1] == "---------- -------------------- -------------------- "
 
@@ -40,7 +40,7 @@ class TestDefaultFixedWidthMode:
     def test_list_user_header(self, em):
         out = em.handle_command(["list", "user"])
         lines = out.splitlines()
-        # User 10 | "Def Acct" 10 | Admin 9 (user_functions.c:968).
+        # User 10 | "Def Acct" 10 | Admin 9 (slurm://src/sacctmgr/user_functions.c#sacctmgr_list_user).
         assert lines[0] == "      User   Def Acct     Admin "
         assert lines[1] == "---------- ---------- --------- "
 
@@ -59,7 +59,7 @@ class TestDefaultFixedWidthMode:
     def test_truncation_appends_plus(self, em):
         em.handle_command(["add", "account", "very-long-account-name"])
         out = em.handle_command(["list", "account"])
-        # Account column is 10 wide: value[:9] + '+' (print_fields.c:147-160).
+        # Account column is 10 wide: value[:9] + '+' (slurm://src/common/print_fields.c#print_fields_str).
         assert "very-long+ " in out
 
     def test_header_only_when_no_rows(self, em):
@@ -121,7 +121,7 @@ class TestFieldResolution:
 
     def test_def_qos_header_name(self, em):
         out = em.handle_command(["list", "cluster", "format=DefaultQOS", "-P"])
-        # common.c:326-329: printed header is "Def QOS".
+        # slurm://src/sacctmgr/common.c#"Def QOS": printed header is "Def QOS".
         assert out.splitlines()[0] == "Def QOS"
 
 
@@ -129,7 +129,7 @@ class TestExitCodesAndMessages:
     def test_nothing_modified_exits_one(self, em):
         # Real sacctmgr: the message goes to stdout (printf) but the modify
         # branch returns SLURM_ERROR and _modify_it() sets exit_code=1
-        # (account_functions.c:727-729, sacctmgr.c:982-984).
+        # (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account, slurm://src/sacctmgr/sacctmgr.c#_modify_it).
         out = em.handle_command(["modify", "account", "where", "name=ghost", "set", "parent=root"])
         assert out == "  Nothing modified"
         assert em.exit_code == 1

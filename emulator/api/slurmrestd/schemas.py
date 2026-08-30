@@ -1,11 +1,12 @@
-"""Plain-dict serializers for v0.0.46 response objects.
+"""Plain-dict serializers for v0.0.45 response objects.
 
 Field names and paths are copied verbatim from the authoritative
-parser tables in /Users/ilja/workspace/slurm/src/plugins/data_parser/
-v0.0.46/parsers.c — ACCOUNT/USER/ASSOC (:8646-8800), QOS (:9321-9349),
-JOB, NODE, PARTITION_INFO. ``*_NO_VAL`` typed fields render as
-``{set, infinite, number}`` exactly like DUMP_FUNC(UINT64_NO_VAL)
-(parsers.c:3197-3223). Deliberately a pragmatic subset: every field
+parser tables in slurm://src/plugins/data_parser/v0.0.45/parsers.c@26.05+
+(PARSER_ARRAY tables ACCOUNT, USER, ASSOC, QOS, JOB_INFO, NODE,
+PARTITION_INFO; v0.0.45 ships with 26.05 and later, see docs/slurm-parity.md).
+``*_NO_VAL`` typed fields render as ``{set, infinite, number}`` exactly
+like DUMP_FUNC(UINT64_NO_VAL)
+(slurm://src/plugins/data_parser/v0.0.45/parsers.c#UINT64_NO_VAL@26.05+). Deliberately a pragmatic subset: every field
 Waldur's parsers touch, plus enough context to look real.
 """
 
@@ -22,6 +23,7 @@ from emulator.commands.sacct import (
     SacctEmulator,
 )
 from emulator.core.database import QOS, Account, Association, Job, UsageRecord, User
+from emulator.slurm_version import at_least
 
 # Canonical TRES ids as initialized by slurmdbd (tres_str.c defaults).
 _TRES_IDS = {
@@ -100,7 +102,7 @@ def _limits_tres(limits: dict[str, int], prefix: str) -> dict[str, int]:
 
 
 def assoc_short(assoc: Association) -> dict[str, Any]:
-    """ASSOC_SHORT (parsers.c:8646-8652)."""
+    """ASSOC_SHORT (slurm://src/plugins/data_parser/v0.0.45/parsers.c#ASSOC_SHORT@26.05+)."""
     return {
         "account": assoc.account,
         "cluster": assoc.cluster,
@@ -256,8 +258,8 @@ def qos_to_dict(qos: QOS, qos_id: int) -> dict[str, Any]:
         "usage_factor": {"set": True, "infinite": False, "number": 1.0},
         "usage_threshold": {"set": False, "infinite": False, "number": 0.0},
         "limits": {
-            # Real v0.0.46 QOS: grace_time is a plain UINT32 (seconds) at
-            # limits/grace_time (parsers.c PARSER_ARRAY(QOS)), not a NO_VAL struct.
+            # Real v0.0.45 QOS: grace_time is a plain UINT32 (seconds) at
+            # limits/grace_time (slurm://src/plugins/data_parser/v0.0.45/parsers.c#QOS@26.05+), not a NO_VAL struct.
             "grace_time": max(qos.grace_time, 0),
             "max": {
                 "active_jobs": {"accruing": uint_no_val(), "count": uint_no_val()},
@@ -359,8 +361,8 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
 def ctld_job_to_dict(job: Job) -> dict[str, Any]:
     """JOB_INFO subset for /slurm/.../jobs (active job view).
 
-    Field names/shapes follow the v0.0.46 JOB_INFO parser
-    (parsers.c PARSER_ARRAY(JOB_INFO)): ``job_resources`` (with
+    Field names/shapes follow the v0.0.45 JOB_INFO parser
+    (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_INFO@26.05+): ``job_resources`` (with
     ``nodes.count``), ``exit_code``/``derived_exit_code`` (PROCESS_EXIT_CODE),
     ``time_limit``/``priority``/``suspend_time`` as ``*_NO_VAL`` structs, etc.
     """
@@ -459,8 +461,8 @@ def _load_partition_ranges() -> dict[str, tuple[int, int]]:
 PARTITION_RANGES = _load_partition_ranges()
 
 
-# Per-partition QoS gate: AllowQos / DenyQos (part_record.h:65/79) plus the
-# partition's own assigned QOS (qos_char, part_record.h:106). Config mirrors the
+# Per-partition QoS gate: AllowQos / DenyQos (slurm://src/common/part_record.h#allow_qos, slurm://src/common/part_record.h#deny_qos) plus the
+# partition's own assigned QOS (qos_char, slurm://src/common/part_record.h#qos_char). Config mirrors the
 # topology env var: SLURM_EMULATOR_PARTITION_QOS holds ``name=mode:csv`` entries
 # (mode ∈ allow|deny|qos) separated by ``;``; several entries may target the
 # same partition (e.g. an allow-list plus an assigned QoS). Empty ⇒ every
@@ -576,27 +578,33 @@ def partition_to_dict(name: str) -> dict[str, Any]:
     first, last = PARTITION_RANGES[name]
     node_count = last - first + 1
     configured = f"node[{first:03d}-{last:03d}]"
-    return {
+    partition: dict[str, Any] = {
         "name": name,
         "nodes": {"total": node_count, "configured": configured, "allowed_allocation": "ALL"},
         "cpus": {"total": node_count * _NODE_CPUS, "task_binding": 0},
-        "defaults": {
-            "memory_per_cpu": 0,
-            "time": uint_no_val(infinite=True),
-        },
+        "defaults": {"time": uint_no_val(infinite=True)},
         "maximums": {
             "nodes": uint_no_val(infinite=True),
             "time": uint_no_val(infinite=True),
             "cpus_per_node": uint_no_val(infinite=True),
-            "memory_per_cpu": uint_no_val(),
         },
         "minimums": {"nodes": 1},
         "partition": {"state": ["UP"]},
-        "priority": {"job_factor": 1, "tier": 1},
-        "accounts": {"allowed": "", "deny": ""},
-        "groups": {"allowed": ""},
-        "qos": dict(PARTITION_QOS.get(name, _empty_partition_qos())),
     }
+    if not at_least("master"):
+        # 26.11 drops the per-CPU memory limits from PARTITION_INFO
+        # (slurm://src/plugins/data_parser/v0.0.45/parsers.c#"defaults/memory_per_cpu"@26.05).
+        partition["defaults"]["memory_per_cpu"] = 0
+        partition["maximums"]["memory_per_cpu"] = uint_no_val()
+    partition.update(
+        {
+            "priority": {"job_factor": 1, "tier": 1},
+            "accounts": {"allowed": "", "deny": ""},
+            "groups": {"allowed": ""},
+            "qos": dict(PARTITION_QOS.get(name, _empty_partition_qos())),
+        }
+    )
+    return partition
 
 
 def all_node_names() -> list[str]:

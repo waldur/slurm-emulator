@@ -328,8 +328,8 @@ class TestSshareDispatcherIntegration:
 
 
 class TestSshareBadClusters:
-    """Real sshare bad-cluster semantics (sshare.c:147-152,
-    slurmdb_defs.c:1511, proc_args.c:1426-1430)."""
+    """Real sshare bad-cluster semantics (slurm://src/sshare/sshare.c#"case 'M'",
+    slurm://src/common/slurmdb_defs.c#slurmdb_get_info_cluster, slurm://src/common/proc_args.c#print_db_notok)."""
 
     def setup_method(self):
         self.db = SlurmDatabase()

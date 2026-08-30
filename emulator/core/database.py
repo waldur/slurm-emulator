@@ -22,11 +22,10 @@ def fold_account(name: Optional[str]) -> Optional[str]:
     """Canonicalise an account name to lower case, as real Slurm does.
 
     sacctmgr parses every account name and account condition through
-    ``slurm_addto_char_list`` (account_functions.c:113 for the
+    ``slurm_addto_char_list`` (slurm://src/sacctmgr/account_functions.c#_set_cond for the
     ``name=``/``account=`` condition, :204 for the added account), which
     is ``slurm_addto_char_list_with_case(..., true)`` and calls
-    ``xstrtolower(name)`` before storing it (slurm_protocol_defs.c:523-525,
-    537-539). So ``sacctmgr add account 2026_00A`` is stored and reported
+    ``xstrtolower(name)`` before storing it (slurm://src/common/slurm_protocol_defs.c#slurm_addto_char_list). So ``sacctmgr add account 2026_00A`` is stored and reported
     as ``2026_00a`` and a mixed-case query still matches. Every account-name
     key and lookup in this emulator routes through here to reproduce that.
     ``None`` and ``""`` pass through unchanged (blank parent / no filter).
@@ -100,21 +99,21 @@ class QOS:
     name: str
     flags: str = ""
     grp_tres: str = ""
-    # Allocation budget (slurmdb_qos_rec_t.grp_tres_mins, slurmdb.h) as a
+    # Allocation budget (slurm://slurm/slurmdb.h#slurmdb_qos_rec_t.grp_tres_mins) as a
     # TRES string, e.g. "billing=14428800,gres/gpu=216000". Written by
     # ``modify qos … set GrpTRESMins=…`` with merge semantics (see
     # sacctmgr._combine_tres_string).
     grp_tres_mins: str = ""
     # Accrued usage (slurmdb_qos_usage_t.usage_raw). ``set RawUsage=<value>``
-    # on a QoS is a real sacctmgr option (qos_functions.c _set_rec, "RawUsage").
+    # on a QoS is a real sacctmgr option (slurm://src/sacctmgr/qos_functions.c#"RawUsage").
     usage_raw: float = 0.0
     max_jobs: int = -1
     max_submit: int = -1
     max_wall: str = ""
     min_tres_per_job: str = ""
-    # slurmdb_qos_rec_t: priority (slurmdb.h:1202), grace_time seconds
-    # (slurmdb.h:1082), and per-job/node/user TRES limits
-    # (max_tres_pj/pn/pu, slurmdb.h:1140/1146/1152).
+    # slurmdb_qos_rec_t: priority (slurm://slurm/slurmdb.h#slurmdb_qos_rec_t.priority), grace_time seconds
+    # (slurm://slurm/slurmdb.h#slurmdb_qos_rec_t.grace_time), and per-job/node/user TRES limits
+    # (max_tres_pj/pn/pu, slurm://slurm/slurmdb.h#slurmdb_qos_rec_t.max_tres_pj.max_tres_pn.max_tres_pu).
     priority: int = -1
     grace_time: int = -1
     max_tres_per_job: str = ""
@@ -141,10 +140,10 @@ class Association:
     # parent_acct is stored on the account-level association (user == "").
     # User associations leave it unset, matching real Slurm where
     # ``assoc->parent_acct`` is NULL for user rows (see
-    # as_mysql_assoc.c:2116-2126) so ParentName prints blank for them.
+    # slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_cluster_get_assocs) so ParentName prints blank for them.
     parent: Optional[str] = None
     # QoS the association may request (slurmdb_assoc_rec_t.qos_list,
-    # slurm/slurmdb.h:708) and its default (def_qos_id, slurmdb.h:612).
+    # slurm://slurm/slurmdb.h#slurmdb_assoc_rec_t.partition) and its default (def_qos_id, slurm://slurm/slurmdb.h#slurmdb_assoc_rec_t.def_qos_id).
     # Empty qos_list means "inherit the account/parent QOS".
     qos_list: list[str] = field(default_factory=list)
     def_qos: str = ""
