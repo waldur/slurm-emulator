@@ -4,82 +4,18 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
-
-### Fixed
-- `sshare GrpTRESRaw` renders the `energy` TRES as joules/60 (it was hours×60,
-  3600× too large) — `usage_tres_raw[i] / 60` in slurm://src/sshare/process.c#process.
-- `sacctmgr show tres` and `GET /slurmdb/v0.0.4x/tres/` derive TRES ids from one
-  table (`emulator/core/tres.py`: static 1–8, dynamic from 1001); `node` is now
-  listed, so `sreport -T node` works and `-T node -t Percent` fails like real
-  sreport (slurm://src/sreport/sreport.c#_build_tres_list).
-- Usage records fold the account name like accounts/associations do, so usage
-  injected under `MyProj` shows up in `sreport`/`sacct`/`sshare`.
-- `sacct Partition` and slurmrestd `partition` render the record's partition.
-- `POST /api/submit-report` creates one usage record per user and report (all
-  TRES keys summed into node-hours), so an explicit `energy` lands on that
-  record regardless of key order and the power model is applied once; a
-  zero-node-hour (energy-only) record renders `cpu=0,…` rather than a full node.
-- Scheduler-completed jobs carry the standard-node TRES breakdown (incl. 4 GPUs)
-  so their energy matches injected usage of the same size.
-- `sreport` accepts clustered short flags (`-nP`, `-nTenergy`), `-h`, empty
-  `start=`/`end=` (default window, `parse_time("")` = 0) and
-  `YYYY-MM-DD HH:MM` (slurm://src/common/parse_time.c#_get_time).
+## [0.9.4] - 2026-08-30
 
 ### Added
-- `sreport cluster AccountUtilizationByUser` emulation as an aggregate usage
-  source for portal energy reporting (`emulator/commands/sreport.py`,
-  `uv run sreport`, SSH dispatch): `start=`/`end=` on the simulated clock,
-  `accounts=`/`users=`/`cluster=`/`format=`, `-T`/`--tres=` incl. `energy`,
-  `-t Seconds|Minutes|Hours|Percent|…`, `-p`/`-P`/`-n`; account total, per-user
-  and sub-account rows exactly as real sreport prints them
-  (slurm://src/sreport/cluster_reports.c#cluster_account_by_user,
-  slurm://src/sreport/common.c#sreport_get_time_str,
-  slurm://src/common/slurmdb_defs.c#slurmdb_report_set_start_end_time).
-  As in real Slurm there is no `-t Joules` (energy is what `-t Seconds`
-  prints) and an unknown TRES list is `sreport: fatal: No valid TRES given`.
-- `energy` TRES (joules, slurm://src/common/slurmdb_defs.h#TRES_ENERGY) on
-  every usage record from a per-node/per-partition/per-GPU power model
-  (`emulator/core/energy.py`: `SLURM_EMULATOR_NODE_POWER_W`,
-  `SLURM_EMULATOR_PARTITION_POWER_W`, `SLURM_EMULATOR_GPU_POWER_W`), for
-  injected usage and for jobs completed by the scheduler; `energy` listed in
-  `sacctmgr show tres`; `UsageRecord.partition`.
-- `POST /api/submit-report` takes `energy` (aggregate or per user) and
-  `partition` to seed exact monthly figures; `regular_access_energy` scenario.
-- `sacct ConsumedEnergy` / `ConsumedEnergyRaw`
-  (slurm://src/sacct/print.c#PRINT_CONSUMED_ENERGY_RAW,
-  slurm://src/common/slurm_protocol_api.c#convert_num_unit2). The ReqTRES
-  string is unchanged, so the site-agent invocation output is byte-identical.
-- The emulator can be launched as any tracked Slurm release via
-  `SLURM_EMULATOR_SLURM_VERSION` (`24.11`, `25.05`, `25.11`, `26.05` default,
-  `master`; Helm value `slurmVersion`). The slurmrestd plane then serves that
-  release's data_parser prefix (`/slurm/v0.0.42/` … `/slurm/v0.0.46/`), reports
-  its release in `meta.slurm` and `/conf`, and renders the tables that changed
-  across releases in the matching dialect: `CONTROLLER_PING` (`pinged`/`mode`
-  through v0.0.44, `status` from v0.0.45), `SLURMDBD_PING` (`status` from
-  v0.0.45), `PARTITION_INFO` memory-per-CPU limits (dropped on master).
-  `tests/test_slurmrestd_dialects.py` covers every dialect; CI runs the full
-  suite once per tracked version.
-- Slurm source-parity tooling: `scripts/slurm_src.py` keeps a local cache of
-  https://github.com/SchedMD/slurm (bare clone + one worktree per tracked
-  version, `[tool.slurm-parity]` in `pyproject.toml`: 26.05 primary, plus
-  25.11, 25.05, 24.11 and `master`), and `scripts/check_slurm_refs.py` verifies
-  every `slurm://path#symbol[@versions]` reference against each version, in
-  pre-commit and CI. See `docs/slurm-parity.md`.
-- `emulator.slurm_version` (`SLURM_EMULATOR_SLURM_VERSION`) and the
-  `slurm_version` pytest marker for version-dependent parity behaviour.
+- Add `sreport cluster AccountUtilizationByUser` emulation with account aggregates and `-T energy` TRES for portal energy reporting
+- Add energy TRES power model (`SLURM_EMULATOR_NODE_POWER_W`, `SLURM_EMULATOR_PARTITION_POWER_W`, `SLURM_EMULATOR_GPU_POWER_W`)
+- Add `SLURM_EMULATOR_SLURM_VERSION` to launch the emulator as any tracked Slurm release (24.11, 25.05, 25.11, 26.05, master) with matching slurmrestd API version prefix and response shapes
+- Add `scripts/slurm_src.py` to manage a local cache of SchedMD Slurm source worktrees per tracked version
+- Add `scripts/check_slurm_refs.py` to verify `slurm://` source references in pre-commit and CI
 
 ### Changed
-- slurmrestd emulation now claims Slurm 26.05 / data_parser `v0.0.45` (the current
-  stable release) instead of the unreleased 26.11 / `v0.0.46`: URL prefixes are
-  `/slurm/v0.0.45/` and `/slurmdb/v0.0.45/`, `meta.slurm.release` is `26.05.3`,
-  and the FireCREST examples set `api_version: 0.0.45`. The field tables the
-  emulator serves are identical between the two parser versions
-  (slurm://src/plugins/data_parser/v0.0.45/parsers.c@26.05+).
-- All real-Slurm source references in code, tests and docs migrated from
-  `file.c:<line>` to symbol-anchored `slurm://` references (line numbers had
-  already drifted); per-row line comments on the `sacctmgr`/`sacct` field
-  tables replaced by one table-level reference.
+- Trace emulator command, slurmrestd and database behaviour to real Slurm source via `slurm://<path>#<symbol>` references
+- Run the test suite once per tracked Slurm version in CI
 
 ## [0.9.3] - 2026-08-28
 
