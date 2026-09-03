@@ -16,6 +16,7 @@ from emulator.api.slurmrestd.auth import slurmrestd_auth
 from emulator.api.slurmrestd.envelope import (
     ESLURM_REST_INVALID_QUERY,
     SLURMDBD_PLUGIN,
+    SlurmdbRequestError,
     found_nothing_warning,
     make_response,
     slurm_error,
@@ -667,6 +668,19 @@ def _upsert_association(state: RequestState, entry: dict[str, Any]) -> bool:
     if user and state.database.get_user(user) is None:
         state.database.add_user(user, account)
 
+    # slurmdbd applies the update and then checks every association under the
+    # account for DefaultQOS-in-list (as_mysql_assoc.c#_foreach_check_default_qos),
+    # rolling back on a violation — the same check the CLI path enforces.
+    account_before = state.database.get_account(account)
+    qos_snapshot = (
+        (account_before.qos, account_before.default_qos) if account_before is not None else None
+    )
+    rows_snapshot = [
+        (row, list(row.qos_list), row.def_qos)
+        for row in state.database.associations.values()
+        if row.account == fold_account(account)
+    ]
+
     if user:
         qos_body = entry.get("qos")
         qos_list = [str(q) for q in qos_body] if isinstance(qos_body, list) and qos_body else None
@@ -714,6 +728,32 @@ def _upsert_association(state: RequestState, entry: dict[str, Any]) -> bool:
                 shares = shares.get("number") if shares.get("set") else None
             if shares is not None:
                 account_obj.fairshare = int(shares)
+
+    account_after = state.database.get_account(account)
+    if account_after is None:
+        return True
+    violations = state.database.default_qos_violations(account_after)
+    if violations:
+        # Roll back exactly what this entry touched, then surface slurmdbd's
+        # ESLURM_NO_REMOVE_DEFAULT_QOS text as the enveloped error.
+        if qos_snapshot is not None:
+            account_after.qos, account_after.default_qos = qos_snapshot
+        for row, qos_list, def_qos in rows_snapshot:
+            row.qos_list, row.def_qos = qos_list, def_qos
+        new_row = state.database.get_association(
+            user, account, cluster=cluster, partition=partition
+        )
+        if user and new_row is not None and all(row is not new_row for row, _, _ in rows_snapshot):
+            state.database.associations = {
+                k: v for k, v in state.database.associations.items() if v is not new_row
+            }
+        raise SlurmdbRequestError(
+            "These associations don't have access to their default qos.\n"
+            + "\n".join(violations)
+            + "\nThis request would make it so some associations would not have access to"
+            " their default qos.",
+            state.cluster,
+        )
     return True
 
 

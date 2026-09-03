@@ -83,6 +83,23 @@ class SlurmrestdRejectError(Exception):
         self.error_number = error_number
 
 
+class SlurmdbRequestError(Exception):
+    """slurmdbd refused the request after validation: enveloped error, HTTP 400.
+
+    Carries the slurmdbd message so the response ``errors[0].description``
+    reads like ``sacctmgr`` output (e.g. the DefaultQOS check in
+    slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_foreach_check_default_qos).
+    """
+
+    def __init__(
+        self, description: str, cluster: str, error_number: int = ESLURM_REST_INVALID_QUERY
+    ):
+        super().__init__(description)
+        self.description = description
+        self.cluster = cluster
+        self.error_number = error_number
+
+
 def strerror(error_number: int) -> str:
     return _STRERROR.get(error_number, f"Unknown error {error_number}")
 
