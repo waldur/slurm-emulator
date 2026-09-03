@@ -4,10 +4,10 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.9.5] - 2026-09-03
 
-### Changed
-- `sacctmgr modify account` / `modify user` now enforce slurmdbd's DefaultQOS check: a change that leaves any association under the account with an effective default outside its QoS list is rejected with the real "These associations don't have access to their default qos" error and rolled back. Reproduces the site-agent pause failure seen at CSCS (`set qos=stop` on an account with `DefaultQOS=normal`).
+### Fixed
+- Enforce slurmdbd's check that the default QoS must be in the association's QoS list when swapping QoS via `sacctmgr modify`
 
 ## [0.9.4] - 2026-08-30
 
