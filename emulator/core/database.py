@@ -364,6 +364,39 @@ class SlurmDatabase:
             account=name, user="", cluster=self.current_cluster, parent=parent
         )
 
+    def default_qos_violations(self, account: Account) -> list[str]:
+        """Associations under ``account`` whose effective DefaultQOS is not in their QoS list.
+
+        After applying a modify, slurmdbd re-reads the affected associations
+        with inherited values filled in and requires each effective DefaultQOS
+        to be in its effective QoS list
+        (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_foreach_check_default_qos);
+        any violation rolls the whole request back. A user row without its own
+        QosLevel/DefaultQOS inherits the account's, so ``set qos=<x>`` on an
+        account that has a default fails unless ``defaultqos=`` moves with it
+        in the same command, and a child with an explicit default outside the
+        new list blocks the account-level change. Returns one formatted line
+        per violating association, in slurmdbd's layout.
+        """
+        account_qos = [q for q in account.qos.split(",") if q]
+        lines: list[str] = []
+        for assoc in self.associations.values():
+            if assoc.account != account.name:
+                continue
+            def_qos = assoc.def_qos or account.default_qos
+            if not def_qos:
+                continue
+            qos_list = assoc.qos_list or account_qos
+            if def_qos in qos_list:
+                continue
+            line = f"  DefQOS = {def_qos:<10} C = {assoc.cluster:<10} A = {assoc.account:<20}"
+            if assoc.user:
+                line += f" U = {assoc.user:<9}"
+                if assoc.partition:
+                    line += f" P = {assoc.partition}"
+            lines.append(line)
+        return lines
+
     def set_account_parent(
         self, name: str, parent: Optional[str], cluster: Optional[str] = None
     ) -> None:

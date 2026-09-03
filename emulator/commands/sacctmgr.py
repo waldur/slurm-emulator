@@ -718,6 +718,11 @@ class SacctmgrEmulator:
         if not account:
             return self._nothing_modified()
 
+        # slurmdbd applies the whole modify inside one transaction and rolls it
+        # back if the DefaultQOS check below fails, so keep the pre-modify QoS
+        # state to restore on rejection.
+        previous_qos, previous_default_qos = account.qos, account.default_qos
+
         # Process set parameters
         modifications = []
         for arg in args[set_index + 1 :]:
@@ -796,6 +801,11 @@ class SacctmgrEmulator:
                         self.database.reset_raw_usage(account.name)
                         modifications.append("RawUsage=0")
 
+        violations = self.database.default_qos_violations(account)
+        if violations:
+            account.qos, account.default_qos = previous_qos, previous_default_qos
+            return self._fail(self._default_qos_error(violations))
+
         self.database.save_state()
 
         return f" Modified account...\n  {account.name}\n Settings\n  " + "\n  ".join(modifications)
@@ -858,6 +868,8 @@ class SacctmgrEmulator:
         if not rows:
             return self._nothing_modified()
 
+        snapshot = [(row, list(row.qos_list), row.def_qos) for row in rows]
+
         modifications: list[str] = []
         for arg in set_args:
             if "=" not in arg:
@@ -876,9 +888,30 @@ class SacctmgrEmulator:
         if not modifications:
             return self._nothing_modified()
 
+        violations: list[str] = []
+        for account_name in sorted({row.account for row in rows}):
+            account_obj = self.database.get_account(account_name)
+            if account_obj is not None:
+                violations.extend(self.database.default_qos_violations(account_obj))
+        if violations:
+            for row, qos_list, def_qos in snapshot:
+                row.qos_list, row.def_qos = qos_list, def_qos
+            return self._fail(self._default_qos_error(violations))
+
         self.database.save_state()
         return f" Modified user associations...\n  {username}\n Settings\n  " + "\n  ".join(
             modifications
+        )
+
+    @staticmethod
+    def _default_qos_error(violations: list[str]) -> str:
+        """Format slurmdbd's ESLURM_NO_REMOVE_DEFAULT_QOS message as sacctmgr prints it."""
+        return (
+            " error: \n These associations don't have access to their default qos.\n"
+            " Please give them access before they the default can be set to this.\n"
+            + "\n".join(violations)
+            + "\n\n Error with request: This request would make it so some associations"
+            " would not have access to their default qos.\n"
         )
 
     def _remove_account(self, args: list[str]) -> str:
@@ -1233,7 +1266,9 @@ class SacctmgrEmulator:
             # user rows print blank (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_cluster_get_assocs).
             "ParentName": (assoc.parent or "") if assoc.user == "" else "",
             "QOS": qos,
-            "Def QOS": assoc.def_qos,
+            # Real sacctmgr shows the inherited default on the row (as_mysql_get_assocs fills
+            # def_qos_id from the parent), so the account default surfaces here too.
+            "Def QOS": assoc.def_qos or (account_obj.default_qos if account_obj else ""),
             "GrpSubmit": (
                 str(account_obj.limits["GrpSubmitJobs"])
                 if account_obj and "GrpSubmitJobs" in account_obj.limits

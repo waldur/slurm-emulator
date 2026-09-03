@@ -155,7 +155,8 @@ class TestModifyAccountQosList:
 
     def test_defaultqos_sets_account_default(self, tmp_path):
         em = _emulator(tmp_path)
-        em.handle_command(["modify", "account", "acct1", "set", "defaultqos=boost"])
+        # The default has to be in the QoS list (slurmdbd's DefaultQOS check).
+        em.handle_command(["modify", "account", "acct1", "set", "qos+=boost", "defaultqos=boost"])
         assert em.database.get_account("acct1").default_qos == "boost"
 
     def test_add_then_remove_operational_qos_preserves_grant(self, tmp_path):
@@ -185,3 +186,81 @@ class TestQosGrantRoundTrip:
         rows = reloaded.list_user_associations("alice", "acct1")
         assert rows[0].qos_list == ["normal", "boost"]
         assert rows[0].def_qos == "boost"
+
+
+class TestDefaultQosAccessCheck:
+    """slurmdbd rejects a modify that leaves an effective DefaultQOS outside the QoS list.
+
+    slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_foreach_check_default_qos
+    runs after the modify is applied and rolls the whole request back. This is
+    what the site-agent pause swap (``set qos=<paused>``) hits on clusters that
+    set a DefaultQOS on accounts.
+    """
+
+    def test_replace_list_without_default_is_rejected_and_rolled_back(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["modify", "account", "acct1", "set", "defaultqos=normal"])
+        out = em.handle_command(["modify", "account", "acct1", "set", "qos=stop"])
+        assert em.exit_code == 1
+        assert "These associations don't have access to their default qos" in out
+        assert "DefQOS = normal" in out
+        assert "A = acct1" in out
+        acct = em.database.get_account("acct1")
+        assert acct.qos == "normal"
+        assert acct.default_qos == "normal"
+
+    def test_replace_list_and_default_in_one_command_passes(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["modify", "account", "acct1", "set", "defaultqos=normal"])
+        em.handle_command(["modify", "account", "acct1", "set", "qos=stop", "defaultqos=stop"])
+        assert em.exit_code == 0
+        acct = em.database.get_account("acct1")
+        assert acct.qos == "stop"
+        assert acct.default_qos == "stop"
+
+    def test_no_default_keeps_plain_replace(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["modify", "account", "acct1", "set", "qos=stop"])
+        assert em.exit_code == 0
+        assert em.database.get_account("acct1").qos == "stop"
+
+    def test_child_inheriting_default_follows_account_swap(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["modify", "account", "acct1", "set", "defaultqos=normal"])
+        em.handle_command(["add", "user", "alice", "account=acct1"])
+        em.handle_command(["modify", "account", "acct1", "set", "qos=stop", "defaultqos=stop"])
+        assert em.exit_code == 0
+        assert em.database.get_account("acct1").qos == "stop"
+
+    def test_child_with_explicit_default_blocks_account_swap(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["add", "user", "alice", "account=acct1", "DefaultQOS=normal"])
+        out = em.handle_command(
+            ["modify", "account", "acct1", "set", "qos=stop", "defaultqos=stop"]
+        )
+        assert em.exit_code == 1
+        assert "U = alice" in out
+        acct = em.database.get_account("acct1")
+        assert acct.qos == "normal"
+        assert acct.default_qos == ""
+
+    def test_user_default_outside_list_is_rejected_and_rolled_back(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["add", "user", "alice", "account=acct1", "QosLevel=normal,boost"])
+        out = em.handle_command(
+            ["modify", "user", "alice", "set", "DefaultQOS=high", "where", "account=acct1"]
+        )
+        assert em.exit_code == 1
+        assert "U = alice" in out
+        rows = em.database.list_user_associations("alice", "acct1")
+        assert rows[0].def_qos == ""
+        assert rows[0].qos_list == ["normal", "boost"]
+
+    def test_user_default_inside_list_passes(self, tmp_path):
+        em = _emulator(tmp_path)
+        em.handle_command(["add", "user", "alice", "account=acct1", "QosLevel=normal,boost"])
+        em.handle_command(
+            ["modify", "user", "alice", "set", "DefaultQOS=boost", "where", "account=acct1"]
+        )
+        assert em.exit_code == 0
+        assert em.database.list_user_associations("alice", "acct1")[0].def_qos == "boost"

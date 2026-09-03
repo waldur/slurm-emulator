@@ -504,10 +504,64 @@ class TestAccountLevelAssociationWrites:
         restd.post(
             f"/slurmdb/{V}/associations/",
             headers=auth_headers,
-            json={"associations": [{"account": "proj1", "default": {"qos": "fast"}}]},
+            json={
+                "associations": [
+                    {"account": "proj1", "qos": ["normal", "fast"], "default": {"qos": "fast"}}
+                ]
+            },
         )
         assoc = self._account_assoc(restd, auth_headers)
         assert assoc["default"]["qos"] == "fast"
+
+    def test_default_qos_outside_list_is_rejected(self, restd, auth_headers):
+        """Slurmdbd's DefaultQOS check applies to REST updates too.
+
+        slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_foreach_check_default_qos
+        runs after the update is applied and rolls it back when an effective
+        default is not in the QoS list.
+        """
+        self._create_account(restd, auth_headers)
+        before = self._account_assoc(restd, auth_headers)
+        response = restd.post(
+            f"/slurmdb/{V}/associations/",
+            headers=auth_headers,
+            json={"associations": [{"account": "proj1", "default": {"qos": "fast"}}]},
+        )
+        assert response.status_code == 400
+        assert "default qos" in response.json()["errors"][0]["description"]
+        after = self._account_assoc(restd, auth_headers)
+        assert after["qos"] == before["qos"]
+        assert after["default"]["qos"] == before["default"]["qos"]
+
+    def test_qos_list_swap_without_default_is_rejected_and_rolled_back(self, restd, auth_headers):
+        """The site-agent pause swap (``qos=[stop]``) on an account with a default."""
+        self._create_account(restd, auth_headers)
+        restd.post(
+            f"/slurmdb/{V}/associations/",
+            headers=auth_headers,
+            json={"associations": [{"account": "proj1", "default": {"qos": "normal"}}]},
+        )
+        response = restd.post(
+            f"/slurmdb/{V}/associations/",
+            headers=auth_headers,
+            json={"associations": [{"account": "proj1", "qos": ["stop"]}]},
+        )
+        assert response.status_code == 400
+        assoc = self._account_assoc(restd, auth_headers)
+        assert assoc["qos"] == ["normal"]
+        assert assoc["default"]["qos"] == "normal"
+
+        response = restd.post(
+            f"/slurmdb/{V}/associations/",
+            headers=auth_headers,
+            json={
+                "associations": [{"account": "proj1", "qos": ["stop"], "default": {"qos": "stop"}}]
+            },
+        )
+        assert response.status_code == 200
+        assoc = self._account_assoc(restd, auth_headers)
+        assert assoc["qos"] == ["stop"]
+        assert assoc["default"]["qos"] == "stop"
 
     def test_shares_raw_roundtrip_plain_and_tristate(self, restd, auth_headers):
         self._create_account(restd, auth_headers)
