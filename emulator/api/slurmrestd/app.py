@@ -20,9 +20,13 @@ from emulator import __version__
 from emulator.api.slurmrestd.envelope import (
     ESLURM_REST_UNKNOWN_URL,
     ESLURM_REST_UNKNOWN_URL_METHOD,
+    SLURMDBD_PLUGIN,
+    SlurmdbRequestError,
     SlurmrestdRejectError,
     api_version,
+    make_response,
     reject_response,
+    slurm_error,
 )
 from emulator.api.slurmrestd.routers import slurmctld, slurmdb
 
@@ -56,6 +60,19 @@ def create_app() -> FastAPI:
     )
     app.include_router(slurmdb.router)
     app.include_router(slurmctld.router)
+
+    @app.exception_handler(SlurmdbRequestError)
+    async def handle_slurmdb_request_error(
+        request: Request, exc: SlurmdbRequestError
+    ) -> JSONResponse:
+        # A validated-then-refused slurmdbd update (e.g. the DefaultQOS check)
+        # comes back enveloped, like any other handler-level error.
+        return make_response(
+            request,
+            SLURMDBD_PLUGIN,
+            exc.cluster,
+            errors=[slurm_error(exc.description, exc.error_number, request.url.path)],
+        )
 
     @app.exception_handler(SlurmrestdRejectError)
     async def handle_reject(_request: Request, exc: SlurmrestdRejectError) -> PlainTextResponse:
