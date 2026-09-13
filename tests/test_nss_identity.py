@@ -13,6 +13,7 @@ slurm://src/sacctmgr/common.c#commit_check) and sreport's gecos lookup
 """
 
 import json
+import subprocess
 from datetime import datetime
 
 import pytest
@@ -183,6 +184,64 @@ class TestSshPlane:
         out, err, code = server._run_slurm("ghost", ["id", "-u"])
         assert (out, code) == ("", 1)
         assert err == "id: 'ghost': no such user\n"
+
+
+class TestSshTimeoutWrapper:
+    """FireCREST prefixes every SSH command with coreutils ``timeout N``."""
+
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            ("timeout 10 id", ["id"]),
+            ("timeout 10 sacct -P -n -j 7", ["sacct", "-P", "-n", "-j", "7"]),
+            (
+                "timeout -s KILL -k 5 10 /usr/bin/scontrol show job 7",
+                ["scontrol", "show", "job", "7"],
+            ),
+            ("timeout --signal=TERM 10 squeue", ["squeue"]),
+            ("/usr/bin/timeout 10 sbatch job.sh", ["sbatch", "job.sh"]),
+            ("id -u", ["id", "-u"]),
+            ("timeout 10 ls -la", None),
+            ("timeout 10", None),
+            ("ls", None),
+        ],
+    )
+    def test_slurm_argv(self, command, expected):
+        assert server._slurm_argv(command) == expected  # noqa: SLF001
+
+
+class TestShellRunsAsLoginUser:
+    def test_kwargs_when_root_in_nss_mode(self, nss_on, monkeypatch):  # noqa: ARG002
+        monkeypatch.setattr(server.os, "geteuid", lambda: 0)
+        assert server._run_as_kwargs("hpc_9001") == {  # noqa: SLF001
+            "user": 9001,
+            "group": 9001,
+            "extra_groups": [9001, 5000],
+        }
+        assert server._run_as_kwargs("ghost") == {}  # noqa: SLF001
+
+    def test_no_switch_without_root_or_nss(self, nss_on, monkeypatch):  # noqa: ARG002
+        monkeypatch.setattr(server.os, "geteuid", lambda: 1000)
+        assert server._run_as_kwargs("hpc_9001") == {}  # noqa: SLF001
+        monkeypatch.setattr(server.os, "geteuid", lambda: 0)
+        monkeypatch.delenv(nss.ENV_VAR)
+        assert server._run_as_kwargs("hpc_9001") == {}  # noqa: SLF001
+
+    def test_run_shell_passes_identity(self, nss_on, monkeypatch, tmp_path):  # noqa: ARG002
+        monkeypatch.setenv("SLURM_EMULATOR_FS_ROOT", str(tmp_path / "fs"))
+        monkeypatch.setattr(server.os, "geteuid", lambda: 0)
+        monkeypatch.setattr(server.os, "chown", lambda *a: None)
+        seen = {}
+
+        def fake_run(argv, **kwargs):
+            seen.update(kwargs)
+            return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+
+        monkeypatch.setattr(server.subprocess, "run", fake_run)
+        assert server._run_shell("hpc_9001", "id") == ("ok\n", "", 0)  # noqa: SLF001
+        assert (seen["user"], seen["group"], seen["extra_groups"]) == (9001, 9001, [9001, 5000])
+        assert seen["env"]["USER"] == "hpc_9001"
+        assert seen["env"]["HOME"].endswith("/home/hpc_9001")
 
 
 class TestIdCommand:

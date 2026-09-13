@@ -389,7 +389,12 @@ With the mode on:
   ` There is no uid for user 'x'` (exit 1) unless `-i`/`--immediate` is given,
   mirroring real sacctmgr's prompt; the REST `/slurmdb` user upsert is not
   gated, so a site agent can create accounts before the directory entry exists;
-- `sreport` fills `Proper Name` from the gecos field.
+- `sreport` fills `Proper Name` from the gecos field;
+- when the emulator runs as root (the Docker image does), shell commands over
+  SSH run *as the login user* — uid, gid, supplementary groups, `$HOME` —
+  so `id`, `stat`, `chown` and file ownership behave like a real login node;
+  a leading coreutils `timeout N` wrapper (which FireCREST puts in front of
+  every SSH command) is stripped before matching the emulated Slurm binaries.
 
 Try it with the FireCREST UI stack:
 

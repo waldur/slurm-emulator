@@ -16,8 +16,10 @@ This is NOT a real sshd. For each SSH ``exec`` request we either:
   still work (see ``_command_env`` / ``_gnu_gnubin_dirs``).
 
 Security: shell commands run as the emulator's own OS user, confined only
-by the sandbox working directory. This is a dev/test tool — do not expose
-it to untrusted clients.
+by the sandbox working directory — except in NSS mode with the emulator
+running as root, where they run as the resolved login user (uid/gid/groups
+from the OS), so ``id`` and file ownership match a real login node. This is
+a dev/test tool — do not expose it to untrusted clients.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ import platform
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from emulator.commands.dispatcher import SlurmEmulator
 from emulator.core import nss
@@ -70,7 +72,44 @@ def _fs_root() -> Path:
 def _user_home(user: str) -> Path:
     home = _fs_root() / "home" / (user or "root")
     home.mkdir(parents=True, exist_ok=True)
+    identity = _login_identity(user)
+    if identity is not None:
+        # Created by the emulator (root); hand it to the login user so the
+        # commands running as that user can write into it.
+        st = home.stat()
+        if (st.st_uid, st.st_gid) != (identity.uid, identity.gid):
+            os.chown(home, identity.uid, identity.gid)
     return home
+
+
+def _login_identity(user: str) -> Optional[nss.Identity]:
+    """The OS identity shell commands should run as, or ``None`` to stay as we are.
+
+    Only in NSS mode, only when the login user resolves, and only when the
+    emulator itself is root (dropping privileges needs it). Otherwise commands
+    keep running as the emulator's own OS user, as they always have.
+    """
+    if not nss.enabled() or os.geteuid() != 0:
+        return None
+    return nss.resolve(user)
+
+
+def _run_as_kwargs(user: str) -> dict[str, Any]:
+    """``subprocess`` keywords that run a child as the SSH login user.
+
+    On a real login node the shell *is* the user: ``id``, file ownership and
+    ``$HOME`` all reflect the login identity, and clients (FireCREST's
+    ``/status/userinfo`` runs ``timeout N id`` and its filesystem calls
+    ``stat``/``chown`` as the user) assume exactly that.
+    """
+    identity = _login_identity(user)
+    if identity is None:
+        return {}
+    return {
+        "user": identity.uid,
+        "group": identity.gid,
+        "extra_groups": list(identity.groups or (identity.gid,)),
+    }
 
 
 # --- GNU/BSD coreutils portability ---
@@ -105,7 +144,7 @@ def gnu_coreutils_available() -> bool:
 
 def _command_env(user: str) -> dict[str, str]:
     home = _user_home(user)
-    env = {**os.environ, "HOME": str(home), "USER": user or "root"}
+    env = {**os.environ, "HOME": str(home), "USER": user or "root", "LOGNAME": user or "root"}
     gnubin = _gnu_gnubin_dirs()
     if gnubin:
         env["PATH"] = os.pathsep.join((*gnubin, env.get("PATH", "")))
@@ -276,6 +315,7 @@ def _run_shell(user: str, command: str) -> tuple[str, str, int]:
             timeout=_SHELL_TIMEOUT,
             env=env,
             check=False,
+            **_run_as_kwargs(user),
         )
     except subprocess.TimeoutExpired:
         return "", "command timed out\n", 124
@@ -302,6 +342,7 @@ async def _run_shell_async(user: str, command: str, process) -> tuple[str, str, 
             stderr=asyncio.subprocess.PIPE,
             cwd=str(home),
             env=env,
+            **_run_as_kwargs(user),
         )
     except OSError as exc:
         return "", f"{exc}\n", 1
@@ -341,14 +382,37 @@ async def _run_shell_async(user: str, command: str, process) -> tuple[str, str, 
     return out_b.decode(errors="replace"), err_b.decode(errors="replace"), code
 
 
+# ``timeout`` options that take a value (coreutils): -s/--signal, -k/--kill-after.
+_TIMEOUT_VALUE_OPTS = {"-s", "--signal", "-k", "--kill-after"}
+
+
+def _strip_timeout(argv: list[str]) -> list[str]:
+    """Drop a leading ``timeout [OPTION]... DURATION`` wrapper.
+
+    Clients run every SSH command through coreutils ``timeout`` (FireCREST's
+    BaseCommandWithTimeout sends ``timeout 10 id``, ``timeout 10 sacct …``);
+    the wrapped command is what must be matched against the emulated Slurm
+    binaries. The shell path is left alone — the real ``timeout`` works there.
+    """
+    if not argv or Path(argv[0]).name != "timeout":
+        return argv
+    i = 1
+    while i < len(argv) and argv[i].startswith("-"):
+        i += 2 if argv[i] in _TIMEOUT_VALUE_OPTS else 1
+    return argv[i + 1 :]  # skip DURATION too
+
+
 def _slurm_argv(command: str) -> Optional[list[str]]:
     """Return the parsed argv if this command is an emulator-handled Slurm binary."""
     stripped = command.strip()
     if not stripped:
         return None
-    if Path(stripped.split(None, 1)[0]).name not in _SLURM_BINS:
+    head = stripped.split(None, 1)[0]
+    if Path(head).name not in _SLURM_BINS and Path(head).name != "timeout":
         return None
-    argv = shlex.split(command)
+    argv = _strip_timeout(shlex.split(command))
+    if not argv or Path(argv[0]).name not in _SLURM_BINS:
+        return None
     argv[0] = Path(argv[0]).name
     return argv
 

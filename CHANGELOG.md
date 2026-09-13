@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 - Add opt-in NSS identity mode (`SLURM_EMULATOR_NSS=1`): user names resolve through the OS name service switch (sssd → LDAP in the Docker image, `examples/nss/`), so `id` prints the coreutils shape FireCREST's `/status/userinfo` parses, `POST /job/submit` / `sbatch` record real uid/gid/group (`user_id`/`group_id`/`group_name` per `slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_INFO@26.05+`, `scontrol show job` `UserId`/`GroupId`, sacct `UID`/`GID`/`Group` per `slurm://src/sacct/sacct.c#fields`) and refuse unknown users with `ESLURM_USER_ID_UNKNOWN` (`slurm://src/plugins/data_parser/v0.0.45/parsers.c#USER_ID@26.05+`); `sacctmgr add user` stops on a missing uid unless `-i` (`slurm://src/sacctmgr/user_functions.c#_check_uid`, `slurm://src/sacctmgr/common.c#commit_check`); `sreport` fills `Proper Name` from gecos
+- Run SSH-plane shell commands as the resolved login user (uid/gid/groups) when NSS mode is on and the emulator is root, and strip a leading coreutils `timeout N` wrapper before matching emulated Slurm binaries (FireCREST sends `timeout 10 id`)
 - Add `nss.enabled` / `nss.sssdConfSecret` to the Helm chart and install sssd + libnss-sss in the Docker image (started by the entrypoint only when the mode is on)
 
 ## [0.9.5] - 2026-09-03
