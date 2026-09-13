@@ -132,6 +132,9 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
             partition=job.partition,
             job_id=jid,
             state="COMPLETED",
+            uid=getattr(job, "uid", None),
+            gid=getattr(job, "gid", None),
+            group_name=getattr(job, "group_name", ""),
         )
     )
     return True

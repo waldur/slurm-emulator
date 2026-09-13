@@ -4,6 +4,21 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.0] - 2026-09-13
+
+### Added
+- Add opt-in NSS identity mode (`SLURM_EMULATOR_NSS=1`): user names resolve through the OS name service switch (sssd → LDAP in the Docker image, `examples/nss/`), so `id` prints the coreutils shape FireCREST's `/status/userinfo` parses, `POST /job/submit` / `sbatch` record real uid/gid/group (`user_id`/`group_id`/`group_name` per `slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_INFO@26.05+`, `scontrol show job` `UserId`/`GroupId`, sacct `UID`/`GID`/`Group` per `slurm://src/sacct/sacct.c#fields`) and refuse unknown users with `ESLURM_USER_ID_UNKNOWN` (`slurm://src/plugins/data_parser/v0.0.45/parsers.c#USER_ID@26.05+`); `sacctmgr add user` stops on a missing uid unless `-i` (`slurm://src/sacctmgr/user_functions.c#_check_uid`, `slurm://src/sacctmgr/common.c#commit_check`); `sreport` fills `Proper Name` from gecos
+- Run SSH-plane shell commands as the resolved login user (uid/gid/groups) when NSS mode is on and the emulator is root, and strip a leading coreutils `timeout N` wrapper before matching emulated Slurm binaries (FireCREST sends `timeout 10 id`)
+- Add `SLURM_EMULATOR_ACCOUNTING_ENFORCE` (`AccountingStorageEnforce=associations`, the default; chart `accountingEnforce`, `none` opts out): `POST /job/submit` and `sbatch` refuse a user with no association for the requested or default account with `ESLURM_INVALID_ACCOUNT` (`slurm://src/slurmctld/job_mgr.c#_job_create`, `slurm://src/common/assoc_mgr.c#assoc_mgr_fill_in_assoc`); unset/`none` keeps the legacy fallback
+- Add `SLURM_EMULATOR_CLUSTER_NAME` (slurm.conf `ClusterName`, chart `clusterName`) so associations, jobs and `/conf` are filed under the deployment's cluster name
+- Refuse removing a user's default association while others remain (`ESLURM_NO_REMOVE_DEFAULT_ACCOUNT`, `slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#as_mysql_remove_assocs`), make the first association the default, and delete the user with its last association, as slurmdbd/sacctmgr do
+- Seed the `root` user and its `root` association like slurmdbd does (`slurm://src/plugins/accounting_storage/mysql/as_mysql_cluster.c#as_mysql_add_clusters`), so submissions without a user fall into `root` under enforcement
+- Add `nss.enabled` / `nss.sssdConfSecret` to the Helm chart and install sssd + libnss-sss in the Docker image (started by the entrypoint only when the mode is on)
+
+### Changed
+- **Behaviour change:** job submission (`POST /job/submit`, `sbatch`) now enforces associations by default (`AccountingStorageEnforce=associations`): a user with no association for the requested or default account gets `ESLURM_INVALID_ACCOUNT` (HTTP 422) instead of silently landing in `root`. Set `SLURM_EMULATOR_ACCOUNTING_ENFORCE=none` (chart `accountingEnforce: none`) to restore the previous permissive behaviour. Deployments with a site agent `cluster_name` other than `default` must also set `SLURM_EMULATOR_CLUSTER_NAME`
+- NSS identities (uid/gid/groups) are re-resolved after `SLURM_EMULATOR_NSS_CACHE_TTL` seconds (60) instead of being cached for the process lifetime
+
 ## [0.9.5] - 2026-09-03
 
 ### Fixed

@@ -32,8 +32,13 @@ Output formatting and exit codes mirror real Slurm 26.05:
 
 Documented simplifications: ``-X``/``--allocations`` is a no-op (the
 emulator has no job steps, and real ``-X`` only filters step rows);
-``-a``/``--allusers`` is a no-op (no UID model); jobs are single-node
-(``node001``, partition ``compute``, matching the sinfo emulator).
+``-a``/``--allusers`` is a no-op (every caller sees every job — the
+emulator never compares the caller's uid to the job's); jobs are
+single-node (``node001``, partition ``compute``, matching the sinfo
+emulator). ``UID``/``GID``/``Group`` print the identity recorded at
+submission (slurm://src/sacct/print.c#PRINT_UID, ``PRINT_GID``,
+``PRINT_GROUP`` via ``gid_to_string``); without ``SLURM_EMULATOR_NSS``
+every job is uid/gid 1000 in a group named after the user.
 """
 
 import sys
@@ -69,6 +74,8 @@ _REGISTRY: list[FieldSpec] = [
     FieldSpec("ElapsedRaw", 10, truncate=False),
     FieldSpec("End", 19),
     FieldSpec("ExitCode", 8),
+    FieldSpec("GID", 6, truncate=False),
+    FieldSpec("Group", 9),
     FieldSpec("JobID", -12),
     FieldSpec("JobIDRaw", -12),
     FieldSpec("JobName", 10),
@@ -80,6 +87,8 @@ _REGISTRY: list[FieldSpec] = [
     FieldSpec("State", 10),
     FieldSpec("Submit", 19),
     FieldSpec("Timelimit", 10),
+    # UID precedes User in the real table, so ``-o U`` resolves to UID.
+    FieldSpec("UID", 6, truncate=False),
     FieldSpec("User", 9),
 ]
 
@@ -324,6 +333,8 @@ class SacctEmulator:
             "ElapsedRaw": str(elapsed_secs),
             "End": end.strftime("%Y-%m-%dT%H:%M:%S"),
             "ExitCode": exit_code,
+            "GID": str(record.gid if record.gid is not None else 1000),
+            "Group": record.group_name or record.user,
             "NNodes": "1",
             "NodeList": "node001",
             "ReqTRES": tres,
@@ -331,6 +342,7 @@ class SacctEmulator:
             "State": state,
             "Submit": start.strftime("%Y-%m-%dT%H:%M:%S"),
             "Timelimit": "UNLIMITED",
+            "UID": str(record.uid if record.uid is not None else 1000),
             "User": record.user,
         }
 

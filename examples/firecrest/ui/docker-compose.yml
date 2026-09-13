@@ -39,6 +39,9 @@ services:
     hostname: slurm
     environment:
       SLURM_EMULATOR_ENABLE_SSH: "1"
+      # Demo stack: nothing creates associations for fireuser, so keep the
+      # permissive pre-0.10 submit behaviour (the default enforces them).
+      SLURM_EMULATOR_ACCOUNTING_ENFORCE: "none"
       SLURM_EMULATOR_SSH_PORT: "22"        # API connects to slurm:22
       SLURM_EMULATOR_FS_ROOT: "/"          # so /home/<user> resolves in-container
       SLURM_EMULATOR_JOB_CLOCK: "wall"
@@ -71,6 +74,7 @@ services:
     hostname: slurm2
     environment:
       SLURM_EMULATOR_ENABLE_SSH: "1"
+      SLURM_EMULATOR_ACCOUNTING_ENFORCE: "none"
       SLURM_EMULATOR_SSH_PORT: "22"
       SLURM_EMULATOR_FS_ROOT: "/"
       SLURM_EMULATOR_JOB_CLOCK: "wall"

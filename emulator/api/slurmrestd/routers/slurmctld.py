@@ -12,10 +12,12 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Request
+from starlette.concurrency import run_in_threadpool
 
 from emulator.api.slurmrestd.auth import slurmrestd_auth
 from emulator.api.slurmrestd.envelope import (
     ESLURM_INVALID_JOB_ID,
+    ESLURM_USER_ID_UNKNOWN,
     SLURMCTLD_PLUGIN,
     found_nothing_warning,
     make_response,
@@ -32,6 +34,7 @@ from emulator.api.slurmrestd.schemas import (
     uint_no_val,
 )
 from emulator.api.slurmrestd.state import StateDep
+from emulator.core.accounting import admit_job
 from emulator.core.database import Job, SlurmDatabase
 from emulator.core.scheduler import advance_job_states, job_clock_now
 from emulator.slurm_version import at_least
@@ -192,10 +195,28 @@ async def submit_job(
 
     db = state.database
     user = str(job_desc.get("user_name") or getattr(request.state, "slurm_user", "root") or "root")
-    user_rec = db.get_user(user)
-    # A slurm job always has an account (the user's default association);
-    # fall back to the user's default, then "root", so it is never empty.
-    account = job_desc.get("account") or (user_rec.default_account if user_rec else "") or "root"
+    partition = job_desc.get("partition") or "compute"
+    # Admission as in slurmctld: the USER_ID parser must resolve the user
+    # (NSS mode, slurm://src/plugins/data_parser/v0.0.45/parsers.c#USER_ID@26.05+),
+    # then _job_create needs an association for the account
+    # (slurm://src/slurmctld/job_mgr.c#_job_create →
+    # slurm://src/common/assoc_mgr.c#assoc_mgr_fill_in_assoc). Both errnos
+    # are in the slurmctld range → 422 (slurm://src/common/http.c#http_status_from_error@25.11+).
+    # NSS lookups may block on the directory, so keep them off the event loop.
+    admission = await run_in_threadpool(
+        admit_job, db, user, job_desc.get("account") or "", partition
+    )
+    if admission.error is not None:
+        source = (
+            "job_desc_msg_t.user_id"
+            if admission.error == ESLURM_USER_ID_UNKNOWN
+            else "slurm_submit_batch_job()"
+        )
+        return _respond(
+            request, state, errors=[slurm_error(admission.message, admission.error, source)]
+        )
+    identity = admission.identity
+    account = admission.account
 
     jid = db.allocate_job_id()
     job = Job(
@@ -206,9 +227,10 @@ async def submit_job(
         submit_time=job_clock_now(state.time_engine),
         cluster=db.current_cluster,
         name=job_desc.get("name") or f"job_{jid}",
-        partition=job_desc.get("partition") or "compute",
+        partition=partition,
         qos=job_desc.get("qos") or "normal",
-        working_directory=job_desc.get("current_working_directory") or f"/home/{user}",
+        working_directory=job_desc.get("current_working_directory")
+        or (identity.home if identity and identity.home else f"/home/{user}"),
         script=script,
         standard_output=job_desc.get("standard_output") or "",
         standard_error=job_desc.get("standard_error") or "",
@@ -218,6 +240,9 @@ async def submit_job(
         time_limit=_submit_int(job_desc.get("time_limit"), None),
         environment=_env_to_dict(job_desc.get("environment")),
         constraints=job_desc.get("constraints") or "",
+        uid=identity.uid if identity else None,
+        gid=identity.gid if identity else None,
+        group_name=identity.group if identity else "",
     )
     db.add_job(job)
     state.commit()

@@ -1,0 +1,40 @@
+# Minimal RFC 2307 tree for the NSS identity example: one posixAccount and
+# its primary group, plus the read-only bind used by sssd.conf.
+#
+#   ldapadd -x -H ldap://localhost:3890 -D cn=admin,dc=example,dc=org -w admin -f seed.ldif
+#
+# Afterwards `docker compose exec slurm id hpc_9001` prints
+# uid=9001(hpc_9001) gid=9001(hpc_9001) groups=9001(hpc_9001).
+
+dn: ou=people,dc=example,dc=org
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=example,dc=org
+objectClass: organizationalUnit
+ou: groups
+
+dn: cn=readonly,dc=example,dc=org
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+cn: readonly
+description: Read-only bind for sssd
+userPassword: readonly
+
+dn: cn=hpc_9001,ou=groups,dc=example,dc=org
+objectClass: posixGroup
+cn: hpc_9001
+gidNumber: 9001
+
+dn: uid=hpc_9001,ou=people,dc=example,dc=org
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: hpc_9001
+cn: Test Person
+sn: Person
+gecos: Test Person
+uidNumber: 9001
+gidNumber: 9001
+homeDirectory: /home/hpc_9001
+loginShell: /bin/bash

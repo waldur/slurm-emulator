@@ -405,6 +405,16 @@ so they also appear in the accounting (`/slurmdb` / `sacct`) view. Configurable 
 - `SLURM_EMULATOR_JOB_CLOCK` = `wall` (default, real-time) or `time` (simulated clock)
 - `SLURM_EMULATOR_JOB_RUN_DELAY` (default 2s to RUNNING), `SLURM_EMULATOR_JOB_RUN_DURATION`
   (default 8s to COMPLETED)
+- `SLURM_EMULATOR_NSS` = `1` resolves user names through the OS NSS (`emulator/core/nss.py`;
+  sssd → LDAP inside the image) so `id`, `scontrol show job`, sacct `UID`/`GID`/`Group` and the
+  slurmrestd `user_id`/`group_id` carry real ids, and unknown users are refused on submit
+  (`ESLURM_USER_ID_UNKNOWN`) and on `sacctmgr add user` (unless `-i`). Unset = every user is 1000
+- `SLURM_EMULATOR_CLUSTER_NAME` = slurm.conf `ClusterName` (default `default`): sets `current_cluster`
+  at startup, so agent-created associations (`cluster=<name>`), jobs and `/conf` agree
+- `SLURM_EMULATOR_NSS_CACHE_TTL` (60 s) = how long a resolved identity incl. groups is trusted
+- `SLURM_EMULATOR_ACCOUNTING_ENFORCE` = `associations` (default; `none` opts out) refuses `POST /job/submit` / `sbatch` when the user has no association for the
+  account (`ESLURM_INVALID_ACCOUNT`, `emulator/core/accounting.py#admit_job`, the single admission
+  path for REST submit and `sbatch`); `none` = pre-0.10 fallback to root
 - `SLURM_EMULATOR_NODE_POWER_W` (500), `SLURM_EMULATOR_PARTITION_POWER_W` (`gpu=900,...`),
   `SLURM_EMULATOR_GPU_POWER_W` (300) = power model behind the `energy` TRES
   (`emulator/core/energy.py`); joules = node_hours×3600×W (+ GPU-hours×3600×W)

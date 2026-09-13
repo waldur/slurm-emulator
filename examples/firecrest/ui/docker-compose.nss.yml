@@ -1,0 +1,44 @@
+# Overlay: resolve user identities through LDAP (NSS identity mode).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.nss.yml up -d
+#   ldapadd -x -H ldap://localhost:3890 -D cn=admin,dc=example,dc=org -w admin \
+#           -f ../../nss/seed.ldif
+#   docker compose exec slurm id hpc_9001
+#   → uid=9001(hpc_9001) gid=9001(hpc_9001) groups=9001(hpc_9001)
+#
+# With SLURM_EMULATOR_NSS=1 the emulator asks libc (→ sssd → OpenLDAP) for
+# every user name: a job submitted as hpc_9001 records uid/gid 9001, `id`
+# over SSH returns the real coreutils shape FireCREST's /status/userinfo
+# parses, and `sbatch`/`POST /job/submit` for a name missing from the
+# directory fail like they would on a login node. sssd runs as root inside
+# the emulator container, so this overlay keeps the default (root) user.
+
+services:
+  openldap:
+    image: bitnami/openldap:2.6
+    environment:
+      LDAP_ROOT: "dc=example,dc=org"
+      LDAP_ADMIN_USERNAME: admin
+      LDAP_ADMIN_PASSWORD: admin
+      # The image seeds ou=users/ou=groups by default; seed.ldif brings its
+      # own ou=people / ou=groups tree, so start empty.
+      LDAP_SKIP_DEFAULT_TREE: "yes"
+      LDAP_ALLOW_ANON_BINDING: "yes"
+    ports:
+      - "${HOST_IP:-127.0.0.1}:3890:1389"
+    healthcheck:
+      test: ["CMD", "ldapsearch", "-x", "-H", "ldap://localhost:1389", "-b", "dc=example,dc=org", "-s", "base"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  slurm:
+    environment:
+      SLURM_EMULATOR_NSS: "1"
+    volumes:
+      # sssd insists on root:root 0600, which a bind mount cannot promise; the
+      # entrypoint installs a private 0600 copy from this path before starting.
+      - ../../nss/sssd.conf:/etc/slurm-emulator/sssd.conf:ro
+    depends_on:
+      openldap:
+        condition: service_healthy
