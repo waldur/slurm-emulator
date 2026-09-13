@@ -4,6 +4,11 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.6] - 2026-09-14
+
+### Added
+- Add opt-in NSS identity resolution (`SLURM_EMULATOR_NSS=1`) so user names resolve through the OS NSS: `id`, `scontrol show job`, sacct `UID`/`GID`/`Group` and slurmrestd `user_id`/`group_id` carry real ids, and unknown users are refused on job submit and `sacctmgr add user`
+
 ## [0.10.0] - 2026-09-13
 
 ### Added
