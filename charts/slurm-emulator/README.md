@@ -36,6 +36,8 @@ The planes are separate processes sharing the same JSON state files, so an accou
 | `ssh.port` | `2222` | |
 | `ssh.timeoutSeconds` | `30` | Per-command shell timeout. |
 | `ssh.hostKeySecret` | `""` | Secret with an `ssh_host_key` entry. Without it a new key is generated at every pod start. |
+| `nss.enabled` | `false` | Sets `SLURM_EMULATOR_NSS=1`: user names resolve through libc → sssd → LDAP, so `id`, `scontrol show job`, sacct and the slurmrestd job views carry real uids/gids. sssd runs as root — incompatible with a non-root `securityContext.runAsUser`. |
+| `nss.sssdConfSecret` | `""` | Secret with an `sssd.conf` key, mounted at `/etc/slurm-emulator/sssd.conf`; the entrypoint installs it root-only (0600) before starting sssd. A reference config and LDIF seed live in `examples/nss/`. |
 | `partitions` | `""` | Cluster topology, e.g. `gpu:8,compute:32` or `debug:1-4,compute:5-100`. Empty keeps the image default (`debug:1-4,compute:5-100`). |
 | `slurmVersion` | `""` | Slurm release the emulator presents as (`24.11`, `25.05`, `25.11`, `26.05`, `master`): sets the slurmrestd URL prefix, `meta.slurm.release` and version-specific response shapes. Empty = image default (26.05). |
 | `partitionQos` | `""` | Per-partition QoS gates, e.g. `gpu=allow:normal,high;gpu=qos:normal`. |
@@ -62,6 +64,7 @@ The planes are separate processes sharing the same JSON state files, so an accou
 - `ingress` / `gatewayApi` cover the HTTP planes only. The SSH plane is TCP and needs a `TCPRoute` or a `LoadBalancer`/`NodePort` Service instead.
 - Do not expose the dashboard without changing `auth.uiPassword`, or the slurmrestd plane without setting `auth.jwtKey` — the defaults accept `admin`/`admin` and any bearer token respectively. Note that only `/ui/` is behind Basic auth: the control API's `/api/*` routes on the same port are unauthenticated and no chart value changes that, so port 8080 needs a fronting proxy if it leaves the cluster.
 - Persistence is plain JSON; switching emulator versions may break the on-disk schema.
+- `nss.enabled` starts sssd inside the pod, which needs root: it cannot be combined with a non-root `securityContext`/`podSecurityContext`. Without a reachable directory the emulator keeps running with only `/etc/passwd` users resolvable.
 
 ## See also
 

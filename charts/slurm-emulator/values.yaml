@@ -38,6 +38,22 @@ ssh:
   # see a host-key change after each pod restart.
   hostKeySecret: ""
 
+# NSS identity mode (SLURM_EMULATOR_NSS=1): resolve user names through the
+# container's libc → sssd → LDAP instead of the built-in "everyone is uid
+# 1000" model, so `id` over SSH, `scontrol show job`, sacct and the slurmrestd
+# job views carry the directory's uid/gid, and submissions for unknown users
+# are refused like on a login node. Needs an sssd.conf (see examples/nss/) and
+# sssd running as root inside the pod — do not combine with a non-root
+# securityContext.runAsUser; the daemon will not start. Off by default because
+# without a directory there is nothing to resolve.
+nss:
+  enabled: false
+  # Name of a Secret holding the sssd configuration under the `sssd.conf` key.
+  # Mounted read-only at /etc/slurm-emulator/sssd.conf; the entrypoint installs
+  # it as a private root:root 0600 copy before starting sssd. Without it the
+  # mode still switches on but only /etc/passwd users resolve.
+  sssdConfSecret: ""
+
 # Cluster topology reported by sinfo and the slurmrestd partition endpoints.
 # Either counts ("gpu:8,compute:32") or explicit node ranges
 # ("debug:1-4,compute:5-100"). Empty keeps the image default.

@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Request
 from emulator.api.slurmrestd.auth import slurmrestd_auth
 from emulator.api.slurmrestd.envelope import (
     ESLURM_INVALID_JOB_ID,
+    ESLURM_USER_ID_UNKNOWN,
     SLURMCTLD_PLUGIN,
     found_nothing_warning,
     make_response,
@@ -32,6 +33,7 @@ from emulator.api.slurmrestd.schemas import (
     uint_no_val,
 )
 from emulator.api.slurmrestd.state import StateDep
+from emulator.core import nss
 from emulator.core.database import Job, SlurmDatabase
 from emulator.core.scheduler import advance_job_states, job_clock_now
 from emulator.slurm_version import at_least
@@ -192,6 +194,24 @@ async def submit_job(
 
     db = state.database
     user = str(job_desc.get("user_name") or getattr(request.state, "slurm_user", "root") or "root")
+    # NSS mode: the user must exist in the OS passwd database, as the
+    # USER_ID parser demands
+    # (slurm://src/plugins/data_parser/v0.0.45/parsers.c#USER_ID@26.05+ →
+    # slurm://src/common/uid.c#uid_from_string); ESLURM_USER_ID_UNKNOWN maps
+    # to 422 through slurm://src/common/http.c#http_status_from_error@25.11+.
+    identity = nss.lookup(user)
+    if nss.enabled() and identity is None:
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    f"Unable to resolve user: {user}",
+                    ESLURM_USER_ID_UNKNOWN,
+                    "job_desc_msg_t.user_id",
+                )
+            ],
+        )
     user_rec = db.get_user(user)
     # A slurm job always has an account (the user's default association);
     # fall back to the user's default, then "root", so it is never empty.
@@ -208,7 +228,8 @@ async def submit_job(
         name=job_desc.get("name") or f"job_{jid}",
         partition=job_desc.get("partition") or "compute",
         qos=job_desc.get("qos") or "normal",
-        working_directory=job_desc.get("current_working_directory") or f"/home/{user}",
+        working_directory=job_desc.get("current_working_directory")
+        or (identity.home if identity and identity.home else f"/home/{user}"),
         script=script,
         standard_output=job_desc.get("standard_output") or "",
         standard_error=job_desc.get("standard_error") or "",
@@ -218,6 +239,9 @@ async def submit_job(
         time_limit=_submit_int(job_desc.get("time_limit"), None),
         environment=_env_to_dict(job_desc.get("environment")),
         constraints=job_desc.get("constraints") or "",
+        uid=identity.uid if identity else None,
+        gid=identity.gid if identity else None,
+        group_name=identity.group if identity else "",
     )
     db.add_job(job)
     state.commit()

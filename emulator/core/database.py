@@ -179,6 +179,14 @@ class UsageRecord:
     # database when None so direct construction stays backward compatible.
     job_id: Optional[int] = None
     state: str = "COMPLETED"
+    # POSIX identity of the submitting user, filled only in NSS mode
+    # (``emulator/core/nss.py``); ``None``/"" keep the legacy 1000/user
+    # fallbacks. Real slurmdbd stores uid/gid on every job row
+    # (slurm://slurm/slurmdb.h#slurmdb_job_rec_t.uid,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.gid).
+    uid: Optional[int] = None
+    gid: Optional[int] = None
+    group_name: str = ""
 
     def __post_init__(self) -> None:
         """Fold the account name like Account/Association do.
@@ -223,6 +231,11 @@ class Job:
     time_limit: Optional[int] = None
     environment: dict[str, str] = field(default_factory=dict)
     constraints: str = ""
+    # POSIX identity of the owner, filled only in NSS mode — see UsageRecord.
+    # slurm://slurm/slurm.h#job_info_t.user_id, slurm://slurm/slurm.h#job_info_t.group_id
+    uid: Optional[int] = None
+    gid: Optional[int] = None
+    group_name: str = ""
 
 
 class SlurmDatabase:
@@ -865,6 +878,10 @@ class SlurmDatabase:
                 self.jobs = {}
                 for jid, data in state.get("jobs", {}).items():
                     data.setdefault("cluster", "default")
+                    # Identity keys arrived with NSS mode (0.10); older files lack them.
+                    data.setdefault("uid", None)
+                    data.setdefault("gid", None)
+                    data.setdefault("group_name", "")
                     # Handle datetime fields
                     for dt_field in ["submit_time", "start_time", "end_time"]:
                         if data.get(dt_field):
@@ -891,4 +908,7 @@ class SlurmDatabase:
         data.setdefault("job_id", None)
         data.setdefault("state", "COMPLETED")
         data.setdefault("partition", "compute")
+        data.setdefault("uid", None)
+        data.setdefault("gid", None)
+        data.setdefault("group_name", "")
         return UsageRecord(**data)

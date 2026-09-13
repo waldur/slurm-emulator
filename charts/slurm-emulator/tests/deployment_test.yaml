@@ -187,6 +187,62 @@ tests:
       - isNull:
           path: spec.template.spec.volumes
 
+  - it: leaves NSS identity mode off by default
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_NSS
+          any: true
+      - isNull:
+          path: spec.template.spec.volumes
+
+  - it: switches NSS identity mode on without a config Secret
+    template: templates/deployment.yaml
+    set:
+      nss.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_NSS
+            value: "1"
+      - isNull:
+          path: spec.template.spec.volumes
+
+  - it: mounts sssd.conf from nss.sssdConfSecret for the entrypoint to install
+    template: templates/deployment.yaml
+    set:
+      nss.enabled: true
+      nss.sssdConfSecret: my-sssd
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: sssd-conf
+            mountPath: /etc/slurm-emulator/sssd.conf
+            subPath: sssd.conf
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: sssd-conf
+            secret:
+              secretName: my-sssd
+              defaultMode: 0444
+              items:
+                - key: sssd.conf
+                  path: sssd.conf
+
+  - it: ignores nss.sssdConfSecret while NSS mode is disabled
+    template: templates/deployment.yaml
+    set:
+      nss.sssdConfSecret: my-sssd
+    asserts:
+      - isNull:
+          path: spec.template.spec.volumes
+
   - it: redirects state, clock, and SSH filesystem into the PVC
     template: templates/deployment.yaml
     set:

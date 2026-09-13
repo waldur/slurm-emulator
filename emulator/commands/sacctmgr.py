@@ -37,6 +37,7 @@ from emulator.commands.print_fields import (
     render_table,
     resolve_format,
 )
+from emulator.core import nss
 from emulator.core.database import (
     QOS,
     Association,
@@ -322,6 +323,7 @@ class SacctmgrEmulator:
         # still exits 1).
         self.stdout_error = False
         self._mode = OutputMode()
+        self._immediate = False
 
     def _fail(self, message: str) -> str:
         """Record a non-zero exit (matching real sacctmgr) and return ``message``."""
@@ -345,9 +347,12 @@ class SacctmgrEmulator:
         """Process sacctmgr command and return output."""
         self.exit_code = 0
         self.stdout_error = False
-        # -i/--immediate is accepted but has no effect: the emulator is
-        # headless and never shows real sacctmgr's commit prompt.
-        self._mode, _immediate, args = extract_output_flags(args, shorts="npPi")
+        # -i/--immediate: the emulator is headless and never shows real
+        # sacctmgr's commit prompt, so the flag only matters where real
+        # sacctmgr asks a question — the unknown-uid check on ``add user``
+        # (slurm://src/sacctmgr/common.c#commit_check returns 1 at once
+        # when rollback is off).
+        self._mode, self._immediate, args = extract_output_flags(args, shorts="npPi")
         args = self._strip_cluster_flag(args)
         try:
             return self._dispatch(args)
@@ -613,6 +618,13 @@ class SacctmgrEmulator:
             # Other association attributes (Share, FairShare, Priority,
             # GrpJobs, MaxTRES, …) are silently accepted: real sacctmgr
             # supports them and the emulator does not model them yet.
+
+        # NSS mode: real sacctmgr warns "There is no uid for user 'x'" and
+        # asks to continue (slurm://src/sacctmgr/user_functions.c#_check_uid);
+        # headless, the prompt times out as "no" (exit 1) unless -i/--immediate
+        # skips it (slurm://src/sacctmgr/common.c#commit_check).
+        if nss.enabled() and nss.resolve(username) is None and not self._immediate:
+            return self._fail(f" There is no uid for user '{username}'")
 
         # Add user if doesn't exist
         if not self.database.get_user(username):

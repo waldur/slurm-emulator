@@ -75,6 +75,10 @@ spec:
               value: "/etc/slurm-emulator/ssh/ssh_host_key"
             {{- end }}
             {{- end }}
+            {{- if .Values.nss.enabled }}
+            - name: SLURM_EMULATOR_NSS
+              value: "1"
+            {{- end }}
             {{- with .Values.partitions }}
             - name: SLURM_EMULATOR_PARTITIONS
               value: {{ . | quote }}
@@ -142,7 +146,7 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if or .Values.persistence.enabled (and .Values.ssh.enabled .Values.ssh.hostKeySecret) }}
+          {{- if or .Values.persistence.enabled (and .Values.ssh.enabled .Values.ssh.hostKeySecret) (and .Values.nss.enabled .Values.nss.sssdConfSecret) }}
           volumeMounts:
             {{- if .Values.persistence.enabled }}
             - name: data
@@ -153,8 +157,14 @@ spec:
               mountPath: /etc/slurm-emulator/ssh
               readOnly: true
             {{- end }}
+            {{- if and .Values.nss.enabled .Values.nss.sssdConfSecret }}
+            - name: sssd-conf
+              mountPath: /etc/slurm-emulator/sssd.conf
+              subPath: sssd.conf
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if or .Values.persistence.enabled (and .Values.ssh.enabled .Values.ssh.hostKeySecret) }}
+      {{- if or .Values.persistence.enabled (and .Values.ssh.enabled .Values.ssh.hostKeySecret) (and .Values.nss.enabled .Values.nss.sssdConfSecret) }}
       volumes:
         {{- if .Values.persistence.enabled }}
         - name: data
@@ -172,6 +182,17 @@ spec:
             items:
               - key: ssh_host_key
                 path: ssh_host_key
+        {{- end }}
+        {{- if and .Values.nss.enabled .Values.nss.sssdConfSecret }}
+        - name: sssd-conf
+          secret:
+            secretName: {{ .Values.nss.sssdConfSecret }}
+            # The entrypoint copies this to a private root:root 0600 file
+            # before starting sssd, so the mount's own mode does not matter.
+            defaultMode: 0444
+            items:
+              - key: sssd.conf
+                path: sssd.conf
         {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}

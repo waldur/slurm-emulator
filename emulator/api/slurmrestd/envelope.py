@@ -34,9 +34,12 @@ def data_parser() -> str:
 SLURMDBD_PLUGIN = ("openapi/slurmdbd", "Slurm OpenAPI slurmdbd")
 SLURMCTLD_PLUGIN = ("openapi/slurmctld", "Slurm OpenAPI slurmctld")
 
-# Error numbers from slurm/slurm_errno.h (REST block at :412-421,
-# slurmctld block at :99-116).
+# Error numbers from slurm://slurm/slurm_errno.h (ESLURM_REST_* block and
+# the slurmctld block starting at ESLURM_INVALID_PARTITION_NAME).
 ESLURM_INVALID_JOB_ID = 2017
+# Raised by the USER_ID parser when a user name has no passwd entry
+# (slurm://src/plugins/data_parser/v0.0.45/parsers.c#USER_ID@26.05+).
+ESLURM_USER_ID_UNKNOWN = 2166
 ESLURM_REST_INVALID_QUERY = 9000
 ESLURM_REST_FAIL_PARSING = 9001
 ESLURM_REST_EMPTY_RESULT = 9003
@@ -48,6 +51,7 @@ ESLURM_REST_BAD_REQUEST = 9009
 # slurm_strerror() texts (slurm://src/common/slurm_errno.c#ESLURM_REST_INVALID_QUERY).
 _STRERROR = {
     ESLURM_INVALID_JOB_ID: "Invalid job id specified",
+    ESLURM_USER_ID_UNKNOWN: "Unable to resolve user ID to user name",
     ESLURM_REST_INVALID_QUERY: "Query empty or incorrect type",
     ESLURM_REST_FAIL_PARSING: "Unable to parse request",
     ESLURM_REST_EMPTY_RESULT: "Nothing found with query",
@@ -63,7 +67,8 @@ _STRERROR = {
     ESLURM_REST_BAD_REQUEST: "Request failed to be processed",
 }
 
-# http_status_from_error() subset (slurm://src/slurmrestd/operations.c#http_status_from_error@25.11+).
+# http_status_from_error() subset (slurm://src/common/http.c#http_status_from_error@25.11+,
+# called from slurm://src/slurmrestd/operations.c#http_status_from_error@25.11+).
 _HTTP_STATUS = {
     ESLURM_INVALID_JOB_ID: 404,
     ESLURM_REST_INVALID_QUERY: 400,
@@ -108,7 +113,9 @@ def http_status_for(error_number: int) -> int:
     if error_number in _HTTP_STATUS:
         return _HTTP_STATUS[error_number]
     if 2000 <= error_number <= 7999:
-        # slurmctld/slurmdbd validation errors → Unprocessable Content.
+        # slurmctld/slurmdbd validation errors (ESLURM_INVALID_PARTITION_NAME
+        # .. ESLURM_INVALID_SLUID, incl. ESLURM_USER_ID_UNKNOWN) → 422
+        # Unprocessable Content.
         return 422
     return 500
 

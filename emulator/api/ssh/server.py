@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 from emulator.commands.dispatcher import SlurmEmulator
+from emulator.core import nss
 from emulator.core.database import Job
 from emulator.core.scheduler import advance_job_states, job_clock_now
 
@@ -139,6 +140,10 @@ def _run_slurm(user: str, argv: list[str]) -> tuple[str, str, int]:
             if name in {"sacct", "sacctmgr", "sshare", "sreport", "sinfo", "scancel", "id"}:
                 if name in {"sacct", "sshare", "sreport"}:
                     _advance(emu)
+                if name == "id" and not any(not a.startswith("-") for a in args):
+                    # Bare ``id`` (what FireCREST's IdCommand runs) means the
+                    # calling user — the SSH login, as on a real login node.
+                    args = [*args, user]
                 out = emu.execute_command(name, args)
                 code = getattr(getattr(emu, name, None), "exit_code", 0) or 0
                 return _nl(out), err.getvalue(), code
@@ -186,6 +191,12 @@ def _sbatch(emu: SlurmEmulator, user: str, args: list[str]) -> tuple[str, str, i
         urec = emu.database.get_user(user)
         account = (urec.default_account if urec else "") or "root"
     script_path = next((a for a in args if not a.startswith("-")), "")
+    # NSS mode: record the submitter's real uid/gid; sbatch itself would
+    # fail earlier on a login node without a passwd entry, so refuse too
+    # (slurm://src/common/uid.c#uid_from_string).
+    identity = nss.lookup(user)
+    if nss.enabled() and identity is None:
+        return "", f"sbatch: error: Unable to resolve user: {user}\n", 1
 
     jid = emu.database.allocate_job_id()
     emu.database.add_job(
@@ -200,6 +211,9 @@ def _sbatch(emu: SlurmEmulator, user: str, args: list[str]) -> tuple[str, str, i
             partition=partition,
             working_directory=str(_user_home(user)),
             script=script_path,
+            uid=identity.uid if identity else None,
+            gid=identity.gid if identity else None,
+            group_name=identity.group if identity else "",
         )
     )
     emu.database.save_state()
@@ -227,9 +241,15 @@ def _scontrol(emu, args: list[str]) -> tuple[str, str, int]:
         if job is None:
             return "", "slurm_load_jobs error: Invalid job id specified\n", 1
         wd = job.working_directory or f"/home/{job.user}"
+        # scontrol prints ``UserId=name(uid) GroupId=group(gid)``
+        # (slurm://src/scontrol/info_job.c#_sprint_job_info); without NSS
+        # mode every user is 1000 in a group of its own name.
+        uid = job.uid if job.uid is not None else 1000
+        gid = job.gid if job.gid is not None else 1000
+        group = job.group_name or job.user
         out = (
             f"JobId={job.job_id} JobName={job.name}\n"
-            f"   UserId={job.user}(1000) GroupId={job.user}(1000)\n"
+            f"   UserId={job.user}({uid}) GroupId={group}({gid})\n"
             f"   Account={job.account} QOS={job.qos} Partition={job.partition}\n"
             f"   JobState={job.state} Reason=None Dependency=(null)\n"
             f"   StdOut={job.standard_output or f'{wd}/slurm-{job.job_id}.out'}\n"

@@ -57,8 +57,10 @@ others exit 1 with ``sreport: error: … is not emulated``); there is no
 interactive mode (slurm://src/sreport/sreport.c#_get_command), so no
 arguments is an error; ``-h`` prints a one-line usage instead of
 slurm://src/sreport/sreport.c#_usage; ``-s`` is accepted and ignored;
-``Proper Name`` is always empty (no passwd database behind ``getpwnam``
-in slurm://src/sreport/cluster_reports.c#_cluster_account_by_user_tres_report);
+``Proper Name`` is empty unless ``SLURM_EMULATOR_NSS`` is set, in which
+case it is the gecos field's first comma element exactly as
+slurm://src/sreport/cluster_reports.c#_cluster_account_by_user_tres_report
+reads it through ``getpwnam``;
 a ``users=`` filter drops the account total rows (the ``user_list``
 condition in slurm://src/sreport/cluster_reports.c#_set_assoc_cond
 returns only the matching user associations); the cluster-wide total
@@ -83,6 +85,7 @@ from emulator.commands.print_fields import (
     resolve_format,
 )
 from emulator.commands.slurm_time import parse_time_spec
+from emulator.core import nss
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
 
@@ -530,13 +533,19 @@ class SreportEmulator:
             "Cluster": assoc.cluster,
             "Account": account,
             "Login": assoc.user,
-            "Proper Name": "",
+            "Proper Name": self._proper_name(assoc.user),
             "TRES Name": tres,
             "Used": self._time_str(assoc.alloc_secs.get(tres, 0), cluster_total.get(tres, 0), cfg),
             "Energy": self._time_str(
                 assoc.alloc_secs.get("energy", 0), cluster_total.get("energy", 0), cfg
             ),
         }
+
+    @staticmethod
+    def _proper_name(user: str) -> str:
+        """Gecos up to the first comma (``strtok(pw_gecos, ",")``); "" without NSS."""
+        identity = nss.lookup(user)
+        return identity.proper_name if identity else ""
 
     @staticmethod
     def _time_str(value: int, total: int, cfg: _Config) -> str:
