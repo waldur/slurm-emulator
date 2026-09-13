@@ -327,7 +327,10 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
         "derived_exit_code": exit_code,
         "exit_code": exit_code,
         "flags": [],
-        "group": record.user,
+        # ``group`` is the *group* name (GROUP_ID dump of slurmdb_job_rec_t.gid,
+        # slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_USER@26.05+ sits
+        # next to it for ``user``); without NSS mode it falls back to the user.
+        "group": record.group_name or record.user,
         "het": {"job_id": 0},
         "job_id": record.job_id,
         "kill_request_user": "",
@@ -381,8 +384,13 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         "job_id": int(job.job_id) if str(job.job_id).isdigit() else 0,
         "name": job.name or f"job_{job.job_id}",
         "account": job.account,
+        # user_id/user_name and group_id/group_name are overloads of the same
+        # uid/gid fields (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_INFO@26.05+);
+        # 1000 / the user's own name stand in when NSS mode is off.
+        "user_id": job.uid if job.uid is not None else 1000,
         "user_name": job.user,
-        "group_name": job.user,
+        "group_id": job.gid if job.gid is not None else 1000,
+        "group_name": job.group_name or job.user,
         "partition": job.partition or "compute",
         "job_state": [job.state],
         "state_reason": "None",

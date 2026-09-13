@@ -179,6 +179,14 @@ class UsageRecord:
     # database when None so direct construction stays backward compatible.
     job_id: Optional[int] = None
     state: str = "COMPLETED"
+    # POSIX identity of the submitting user, filled only in NSS mode
+    # (``emulator/core/nss.py``); ``None``/"" keep the legacy 1000/user
+    # fallbacks. Real slurmdbd stores uid/gid on every job row
+    # (slurm://slurm/slurmdb.h#slurmdb_job_rec_t.uid,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.gid).
+    uid: Optional[int] = None
+    gid: Optional[int] = None
+    group_name: str = ""
 
     def __post_init__(self) -> None:
         """Fold the account name like Account/Association do.
@@ -223,6 +231,30 @@ class Job:
     time_limit: Optional[int] = None
     environment: dict[str, str] = field(default_factory=dict)
     constraints: str = ""
+    # POSIX identity of the owner, filled only in NSS mode — see UsageRecord.
+    # slurm://slurm/slurm.h#job_info_t.user_id, slurm://slurm/slurm.h#job_info_t.group_id
+    uid: Optional[int] = None
+    gid: Optional[int] = None
+    group_name: str = ""
+
+
+CLUSTER_NAME_ENV_VAR = "SLURM_EMULATOR_CLUSTER_NAME"
+
+
+class DefaultAssociationError(Exception):
+    """Removing a user's default association while other associations remain.
+
+    slurm_strerror(ESLURM_NO_REMOVE_DEFAULT_ACCOUNT)
+    (slurm://src/common/slurm_errno.c#ESLURM_NO_REMOVE_DEFAULT_ACCOUNT).
+    """
+
+    ERRNO = 7009
+    TEXT = "You can not remove the default account of a user"
+
+    def __init__(self, user: str, account: str):
+        super().__init__(self.TEXT)
+        self.user = user
+        self.account = account
 
 
 class SlurmDatabase:
@@ -249,10 +281,48 @@ class SlurmDatabase:
             os.environ.get("SLURM_EMULATOR_STATE_FILE", "/tmp/slurm_emulator_db.json")
         )
 
-        # Create global root account and root association for default cluster
-        self.add_account("root", "Root account", "system")
-        root_key = self._association_key("", "root", "default")
-        self.associations[root_key] = Association(account="root", user="", cluster="default")
+        self._seed_root("default")
+        self._apply_cluster_name_env()
+
+    def _apply_cluster_name_env(self) -> None:
+        """Honour ``SLURM_EMULATOR_CLUSTER_NAME`` — the emulator's ``ClusterName``.
+
+        Real slurm.conf names the cluster once
+        (slurm://src/common/read_config.c#"ClusterName") and slurmctld,
+        sacctmgr and slurmrestd all file rows under it. Here that name
+        becomes ``current_cluster``: associations a site agent creates with
+        ``cluster=<name>``, submitted jobs, and ``/slurm/.../conf``
+        ``cluster_name`` then all agree, so the association check on submit
+        finds the agent's rows. Unset keeps ``default``; the state file's
+        saved ``current_cluster`` never overrides an explicit name.
+        """
+        name = os.environ.get(CLUSTER_NAME_ENV_VAR, "").strip()
+        if not name:
+            return
+        if self.get_cluster(name) is None:
+            self.add_cluster(name)
+        self.current_cluster = name
+
+    def _seed_root(self, cluster: str) -> None:
+        """Root account, root user and their associations on ``cluster``.
+
+        slurmdbd creates the ``root`` user and account when it builds its
+        tables (slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#_as_mysql_acct_check_tables)
+        and, for every cluster added, the account-level root association
+        plus one for user ``root`` under it
+        (slurm://src/plugins/accounting_storage/mysql/as_mysql_cluster.c#as_mysql_add_clusters).
+        Without the user row a submission that falls back to ``root`` would
+        be refused under AccountingStorageEnforce=associations.
+        """
+        if "root" not in self.accounts:
+            self.add_account("root", "Root account", "system")
+        if "root" not in self.users:
+            self.add_user("root", "root")
+        for user in ("", "root"):
+            key = self._association_key(user, "root", cluster)
+            self.associations.setdefault(
+                key, Association(account="root", user=user, cluster=cluster)
+            )
 
     def _allocate_cluster_id(self) -> int:
         """Allocate the next cluster ID."""
@@ -284,12 +354,7 @@ class SlurmDatabase:
             classification=cls_enum,
             id=self._allocate_cluster_id(),
         )
-        # Ensure root account exists globally
-        if "root" not in self.accounts:
-            self.add_account("root", "Root account", "system")
-        # Create root association for the new cluster
-        root_key = self._association_key("", "root", name)
-        self.associations[root_key] = Association(account="root", user="", cluster=name)
+        self._seed_root(name)
 
     def get_cluster(self, name: str) -> Optional[Cluster]:
         """Get cluster by name (excludes soft-deleted)."""
@@ -485,6 +550,62 @@ class SlurmDatabase:
             qos_list=list(qos_list) if qos_list else [],
             def_qos=def_qos,
         )
+        # slurmdbd makes a user's first association the default
+        # (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_make_sure_user_has_default_internal),
+        # so "the default account has a row" holds from the first add on.
+        user_rec = self.users.get(user) if user else None
+        if user_rec is not None and not user_rec.default_account:
+            user_rec.default_account = fold_account(account)
+
+    def user_association_rows(self, user: str, cluster: Optional[str] = None) -> list[Association]:
+        """Every association row of ``user`` (on ``cluster`` when given)."""
+        return [
+            a
+            for a in self.associations.values()
+            if a.user == user and (cluster is None or a.cluster == cluster)
+        ]
+
+    def check_association_removal(self, user: str, account: str) -> None:
+        """Refuse to remove a user's default association while others remain.
+
+        slurmdbd never lets the default association go while the user still
+        has other rows — ``as_mysql_remove_assocs`` sets
+        ``ESLURM_NO_REMOVE_DEFAULT_ACCOUNT`` and discards the change
+        (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#as_mysql_remove_assocs);
+        the last association may go, and takes the user with it. That is the
+        invariant AccountingStorageEnforce relies on when it trusts
+        ``default_account`` on submit.
+        """
+        user_rec = self.users.get(user)
+        if user_rec is None or fold_account(account) != fold_account(user_rec.default_account):
+            return
+        others = [a for a in self.user_association_rows(user) if a.account != fold_account(account)]
+        if others:
+            raise DefaultAssociationError(user, account)
+
+    def remove_user_from_account(
+        self, user: str, account: str, cluster: Optional[str] = None
+    ) -> int:
+        """``sacctmgr remove user where name=U account=A`` with slurmdbd's rules.
+
+        Checks :meth:`check_association_removal`, deletes every partition row
+        for the pair, and deletes the user once no association is left —
+        what ``sacctmgr remove user`` does when the removed association was
+        the last one (slurm://src/sacctmgr/user_functions.c#sacctmgr_delete_user).
+        """
+        self.check_association_removal(user, account)
+        removed = self.delete_user_associations(user, account, cluster)
+        if removed and not self.user_association_rows(user):
+            self.users.pop(user, None)
+        return removed
+
+    def remove_user(self, user: str) -> bool:
+        """Delete a user and every association it holds (``sacctmgr remove user where name=U``)."""
+        if user not in self.users:
+            return False
+        del self.users[user]
+        self.associations = {k: a for k, a in self.associations.items() if a.user != user}
+        return True
 
     def get_association(
         self,
@@ -875,6 +996,11 @@ class SlurmDatabase:
                 self.qos_list = {}
                 for name, data in state.get("qos", {}).items():
                     self.qos_list[name] = QOS(**data)
+
+                # Pre-0.10 state files have no root user / root user association.
+                for cluster in self.clusters:
+                    self._seed_root(cluster)
+                self._apply_cluster_name_env()
 
         except Exception as e:
             print(f"Warning: Failed to load database state: {e}")

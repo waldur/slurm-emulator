@@ -37,10 +37,12 @@ from emulator.commands.print_fields import (
     render_table,
     resolve_format,
 )
+from emulator.core import nss
 from emulator.core.database import (
     QOS,
     Association,
     ClusterClassification,
+    DefaultAssociationError,
     SlurmDatabase,
     fold_account,
 )
@@ -322,6 +324,7 @@ class SacctmgrEmulator:
         # still exits 1).
         self.stdout_error = False
         self._mode = OutputMode()
+        self._immediate = False
 
     def _fail(self, message: str) -> str:
         """Record a non-zero exit (matching real sacctmgr) and return ``message``."""
@@ -345,9 +348,12 @@ class SacctmgrEmulator:
         """Process sacctmgr command and return output."""
         self.exit_code = 0
         self.stdout_error = False
-        # -i/--immediate is accepted but has no effect: the emulator is
-        # headless and never shows real sacctmgr's commit prompt.
-        self._mode, _immediate, args = extract_output_flags(args, shorts="npPi")
+        # -i/--immediate: the emulator is headless and never shows real
+        # sacctmgr's commit prompt, so the flag only matters where real
+        # sacctmgr asks a question — the unknown-uid check on ``add user``
+        # (slurm://src/sacctmgr/common.c#commit_check returns 1 at once
+        # when rollback is off).
+        self._mode, self._immediate, args = extract_output_flags(args, shorts="npPi")
         args = self._strip_cluster_flag(args)
         try:
             return self._dispatch(args)
@@ -613,6 +619,13 @@ class SacctmgrEmulator:
             # Other association attributes (Share, FairShare, Priority,
             # GrpJobs, MaxTRES, …) are silently accepted: real sacctmgr
             # supports them and the emulator does not model them yet.
+
+        # NSS mode: real sacctmgr warns "There is no uid for user 'x'" and
+        # asks to continue (slurm://src/sacctmgr/user_functions.c#_check_uid);
+        # headless, the prompt times out as "no" (exit 1) unless -i/--immediate
+        # skips it (slurm://src/sacctmgr/common.c#commit_check).
+        if nss.enabled() and nss.resolve(username) is None and not self._immediate:
+            return self._fail(f" There is no uid for user '{username}'")
 
         # Add user if doesn't exist
         if not self.database.get_user(username):
@@ -955,20 +968,38 @@ class SacctmgrEmulator:
             elif arg.startswith("name="):
                 username = arg.split("=", 1)[1]
 
-        if account and username:
-            # Remove every association row for this (user, account),
-            # including every partition-scoped row — mirrors real
-            # sacctmgr remove user where name=… and account=… .
-            self.database.delete_user_associations(username, account)
-            result = f" Deleting user association...\n  User: {username}\n  Account: {account}"
-        elif account:
-            # Remove all users from account
-            users = self.database.list_account_users(account)
-            for user in users:
-                self.database.delete_user_associations(user, account)
-            result = f" Deleting {len(users)} user association(s) from account {account}"
-        else:
-            return self._fail(" error: Insufficient parameters in where clause")
+        try:
+            if account and username:
+                # Remove every association row for this (user, account),
+                # including every partition-scoped row — mirrors real
+                # sacctmgr remove user where name=… and account=… ; the
+                # user itself goes when that was its last association.
+                self.database.remove_user_from_account(username, account)
+                result = f" Deleting user association...\n  User: {username}\n  Account: {account}"
+            elif account:
+                # Remove all users from account
+                users = self.database.list_account_users(account)
+                for user in users:
+                    self.database.remove_user_from_account(user, account)
+                result = f" Deleting {len(users)} user association(s) from account {account}"
+            elif username:
+                # ``where name=U`` alone deletes the user and all its associations
+                # (slurm://src/sacctmgr/user_functions.c#sacctmgr_delete_user).
+                if not self.database.remove_user(username):
+                    return self._fail(" Nothing deleted")
+                result = f" Deleting users...\n  {username}"
+            else:
+                return self._fail(" error: Insufficient parameters in where clause")
+        except DefaultAssociationError as e:
+            # slurm://src/sacctmgr/user_functions.c#sacctmgr_delete_user prints
+            # the strerror, the affected association and the advice, then discards.
+            return self._fail(
+                f" Error with request: {e.TEXT}\n"
+                f"  C = {self.database.current_cluster:<10} A = {e.account:<20} U = {e.user:<9}\n"
+                " You must change the default account of these users or remove the users "
+                "completely from the affected clusters to allow these changes.\n"
+                " Changes Discarded"
+            )
 
         self.database.save_state()
         return result

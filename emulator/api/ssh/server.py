@@ -16,8 +16,10 @@ This is NOT a real sshd. For each SSH ``exec`` request we either:
   still work (see ``_command_env`` / ``_gnu_gnubin_dirs``).
 
 Security: shell commands run as the emulator's own OS user, confined only
-by the sandbox working directory. This is a dev/test tool — do not expose
-it to untrusted clients.
+by the sandbox working directory — except in NSS mode with the emulator
+running as root, where they run as the resolved login user (uid/gid/groups
+from the OS), so ``id`` and file ownership match a real login node. This is
+a dev/test tool — do not expose it to untrusted clients.
 """
 
 from __future__ import annotations
@@ -31,9 +33,11 @@ import platform
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from emulator.commands.dispatcher import SlurmEmulator
+from emulator.core import nss
+from emulator.core.accounting import ESLURM_USER_ID_UNKNOWN, admit_job
 from emulator.core.database import Job
 from emulator.core.scheduler import advance_job_states, job_clock_now
 
@@ -69,7 +73,69 @@ def _fs_root() -> Path:
 def _user_home(user: str) -> Path:
     home = _fs_root() / "home" / (user or "root")
     home.mkdir(parents=True, exist_ok=True)
+    identity = _login_identity(user)
+    if identity is not None:
+        _own_home(home, identity)
     return home
+
+
+# Records which uid:gid a sandbox home was last handed to, so the recursive
+# chown runs once per identity change rather than on every command.
+_OWNER_STAMP = ".slurm-emulator-owner"
+
+
+def _own_home(home: Path, identity: nss.Identity) -> None:
+    """Hand ``home`` and everything in it to the login user, once per identity.
+
+    Commands now run as the user, so files the emulator created earlier as
+    root (or under a previous identity — e.g. a persisted volume from before
+    NSS mode) would be EACCES for them. The stamp file avoids walking the
+    tree on every command; a changed uid/gid (directory re-mapped) redoes it.
+    """
+    stamp = home / _OWNER_STAMP
+    wanted = f"{identity.uid}:{identity.gid}"
+    try:
+        if stamp.read_text().strip() == wanted:
+            return
+    except OSError:
+        pass
+    for root, dirs, files in os.walk(home):
+        for entry in (*dirs, *files):
+            with contextlib.suppress(OSError):
+                os.lchown(Path(root) / entry, identity.uid, identity.gid)
+    os.chown(home, identity.uid, identity.gid)
+    stamp.write_text(wanted + "\n")
+    os.chown(stamp, identity.uid, identity.gid)
+
+
+def _login_identity(user: str) -> Optional[nss.Identity]:
+    """The OS identity shell commands should run as, or ``None`` to stay as we are.
+
+    Only in NSS mode, only when the login user resolves, and only when the
+    emulator itself is root (dropping privileges needs it). Otherwise commands
+    keep running as the emulator's own OS user, as they always have.
+    """
+    if not nss.enabled() or os.geteuid() != 0:
+        return None
+    return nss.resolve(user)
+
+
+def _run_as_kwargs(user: str) -> dict[str, Any]:
+    """``subprocess`` keywords that run a child as the SSH login user.
+
+    On a real login node the shell *is* the user: ``id``, file ownership and
+    ``$HOME`` all reflect the login identity, and clients (FireCREST's
+    ``/status/userinfo`` runs ``timeout N id`` and its filesystem calls
+    ``stat``/``chown`` as the user) assume exactly that.
+    """
+    identity = _login_identity(user)
+    if identity is None:
+        return {}
+    return {
+        "user": identity.uid,
+        "group": identity.gid,
+        "extra_groups": list(identity.groups or (identity.gid,)),
+    }
 
 
 # --- GNU/BSD coreutils portability ---
@@ -104,7 +170,7 @@ def gnu_coreutils_available() -> bool:
 
 def _command_env(user: str) -> dict[str, str]:
     home = _user_home(user)
-    env = {**os.environ, "HOME": str(home), "USER": user or "root"}
+    env = {**os.environ, "HOME": str(home), "USER": user or "root", "LOGNAME": user or "root"}
     gnubin = _gnu_gnubin_dirs()
     if gnubin:
         env["PATH"] = os.pathsep.join((*gnubin, env.get("PATH", "")))
@@ -139,6 +205,10 @@ def _run_slurm(user: str, argv: list[str]) -> tuple[str, str, int]:
             if name in {"sacct", "sacctmgr", "sshare", "sreport", "sinfo", "scancel", "id"}:
                 if name in {"sacct", "sshare", "sreport"}:
                     _advance(emu)
+                if name == "id" and not any(not a.startswith("-") for a in args):
+                    # Bare ``id`` (what FireCREST's IdCommand runs) means the
+                    # calling user — the SSH login, as on a real login node.
+                    args = [*args, user]
                 out = emu.execute_command(name, args)
                 code = getattr(getattr(emu, name, None), "exit_code", 0) or 0
                 return _nl(out), err.getvalue(), code
@@ -181,11 +251,22 @@ def _flag_value(args: list[str], short: str, long: str) -> Optional[str]:
 def _sbatch(emu: SlurmEmulator, user: str, args: list[str]) -> tuple[str, str, int]:
     name = _flag_value(args, "-J", "--job-name") or "batch"
     partition = _flag_value(args, "-p", "--partition") or "compute"
-    account = _flag_value(args, "-A", "--account") or ""
-    if not account:
-        urec = emu.database.get_user(user)
-        account = (urec.default_account if urec else "") or "root"
     script_path = next((a for a in args if not a.startswith("-")), "")
+    # Same admission as REST submit (emulator/core/accounting.py); sbatch
+    # reports the errno text through
+    # slurm://src/sbatch/sbatch.c#"Batch job submission failed".
+    admission = admit_job(emu.database, user, _flag_value(args, "-A", "--account") or "", partition)
+    if admission.error is not None:
+        if admission.error == ESLURM_USER_ID_UNKNOWN:
+            return "", f"sbatch: error: {admission.message}\n", 1
+        return (
+            "",
+            "sbatch: error: Batch job submission failed: "
+            "Invalid account or account/partition combination specified\n",
+            1,
+        )
+    identity = admission.identity
+    account = admission.account
 
     jid = emu.database.allocate_job_id()
     emu.database.add_job(
@@ -200,6 +281,9 @@ def _sbatch(emu: SlurmEmulator, user: str, args: list[str]) -> tuple[str, str, i
             partition=partition,
             working_directory=str(_user_home(user)),
             script=script_path,
+            uid=identity.uid if identity else None,
+            gid=identity.gid if identity else None,
+            group_name=identity.group if identity else "",
         )
     )
     emu.database.save_state()
@@ -227,9 +311,15 @@ def _scontrol(emu, args: list[str]) -> tuple[str, str, int]:
         if job is None:
             return "", "slurm_load_jobs error: Invalid job id specified\n", 1
         wd = job.working_directory or f"/home/{job.user}"
+        # scontrol prints ``UserId=name(uid) GroupId=group(gid)``
+        # (slurm://src/scontrol/info_job.c#_sprint_job_info); without NSS
+        # mode every user is 1000 in a group of its own name.
+        uid = job.uid if job.uid is not None else 1000
+        gid = job.gid if job.gid is not None else 1000
+        group = job.group_name or job.user
         out = (
             f"JobId={job.job_id} JobName={job.name}\n"
-            f"   UserId={job.user}(1000) GroupId={job.user}(1000)\n"
+            f"   UserId={job.user}({uid}) GroupId={group}({gid})\n"
             f"   Account={job.account} QOS={job.qos} Partition={job.partition}\n"
             f"   JobState={job.state} Reason=None Dependency=(null)\n"
             f"   StdOut={job.standard_output or f'{wd}/slurm-{job.job_id}.out'}\n"
@@ -244,9 +334,13 @@ def _scontrol(emu, args: list[str]) -> tuple[str, str, int]:
 # --- Shell (filesystem) dispatch ---
 
 
+def _shell_context(user: str) -> tuple[Path, dict[str, str], dict[str, Any]]:
+    """(cwd, env, run-as kwargs) for a shell command by ``user`` — blocking."""
+    return _user_home(user), _command_env(user), _run_as_kwargs(user)
+
+
 def _run_shell(user: str, command: str) -> tuple[str, str, int]:
-    home = _user_home(user)
-    env = _command_env(user)
+    home, env, run_as = _shell_context(user)
     try:
         proc = subprocess.run(
             ["/bin/bash", "-c", command],
@@ -256,6 +350,7 @@ def _run_shell(user: str, command: str) -> tuple[str, str, int]:
             timeout=_SHELL_TIMEOUT,
             env=env,
             check=False,
+            **run_as,
         )
     except subprocess.TimeoutExpired:
         return "", "command timed out\n", 124
@@ -270,8 +365,9 @@ async def _run_shell_async(user: str, command: str, process) -> tuple[str, str, 
     lands empty. Commands that read no stdin still finish normally — we stop
     pumping once the process exits.
     """
-    home = _user_home(user)
-    env = _command_env(user)
+    # Home, env and identity may hit NSS (the directory) — resolve them off
+    # the event loop.
+    home, env, run_as = await asyncio.get_event_loop().run_in_executor(None, _shell_context, user)
     try:
         proc = await asyncio.create_subprocess_exec(
             "/bin/bash",
@@ -282,6 +378,7 @@ async def _run_shell_async(user: str, command: str, process) -> tuple[str, str, 
             stderr=asyncio.subprocess.PIPE,
             cwd=str(home),
             env=env,
+            **run_as,
         )
     except OSError as exc:
         return "", f"{exc}\n", 1
@@ -321,15 +418,42 @@ async def _run_shell_async(user: str, command: str, process) -> tuple[str, str, 
     return out_b.decode(errors="replace"), err_b.decode(errors="replace"), code
 
 
+# ``timeout`` options that take a value (coreutils): -s/--signal, -k/--kill-after.
+_TIMEOUT_VALUE_OPTS = {"-s", "--signal", "-k", "--kill-after"}
+
+
+def _strip_timeout(argv: list[str]) -> list[str]:
+    """Drop a leading ``timeout [OPTION]... DURATION`` wrapper.
+
+    Clients run every SSH command through coreutils ``timeout`` (FireCREST's
+    BaseCommandWithTimeout sends ``timeout 10 id``, ``timeout 10 sacct …``);
+    the wrapped command is what must be matched against the emulated Slurm
+    binaries. The shell path is left alone — the real ``timeout`` works there.
+    """
+    if not argv or Path(argv[0]).name != "timeout":
+        return argv
+    i = 1
+    while i < len(argv) and argv[i].startswith("-"):
+        i += 2 if argv[i] in _TIMEOUT_VALUE_OPTS else 1
+    return argv[i + 1 :]  # skip DURATION too
+
+
 def _slurm_argv(command: str) -> Optional[list[str]]:
     """Return the parsed argv if this command is an emulator-handled Slurm binary."""
     stripped = command.strip()
     if not stripped:
         return None
-    if Path(stripped.split(None, 1)[0]).name not in _SLURM_BINS:
+    head = stripped.split(None, 1)[0]
+    if Path(head).name not in _SLURM_BINS and Path(head).name != "timeout":
         return None
-    argv = shlex.split(command)
+    argv = _strip_timeout(shlex.split(command))
+    if not argv or Path(argv[0]).name not in _SLURM_BINS:
+        return None
     argv[0] = Path(argv[0]).name
+    if argv[0] == "id" and not nss.enabled():
+        # Only NSS mode owns ``id``: without it the real coreutils ``id`` in
+        # the shell path gives clients the genuine ``uid=…(…) gid=…`` output.
+        return None
     return argv
 
 

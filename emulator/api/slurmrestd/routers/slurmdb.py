@@ -35,7 +35,7 @@ from emulator.api.slurmrestd.schemas import (
 from emulator.api.slurmrestd.state import RequestState, StateDep
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacct import _Config as SacctConfig
-from emulator.core.database import QOS, Association, fold_account
+from emulator.core.database import QOS, Association, DefaultAssociationError, fold_account
 from emulator.core.scheduler import advance_job_states
 from emulator.slurm_version import at_least
 
@@ -849,10 +849,40 @@ async def delete_associations(
             warnings=[found_nothing_warning("slurmdb_associations_get()", request)],
         )
     removed = [_removed_assoc_string(a) for a in matched]
+    # slurmdbd refuses the whole request when it would take a user's default
+    # association away while other associations remain
+    # (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#as_mysql_remove_assocs).
+    surviving = {k for k, a in state.database.associations.items() if a not in matched}
+    for assoc in matched:
+        if not assoc.user:
+            continue
+        user_rec = state.database.get_user(assoc.user)
+        if user_rec is None or assoc.account != fold_account(user_rec.default_account):
+            continue
+        if any(
+            a.user == assoc.user and a.account != assoc.account
+            for k, a in state.database.associations.items()
+            if k in surviving
+        ):
+            return _respond(
+                request,
+                state,
+                errors=[
+                    slurm_error(
+                        DefaultAssociationError.TEXT,
+                        DefaultAssociationError.ERRNO,
+                        "slurmdb_associations_remove()",
+                    )
+                ],
+            )
     for assoc in matched:
         state.database.delete_association(
             assoc.user, assoc.account, cluster=assoc.cluster, partition=assoc.partition
         )
+    # A user whose last association went is gone too (sacctmgr remove user semantics).
+    for name in {a.user for a in matched if a.user}:
+        if not state.database.user_association_rows(name):
+            state.database.users.pop(name, None)
     state.commit()
     return _respond(request, state, {"removed_associations": removed})
 

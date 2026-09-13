@@ -10,8 +10,14 @@ from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacctmgr import SacctmgrEmulator
 from emulator.commands.sreport import SreportEmulator
 from emulator.commands.sshare import SshareEmulator
+from emulator.core import nss
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
+
+# coreutils ``id`` options the emulator understands (long → short), and the
+# short letters accepted in a cluster; ``-r``/``-z`` are accepted and ignored.
+_ID_LONG_OPTS = {"user": "u", "group": "g", "groups": "G", "name": "n", "real": "r", "zero": "z"}
+_ID_SHORT_OPTS = set("ugGnrz")
 
 
 class SlurmEmulator:
@@ -156,22 +162,63 @@ class SlurmEmulator:
         return "scancel: No account specified"
 
     def _handle_id(self, args: list[str]) -> str:
-        """Handle id command for user validation."""
-        if not args:
+        """Handle the coreutils ``id`` command.
+
+        Without NSS mode every known Slurm user is uid 1000 (legacy
+        behaviour, unchanged). With ``SLURM_EMULATOR_NSS=1`` the user is
+        resolved through the OS and the output takes the real coreutils
+        shape — ``uid=N(name) gid=N(group) groups=N(group),...`` — which is
+        what FireCREST's ``/status/userinfo`` parses; ``-u``, ``-g``, ``-G``
+        and ``-n`` are honoured as in coreutils. An unknown user prints
+        ``id: 'name': no such user`` on stderr and exits 1.
+        """
+        flags: set[str] = set()
+        username = ""
+        for arg in args:
+            if arg.startswith("--") and len(arg) > 2:
+                short = _ID_LONG_OPTS.get(arg[2:])
+                if short is None:
+                    return self._id_usage_error(f"unrecognized option '{arg}'")
+                flags.add(short)
+            elif arg.startswith("-") and len(arg) > 1:
+                unknown = [c for c in arg[1:] if c not in _ID_SHORT_OPTS]
+                if unknown and nss.enabled():
+                    return self._id_usage_error(f"invalid option -- '{unknown[0]}'")
+                flags.update(arg[1:])
+            elif not username:
+                username = arg
+        if not username:
             return "id: missing operand"
 
-        if args[0] == "-u":
-            if len(args) < 2:
-                return "id: missing username"
-            username = args[1]
-        else:
-            username = args[0]
+        if nss.enabled():
+            return self._id_nss(username, flags)
 
-        # Check if user exists in our database
-        user = self.database.get_user(username)
-        if user:
-            return "1000"  # Return fake UID
+        # Legacy: check if user exists in our database
+        if self.database.get_user(username):
+            return "1000"  # fake UID
         return f"id: {username}: no such user"
+
+    @staticmethod
+    def _id_usage_error(message: str) -> str:
+        print(f"id: {message}\nTry 'id --help' for more information.", file=sys.stderr)
+        raise SystemExit(1)
+
+    @staticmethod
+    def _id_nss(username: str, flags: set[str]) -> str:
+        identity = nss.resolve(username)
+        if identity is None:
+            print(f"id: '{username}': no such user", file=sys.stderr)
+            raise SystemExit(1)
+        names = "n" in flags
+        if "u" in flags:
+            return identity.name if names else str(identity.uid)
+        if "g" in flags:
+            return identity.group if names else str(identity.gid)
+        groups = identity.groups or (identity.gid,)
+        if "G" in flags:
+            return " ".join(identity.group_name_of(g) if names else str(g) for g in groups)
+        listed = ",".join(f"{g}({identity.group_name_of(g)})" for g in groups)
+        return f"uid={identity.uid}({identity.name}) gid={identity.gid}({identity.group}) groups={listed}"
 
 
 # Global emulator instance

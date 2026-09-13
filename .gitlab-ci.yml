@@ -121,6 +121,7 @@ Lint Helm chart:
     - mkdir -p rendered-templates/numericPassword && helm template se charts/slurm-emulator/ --output-dir rendered-templates/numericPassword --set auth.uiPassword=12345678
     - mkdir -p rendered-templates/ssh && helm template se charts/slurm-emulator/ --output-dir rendered-templates/ssh --set ssh.enabled=true --set ssh.hostKeySecret=host-key
     - mkdir -p rendered-templates/existingSecret && helm template se charts/slurm-emulator/ --output-dir rendered-templates/existingSecret --set auth.existingSecret=my-secret
+    - mkdir -p rendered-templates/nss && helm template se charts/slurm-emulator/ --output-dir rendered-templates/nss --set nss.enabled=true --set nss.sssdConfSecret=sssd-conf
     - mkdir -p rendered-templates/ingress && helm template se charts/slurm-emulator/ --output-dir rendered-templates/ingress --set ingress.enabled=true --set 'ingress.hosts[0].host=se.example.com' --set 'ingress.hosts[0].paths[0].path=/' --set 'ingress.hosts[0].paths[0].pathType=Prefix' --set 'ingress.hosts[0].paths[0].port=8080'
     - mkdir -p rendered-templates/gatewayApi && helm template se charts/slurm-emulator/ --output-dir rendered-templates/gatewayApi --set gatewayApi.enabled=true --set gatewayApi.createGateway=true --set gatewayApi.gateway.gatewayClassName=envoy --set 'gatewayApi.hostnames[0]=se.example.com' --set 'gatewayApi.rules[0].matches[0].path.type=PathPrefix' --set 'gatewayApi.rules[0].matches[0].path.value=/' --set 'gatewayApi.rules[0].port=8080'
   artifacts:

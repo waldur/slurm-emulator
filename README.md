@@ -368,6 +368,70 @@ uv run --extra ssh slurm-ssh-emulator   # asyncssh server on port 2222
 
 It shares the same JSON state files as the CLI, control API, and slurmrestd.
 
+### NSS identity (`SLURM_EMULATOR_NSS=1`)
+
+By default the emulator has no uid/gid model: every user is `1000` and its
+own group. Setting `SLURM_EMULATOR_NSS=1` makes it resolve user names
+through the OS name service switch (`getpwnam`/`getgrgid`, the calls real
+Slurm makes) — inside the Docker image that is libc → sssd → LDAP, with a
+reference `examples/nss/sssd.conf` and a one-user `examples/nss/seed.ldif`.
+With the mode on:
+
+- `id` over SSH prints the coreutils shape FireCREST's `/status/userinfo`
+  parses — `uid=9001(hpc_9001) gid=9001(hpc_9001) groups=9001(hpc_9001)` —
+  and honours `-u`/`-g`/`-G`/`-n`; an unknown user exits 1;
+- `POST /slurm/v0.0.45/job/submit` and `sbatch` record the submitter's
+  uid/gid/group on the job (`user_id`/`group_id`/`group_name`,
+  `scontrol show job` `UserId=name(uid) GroupId=group(gid)`, sacct
+  `UID`/`GID`/`Group`) and refuse a name the OS cannot resolve
+  (`ESLURM_USER_ID_UNKNOWN`, HTTP 422, like the real `USER_ID` parser);
+- `sacctmgr add user` for an unresolvable name stops with
+  ` There is no uid for user 'x'` (exit 1) unless `-i`/`--immediate` is given,
+  mirroring real sacctmgr's prompt; the REST `/slurmdb` user upsert is not
+  gated, so a site agent can create accounts before the directory entry exists;
+- `sreport` fills `Proper Name` from the gecos field;
+- independently of NSS, `SLURM_EMULATOR_ACCOUNTING_ENFORCE=associations` (the
+  default everywhere; `slurm.conf` itself leaves it unset, but every managed
+  production cluster sets it) makes
+  `POST /job/submit` and `sbatch` refuse a user with no association for the
+  requested — or, when none is requested, default — account:
+  `ESLURM_INVALID_ACCOUNT` "Invalid account or account/partition combination
+  specified" (HTTP 422), so a person removed from a project can no longer
+  submit against it. **Behaviour change in 0.10:** earlier releases let any
+  user submit and fell back to `root`; set
+  `SLURM_EMULATOR_ACCOUNTING_ENFORCE=none` to get that back. The check is
+  cluster-scoped, so a deployment whose site agent uses `cluster_name: linux`
+  must set `SLURM_EMULATOR_CLUSTER_NAME=linux` (chart `clusterName`) or the
+  agent's rows land on a cluster the submit never looks at. As in slurmdbd, a
+  user's default association cannot be removed while other associations remain
+  (`You can not remove the default account of a user`), and removing the last
+  one removes the user;
+- when the emulator runs as root (the Docker image does), shell commands over
+  SSH run *as the login user* — uid, gid, supplementary groups, `$HOME` —
+  so `id`, `stat`, `chown` and file ownership behave like a real login node;
+  a leading coreutils `timeout N` wrapper (which FireCREST puts in front of
+  every SSH command) is stripped before matching the emulated Slurm binaries.
+
+Try it with the FireCREST UI stack:
+
+```bash
+cd examples/firecrest/ui
+docker compose -f docker-compose.yml -f docker-compose.nss.yml up -d
+ldapadd -x -H ldap://localhost:3890 -D cn=admin,dc=example,dc=org -w admin -f ../../nss/seed.ldif
+docker compose exec slurm id hpc_9001
+```
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `SLURM_EMULATOR_NSS` | unset | `1` resolves users through the OS NSS (sssd → LDAP in the image) |
+| `SLURM_EMULATOR_CLUSTER_NAME` | `default` | slurm.conf `ClusterName`: the cluster associations, submitted jobs and `/slurm/…/conf` are filed under; set it to the site agent's `cluster_name` so the association check on submit sees the agent's rows |
+| `SLURM_EMULATOR_NSS_CACHE_TTL` | `60` | seconds a resolved identity (uid/gid/groups) is trusted before NSS is asked again; misses are retried after 5 s |
+| `SLURM_EMULATOR_ACCOUNTING_ENFORCE` | `associations` | `AccountingStorageEnforce`: with `associations` (or `limits`/`qos`/`safe`/`wckeys`) a submit by a user with no association for the account fails with `ESLURM_INVALID_ACCOUNT`; `none` = permissive pre-0.10 fallback to the default account, then `root` |
+| `SLURM_EMULATOR_SSSD_CONF` | `/etc/slurm-emulator/sssd.conf` | sssd config the entrypoint installs as a private root-only copy (falls back to `/etc/sssd/sssd.conf`) |
+
+In Kubernetes the chart exposes it as `nss.enabled` + `nss.sssdConfSecret`;
+sssd runs as root, so the option excludes a non-root `securityContext`.
+
 ### Running FireCREST v2 against the emulator
 
 The scheduler plane (slurmrestd) plus the SSH filesystem plane let the emulator
