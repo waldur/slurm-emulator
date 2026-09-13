@@ -523,3 +523,56 @@ class TestStateCompatibility:
         assert advance_job_states(fresh, te)
         record = next(r for r in fresh.usage_records if r.job_id == 1)
         assert (record.uid, record.gid, record.group_name) == (9001, 9001, "hpc_9001")
+
+
+class TestCacheTtl:
+    def test_identity_re_resolved_after_ttl(self, monkeypatch):
+        pytest.importorskip("pwd")
+        monkeypatch.setattr(nss, "_cache", {})
+        monkeypatch.setattr(nss, "_misses", {})
+        calls = []
+        real_pwd = nss.pwd
+
+        class CountingPwd:
+            @staticmethod
+            def getpwnam(name):
+                calls.append(name)
+                return real_pwd.getpwnam(name)
+
+        monkeypatch.setattr(nss, "pwd", CountingPwd)
+        monkeypatch.setenv(nss.CACHE_TTL_ENV_VAR, "60")
+        first = nss.resolve("root")
+        assert nss.resolve("root") is first
+        assert calls == ["root"]
+        monkeypatch.setenv(nss.CACHE_TTL_ENV_VAR, "0")
+        assert nss.resolve("root") is not first
+        assert calls == ["root", "root"]
+
+    def test_default_ttl(self, monkeypatch):
+        monkeypatch.delenv(nss.CACHE_TTL_ENV_VAR, raising=False)
+        assert nss.positive_ttl() == nss.DEFAULT_POSITIVE_TTL
+        monkeypatch.setenv(nss.CACHE_TTL_ENV_VAR, "bogus")
+        assert nss.positive_ttl() == nss.DEFAULT_POSITIVE_TTL
+
+
+class TestHomeOwnership:
+    def test_existing_contents_are_chowned_once(self, tmp_path, monkeypatch):
+        home = tmp_path / "home" / "hpc_9001"
+        (home / "old").mkdir(parents=True)
+        (home / "old" / "file.txt").write_text("root wrote this")
+        chowned = []
+        monkeypatch.setattr(server.os, "chown", lambda p, u, g: chowned.append((str(p), u, g)))
+        monkeypatch.setattr(server.os, "lchown", lambda p, u, g: chowned.append((str(p), u, g)))
+        identity = DIRECTORY["hpc_9001"]
+        server._own_home(home, identity)
+        paths = {p for p, _, _ in chowned}
+        assert str(home / "old") in paths
+        assert str(home / "old" / "file.txt") in paths
+        assert str(home) in paths
+        assert all((u, g) == (9001, 9001) for _, u, g in chowned)
+        assert (home / server._OWNER_STAMP).read_text().strip() == "9001:9001"
+        chowned.clear()
+        server._own_home(home, identity)
+        assert chowned == []  # stamp matches: nothing to do
+        server._own_home(home, nss.Identity("x", 7, 7, "x"))
+        assert chowned  # identity changed: walk again

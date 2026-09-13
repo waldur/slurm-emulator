@@ -39,6 +39,7 @@ The planes are separate processes sharing the same JSON state files, so an accou
 | `nss.enabled` | `false` | Sets `SLURM_EMULATOR_NSS=1`: user names resolve through libc → sssd → LDAP, so `id`, `scontrol show job`, sacct and the slurmrestd job views carry real uids/gids. sssd runs as root — incompatible with a non-root `securityContext.runAsUser`. |
 | `nss.sssdConfSecret` | `""` | Secret with an `sssd.conf` key, mounted at `/etc/slurm-emulator/sssd.conf`; the entrypoint installs it root-only (0600) before starting sssd. A reference config and LDIF seed live in `examples/nss/`. |
 | `partitions` | `""` | Cluster topology, e.g. `gpu:8,compute:32` or `debug:1-4,compute:5-100`. Empty keeps the image default (`debug:1-4,compute:5-100`). |
+| `clusterName` | `""` | `SLURM_EMULATOR_CLUSTER_NAME` — the cluster associations, jobs and `/conf` are filed under (slurm.conf `ClusterName`). Set it to the site agent's `cluster_name`; empty = `default`. |
 | `slurmVersion` | `""` | Slurm release the emulator presents as (`24.11`, `25.05`, `25.11`, `26.05`, `master`): sets the slurmrestd URL prefix, `meta.slurm.release` and version-specific response shapes. Empty = image default (26.05). |
 | `partitionQos` | `""` | Per-partition QoS gates, e.g. `gpu=allow:normal,high;gpu=qos:normal`. |
 | `jobs.clock` | `wall` | `wall` (real time) or `time` (emulator clock) for submitted-job progression. |

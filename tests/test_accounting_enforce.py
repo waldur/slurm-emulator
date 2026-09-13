@@ -13,8 +13,10 @@ import pytest
 from emulator.api.slurmrestd.envelope import ESLURM_INVALID_ACCOUNT
 from emulator.api.ssh import server
 from emulator.commands.dispatcher import SlurmEmulator
+from emulator.commands.sacctmgr import SacctmgrEmulator
 from emulator.core import accounting
 from emulator.core.database import SlurmDatabase
+from emulator.core.time_engine import TimeEngine
 from emulator.slurm_version import current
 
 V = current().api_version
@@ -174,12 +176,25 @@ class TestRestSubmit:
     def test_removed_member_can_no_longer_submit(self, restd, auth_headers, state_env, enforced):
         _seed(state_env)
         assert _submit(restd, auth_headers, "alice", account="proj1").status_code == 200
-        restd.delete(
+        # proj1 is alice's default: slurmdbd refuses to drop it while proj2 remains
+        # (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#as_mysql_remove_assocs),
+        # so membership is withdrawn the way an agent does it — every association goes.
+        refused = restd.delete(
             f"/slurmdb/{V}/associations/",
             params={"user": "alice", "account": "proj1"},
             headers=auth_headers,
         )
+        assert refused.status_code == 422
+        assert _submit(restd, auth_headers, "alice", account="proj1").status_code == 200
+        for acct in ("proj2", "proj1"):
+            resp = restd.delete(
+                f"/slurmdb/{V}/associations/",
+                params={"user": "alice", "account": acct},
+                headers=auth_headers,
+            )
+            assert resp.status_code == 200
         assert _submit(restd, auth_headers, "alice", account="proj1").status_code == 422
+        assert _submit(restd, auth_headers, "alice").status_code == 422
 
     def test_permissive_keeps_legacy_fallback(self, restd, auth_headers, state_env, permissive):
         _seed(state_env)
@@ -232,3 +247,126 @@ class TestSshSbatch:
         out, _, code = server._sbatch(emu, "bob", ["job.sh"])
         assert code == 0
         assert emu.database.get_job(out.split()[-1]).account == "root"
+
+
+class TestClusterName:
+    """``SLURM_EMULATOR_CLUSTER_NAME`` is slurm.conf's ClusterName
+    (slurm://src/common/read_config.c#"ClusterName"): the cluster everything is filed under."""
+
+    @pytest.fixture
+    def linux(self, monkeypatch):
+        monkeypatch.setenv("SLURM_EMULATOR_CLUSTER_NAME", "linux")
+
+    def test_sets_and_creates_current_cluster(self, linux, state_env):
+        db = SlurmDatabase()
+        assert db.current_cluster == "linux"
+        assert db.get_cluster("linux") is not None
+        assert db.get_association("root", "root", cluster="linux") is not None
+        # A saved state file pointing elsewhere does not override the setting.
+        db.current_cluster = "default"
+        db.save_state()
+        fresh = SlurmDatabase()
+        fresh.load_state()
+        assert fresh.current_cluster == "linux"
+
+    def test_agent_rows_under_the_cluster_name_admit_submits(
+        self, linux, restd, auth_headers, enforced
+    ):
+        restd.post(
+            f"/slurmdb/{V}/accounts/",
+            json={"accounts": [{"name": "proj1", "description": "P", "organization": "o"}]},
+            headers=auth_headers,
+        )
+        restd.post(
+            f"/slurmdb/{V}/associations/",
+            json={"associations": [{"account": "proj1", "user": "alice", "cluster": "linux"}]},
+            headers=auth_headers,
+        )
+        conf = restd.get(f"/slurm/{V}/conf", headers=auth_headers).json()["config"]
+        assert conf["cluster_name"] == "linux"
+        resp = _submit(restd, auth_headers, "alice", account="proj1")
+        assert resp.status_code == 200
+        jid = resp.json()["job_id"]
+        job = restd.get(f"/slurm/{V}/job/{jid}", headers=auth_headers).json()["jobs"][0]
+        assert job["cluster"] == "linux"
+
+    def test_rows_on_another_cluster_do_not_count(self, state_env, enforced):
+        db = _seed(state_env)  # alice's rows live on "default"
+        db.add_cluster("linux")
+        db.current_cluster = "linux"
+        assert accounting.resolve_job_account(db, "alice", "proj1", "compute") is None
+
+
+class TestDefaultAssociationInvariant:
+    """slurmdbd keeps "the default account has a row" true
+    (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#as_mysql_remove_assocs,
+    slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_make_sure_user_has_default_internal)."""
+
+    @pytest.fixture
+    def em(self, tmp_path):
+        db = SlurmDatabase()
+        db.state_file = tmp_path / "state.json"
+        em = SacctmgrEmulator(db, TimeEngine())
+        for acct in ("proj-a", "proj-b"):
+            em.handle_command(["add", "account", acct, "description=x", "organization=o"])
+        em.handle_command(["add", "user", "alice", "account=proj-a"])
+        em.handle_command(["add", "user", "alice", "account=proj-b"])
+        return em
+
+    def test_first_association_becomes_default(self, em):
+        assert em.database.get_user("alice").default_account == "proj-a"
+
+    def test_removing_default_is_refused_while_others_remain(self, em, capsys):
+        out = em.handle_command(["remove", "user", "where", "name=alice", "account=proj-a"])
+        assert em.exit_code == 1
+        assert (
+            out.splitlines()[0]
+            == " Error with request: You can not remove the default account of a user"
+        )
+        assert "A = proj-a" in out
+        assert out.splitlines()[-1] == " Changes Discarded"
+        assert em.database.get_association("alice", "proj-a") is not None
+
+    def test_last_association_takes_the_user_along(self, em):
+        em.handle_command(["remove", "user", "where", "name=alice", "account=proj-b"])
+        assert em.exit_code == 0
+        assert em.database.get_user("alice") is not None
+        em.handle_command(["remove", "user", "where", "name=alice", "account=proj-a"])
+        assert em.exit_code == 0
+        assert em.database.get_user("alice") is None
+        assert em.database.user_association_rows("alice") == []
+
+    def test_remove_user_by_name_deletes_everything(self, em):
+        out = em.handle_command(["remove", "user", "where", "name=alice"])
+        assert em.exit_code == 0
+        assert out == " Deleting users...\n  alice"
+        assert em.database.get_user("alice") is None
+        assert em.database.user_association_rows("alice") == []
+
+    def test_rest_delete_refuses_default_then_allows_last(self, restd, auth_headers, state_env):
+        db = SlurmDatabase()
+        db.load_state()
+        db.add_account("proj-a", "A", "o")
+        db.add_account("proj-b", "B", "o")
+        db.add_user("alice")
+        db.add_association("alice", "proj-a")
+        db.add_association("alice", "proj-b")
+        db.save_state()
+        resp = restd.delete(
+            f"/slurmdb/{V}/associations/",
+            params={"user": "alice", "account": "proj-a"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+        err = resp.json()["errors"][0]
+        assert err["error_number"] == 7009
+        assert err["description"] == "You can not remove the default account of a user"
+        for acct in ("proj-b", "proj-a"):
+            resp = restd.delete(
+                f"/slurmdb/{V}/associations/",
+                params={"user": "alice", "account": acct},
+                headers=auth_headers,
+            )
+            assert resp.status_code == 200
+        users = restd.get(f"/slurmdb/{V}/user/alice", headers=auth_headers).json()["users"]
+        assert users == []

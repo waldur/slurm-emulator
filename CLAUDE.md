@@ -409,6 +409,9 @@ so they also appear in the accounting (`/slurmdb` / `sacct`) view. Configurable 
   sssd → LDAP inside the image) so `id`, `scontrol show job`, sacct `UID`/`GID`/`Group` and the
   slurmrestd `user_id`/`group_id` carry real ids, and unknown users are refused on submit
   (`ESLURM_USER_ID_UNKNOWN`) and on `sacctmgr add user` (unless `-i`). Unset = every user is 1000
+- `SLURM_EMULATOR_CLUSTER_NAME` = slurm.conf `ClusterName` (default `default`): sets `current_cluster`
+  at startup, so agent-created associations (`cluster=<name>`), jobs and `/conf` agree
+- `SLURM_EMULATOR_NSS_CACHE_TTL` (60 s) = how long a resolved identity incl. groups is trusted
 - `SLURM_EMULATOR_ACCOUNTING_ENFORCE` = `associations` (default; `none` opts out) refuses `POST /job/submit` / `sbatch` when the user has no association for the
   account (`ESLURM_INVALID_ACCOUNT`, `emulator/core/accounting.py#admit_job`, the single admission
   path for REST submit and `sbatch`); `none` = pre-0.10 fallback to root

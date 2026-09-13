@@ -87,6 +87,10 @@ spec:
             - name: SLURM_EMULATOR_PARTITION_QOS
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.clusterName }}
+            - name: SLURM_EMULATOR_CLUSTER_NAME
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.slurmVersion }}
             - name: SLURM_EMULATOR_SLURM_VERSION
               value: {{ . | quote }}

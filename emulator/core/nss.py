@@ -8,12 +8,17 @@ is backed by sssd → LDAP) instead, the same calls real Slurm makes
 A client that authenticates as user X then sees X's real uid/gid in
 ``id``, ``scontrol show job``, ``sacct`` and the slurmrestd job views.
 
-Positive lookups are cached for the life of the process like
-slurm://src/common/uid.c#uid_from_string_cached@26.05+; a miss is remembered
-for only :data:`NEGATIVE_TTL` seconds, so a burst of requests for an unknown
-name does not hammer the directory, yet a user created after a failed lookup
-resolves within seconds. Group names are resolved once and stored on the
-:class:`Identity`, so ``id`` is served entirely from the cache.
+Lookups are cached per process the way real Slurm caches name→uid
+(slurm://src/common/uid.c#uid_from_string_cached@26.05+), but with a TTL:
+an :class:`Identity` — uid, gid, home *and* the group list — is trusted for
+:func:`positive_ttl` seconds (``SLURM_EMULATOR_NSS_CACHE_TTL``, default 60,
+matching sssd's own entry cache), so a user dropped from a project group
+stops showing it in ``id`` and stops getting the gid in shell commands
+without a restart. A miss is remembered for only :data:`NEGATIVE_TTL`
+seconds, so a burst of requests for an unknown name does not hammer the
+directory, yet a user created after a failed lookup resolves within
+seconds. Group names are resolved with the entry and stored on it, so ``id``
+is served entirely from the cache while the entry is fresh.
 Inert when the variable is unset: :func:`lookup` returns ``None`` and no
 NSS call is made.
 """
@@ -39,6 +44,16 @@ ENV_VAR = "SLURM_EMULATOR_NSS"
 _TRUE = {"1", "true", "yes", "on"}
 # How long a failed lookup is remembered before the directory is asked again.
 NEGATIVE_TTL = 5.0
+# How long a resolved identity (incl. its group list) is trusted.
+CACHE_TTL_ENV_VAR = "SLURM_EMULATOR_NSS_CACHE_TTL"
+DEFAULT_POSITIVE_TTL = 60.0
+
+
+def positive_ttl() -> float:
+    try:
+        return float(os.environ.get(CACHE_TTL_ENV_VAR, DEFAULT_POSITIVE_TTL))
+    except ValueError:
+        return DEFAULT_POSITIVE_TTL
 
 
 @dataclass(frozen=True)
@@ -73,7 +88,7 @@ class Identity:
         return self.gecos.split(",", 1)[0].strip()
 
 
-_cache: dict[str, Identity] = {}
+_cache: dict[str, tuple[Identity, float]] = {}
 _misses: dict[str, float] = {}
 
 
@@ -106,8 +121,8 @@ def resolve(name: str) -> Optional[Identity]:
     if not name:
         return None
     cached = _cache.get(name)
-    if cached is not None:
-        return cached
+    if cached is not None and time.monotonic() - cached[1] < positive_ttl():
+        return cached[0]
     if pwd is None:
         return None
     missed_at = _misses.get(name)
@@ -136,7 +151,7 @@ def resolve(name: str) -> Optional[Identity]:
         groups=groups,
         group_names=tuple(group_name(g) for g in groups),
     )
-    _cache[name] = identity
+    _cache[name] = (identity, time.monotonic())
     return identity
 
 

@@ -397,7 +397,15 @@ With the mode on:
   requested — or, when none is requested, default — account:
   `ESLURM_INVALID_ACCOUNT` "Invalid account or account/partition combination
   specified" (HTTP 422), so a person removed from a project can no longer
-  submit against it;
+  submit against it. **Behaviour change in 0.10:** earlier releases let any
+  user submit and fell back to `root`; set
+  `SLURM_EMULATOR_ACCOUNTING_ENFORCE=none` to get that back. The check is
+  cluster-scoped, so a deployment whose site agent uses `cluster_name: linux`
+  must set `SLURM_EMULATOR_CLUSTER_NAME=linux` (chart `clusterName`) or the
+  agent's rows land on a cluster the submit never looks at. As in slurmdbd, a
+  user's default association cannot be removed while other associations remain
+  (`You can not remove the default account of a user`), and removing the last
+  one removes the user;
 - when the emulator runs as root (the Docker image does), shell commands over
   SSH run *as the login user* — uid, gid, supplementary groups, `$HOME` —
   so `id`, `stat`, `chown` and file ownership behave like a real login node;
@@ -416,6 +424,8 @@ docker compose exec slurm id hpc_9001
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `SLURM_EMULATOR_NSS` | unset | `1` resolves users through the OS NSS (sssd → LDAP in the image) |
+| `SLURM_EMULATOR_CLUSTER_NAME` | `default` | slurm.conf `ClusterName`: the cluster associations, submitted jobs and `/slurm/…/conf` are filed under; set it to the site agent's `cluster_name` so the association check on submit sees the agent's rows |
+| `SLURM_EMULATOR_NSS_CACHE_TTL` | `60` | seconds a resolved identity (uid/gid/groups) is trusted before NSS is asked again; misses are retried after 5 s |
 | `SLURM_EMULATOR_ACCOUNTING_ENFORCE` | `associations` | `AccountingStorageEnforce`: with `associations` (or `limits`/`qos`/`safe`/`wckeys`) a submit by a user with no association for the account fails with `ESLURM_INVALID_ACCOUNT`; `none` = permissive pre-0.10 fallback to the default account, then `root` |
 | `SLURM_EMULATOR_SSSD_CONF` | `/etc/slurm-emulator/sssd.conf` | sssd config the entrypoint installs as a private root-only copy (falls back to `/etc/sssd/sssd.conf`) |
 

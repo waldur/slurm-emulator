@@ -42,6 +42,7 @@ from emulator.core.database import (
     QOS,
     Association,
     ClusterClassification,
+    DefaultAssociationError,
     SlurmDatabase,
     fold_account,
 )
@@ -967,20 +968,38 @@ class SacctmgrEmulator:
             elif arg.startswith("name="):
                 username = arg.split("=", 1)[1]
 
-        if account and username:
-            # Remove every association row for this (user, account),
-            # including every partition-scoped row — mirrors real
-            # sacctmgr remove user where name=… and account=… .
-            self.database.delete_user_associations(username, account)
-            result = f" Deleting user association...\n  User: {username}\n  Account: {account}"
-        elif account:
-            # Remove all users from account
-            users = self.database.list_account_users(account)
-            for user in users:
-                self.database.delete_user_associations(user, account)
-            result = f" Deleting {len(users)} user association(s) from account {account}"
-        else:
-            return self._fail(" error: Insufficient parameters in where clause")
+        try:
+            if account and username:
+                # Remove every association row for this (user, account),
+                # including every partition-scoped row — mirrors real
+                # sacctmgr remove user where name=… and account=… ; the
+                # user itself goes when that was its last association.
+                self.database.remove_user_from_account(username, account)
+                result = f" Deleting user association...\n  User: {username}\n  Account: {account}"
+            elif account:
+                # Remove all users from account
+                users = self.database.list_account_users(account)
+                for user in users:
+                    self.database.remove_user_from_account(user, account)
+                result = f" Deleting {len(users)} user association(s) from account {account}"
+            elif username:
+                # ``where name=U`` alone deletes the user and all its associations
+                # (slurm://src/sacctmgr/user_functions.c#sacctmgr_delete_user).
+                if not self.database.remove_user(username):
+                    return self._fail(" Nothing deleted")
+                result = f" Deleting users...\n  {username}"
+            else:
+                return self._fail(" error: Insufficient parameters in where clause")
+        except DefaultAssociationError as e:
+            # slurm://src/sacctmgr/user_functions.c#sacctmgr_delete_user prints
+            # the strerror, the affected association and the advice, then discards.
+            return self._fail(
+                f" Error with request: {e.TEXT}\n"
+                f"  C = {self.database.current_cluster:<10} A = {e.account:<20} U = {e.user:<9}\n"
+                " You must change the default account of these users or remove the users "
+                "completely from the affected clusters to allow these changes.\n"
+                " Changes Discarded"
+            )
 
         self.database.save_state()
         return result

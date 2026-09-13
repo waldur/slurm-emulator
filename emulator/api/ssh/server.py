@@ -75,12 +75,37 @@ def _user_home(user: str) -> Path:
     home.mkdir(parents=True, exist_ok=True)
     identity = _login_identity(user)
     if identity is not None:
-        # Created by the emulator (root); hand it to the login user so the
-        # commands running as that user can write into it.
-        st = home.stat()
-        if (st.st_uid, st.st_gid) != (identity.uid, identity.gid):
-            os.chown(home, identity.uid, identity.gid)
+        _own_home(home, identity)
     return home
+
+
+# Records which uid:gid a sandbox home was last handed to, so the recursive
+# chown runs once per identity change rather than on every command.
+_OWNER_STAMP = ".slurm-emulator-owner"
+
+
+def _own_home(home: Path, identity: nss.Identity) -> None:
+    """Hand ``home`` and everything in it to the login user, once per identity.
+
+    Commands now run as the user, so files the emulator created earlier as
+    root (or under a previous identity — e.g. a persisted volume from before
+    NSS mode) would be EACCES for them. The stamp file avoids walking the
+    tree on every command; a changed uid/gid (directory re-mapped) redoes it.
+    """
+    stamp = home / _OWNER_STAMP
+    wanted = f"{identity.uid}:{identity.gid}"
+    try:
+        if stamp.read_text().strip() == wanted:
+            return
+    except OSError:
+        pass
+    for root, dirs, files in os.walk(home):
+        for entry in (*dirs, *files):
+            with contextlib.suppress(OSError):
+                os.lchown(Path(root) / entry, identity.uid, identity.gid)
+    os.chown(home, identity.uid, identity.gid)
+    stamp.write_text(wanted + "\n")
+    os.chown(stamp, identity.uid, identity.gid)
 
 
 def _login_identity(user: str) -> Optional[nss.Identity]:

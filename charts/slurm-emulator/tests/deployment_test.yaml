@@ -85,6 +85,26 @@ tests:
             name: SLURM_EMULATOR_PARTITIONS
           any: true
 
+  - it: omits the cluster name env var by default
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_CLUSTER_NAME
+          any: true
+
+  - it: passes the cluster name through when set
+    template: templates/deployment.yaml
+    set:
+      clusterName: linux
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_CLUSTER_NAME
+            value: "linux"
+
   - it: omits the Slurm version env var by default
     template: templates/deployment.yaml
     asserts:

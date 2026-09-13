@@ -82,6 +82,12 @@ accountingEnforce: ""
 # Sets SLURM_EMULATOR_DEBUG=1.
 debug: false
 
+# ClusterName (SLURM_EMULATOR_CLUSTER_NAME). Associations a site agent creates
+# with cluster=<name>, submitted jobs and /slurm/.../conf all use it, so the
+# association check on submit sees the agent's rows. Empty keeps "default".
+# Must match the site agent's cluster_name when one is deployed against it.
+clusterName: ""
+
 # Which Slurm release the emulator presents itself as
 # (SLURM_EMULATOR_SLURM_VERSION): one of the versions tracked in the repo's
 # pyproject [tool.slurm-parity] — "24.11", "25.05", "25.11", "26.05", "master".
