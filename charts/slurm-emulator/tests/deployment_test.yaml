@@ -187,7 +187,7 @@ tests:
       - isNull:
           path: spec.template.spec.volumes
 
-  - it: leaves accounting enforcement to the image default
+  - it: leaves accounting enforcement to the emulator default
     template: templates/deployment.yaml
     asserts:
       - notContains:

@@ -72,11 +72,11 @@ jobs:
   runDurationSeconds: 8
 
 # AccountingStorageEnforce for job submission (SLURM_EMULATOR_ACCOUNTING_ENFORCE).
-# The image defaults to "associations": a user with no association for the
+# The emulator defaults to "associations": a user with no association for the
 # requested (or default) account is refused with ESLURM_INVALID_ACCOUNT, as on
 # a production cluster. Set "none" for the permissive legacy behaviour where any
 # user can submit against any account — handy for ad-hoc demos without a site
-# agent creating associations. Empty keeps the image default.
+# agent creating associations. Empty keeps the emulator default.
 accountingEnforce: ""
 
 # Sets SLURM_EMULATOR_DEBUG=1.

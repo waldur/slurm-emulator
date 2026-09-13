@@ -391,7 +391,8 @@ With the mode on:
   gated, so a site agent can create accounts before the directory entry exists;
 - `sreport` fills `Proper Name` from the gecos field;
 - independently of NSS, `SLURM_EMULATOR_ACCOUNTING_ENFORCE=associations` (the
-  Docker image default; the library default is unset, like `slurm.conf`) makes
+  default everywhere; `slurm.conf` itself leaves it unset, but every managed
+  production cluster sets it) makes
   `POST /job/submit` and `sbatch` refuse a user with no association for the
   requested — or, when none is requested, default — account:
   `ESLURM_INVALID_ACCOUNT` "Invalid account or account/partition combination
@@ -415,7 +416,7 @@ docker compose exec slurm id hpc_9001
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `SLURM_EMULATOR_NSS` | unset | `1` resolves users through the OS NSS (sssd → LDAP in the image) |
-| `SLURM_EMULATOR_ACCOUNTING_ENFORCE` | unset (image: `associations`) | `AccountingStorageEnforce`: with `associations` (or `limits`/`qos`/`safe`/`wckeys`) a submit by a user with no association for the account fails with `ESLURM_INVALID_ACCOUNT`; unset/`none` = permissive legacy fallback to the default account, then `root` |
+| `SLURM_EMULATOR_ACCOUNTING_ENFORCE` | `associations` | `AccountingStorageEnforce`: with `associations` (or `limits`/`qos`/`safe`/`wckeys`) a submit by a user with no association for the account fails with `ESLURM_INVALID_ACCOUNT`; `none` = permissive pre-0.10 fallback to the default account, then `root` |
 | `SLURM_EMULATOR_SSSD_CONF` | `/etc/slurm-emulator/sssd.conf` | sssd config the entrypoint installs as a private root-only copy (falls back to `/etc/sssd/sssd.conf`) |
 
 In Kubernetes the chart exposes it as `nss.enabled` + `nss.sssdConfSecret`;

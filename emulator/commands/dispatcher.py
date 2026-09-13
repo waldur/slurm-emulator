@@ -14,6 +14,11 @@ from emulator.core import nss
 from emulator.core.database import SlurmDatabase
 from emulator.core.time_engine import TimeEngine
 
+# coreutils ``id`` options the emulator understands (long → short), and the
+# short letters accepted in a cluster; ``-r``/``-z`` are accepted and ignored.
+_ID_LONG_OPTS = {"user": "u", "group": "g", "groups": "G", "name": "n", "real": "r", "zero": "z"}
+_ID_SHORT_OPTS = set("ugGnrz")
+
 
 class SlurmEmulator:
     """Main SLURM emulator class."""
@@ -170,7 +175,15 @@ class SlurmEmulator:
         flags: set[str] = set()
         username = ""
         for arg in args:
-            if arg.startswith("-") and len(arg) > 1:
+            if arg.startswith("--") and len(arg) > 2:
+                short = _ID_LONG_OPTS.get(arg[2:])
+                if short is None:
+                    return self._id_usage_error(f"unrecognized option '{arg}'")
+                flags.add(short)
+            elif arg.startswith("-") and len(arg) > 1:
+                unknown = [c for c in arg[1:] if c not in _ID_SHORT_OPTS]
+                if unknown and nss.enabled():
+                    return self._id_usage_error(f"invalid option -- '{unknown[0]}'")
                 flags.update(arg[1:])
             elif not username:
                 username = arg
@@ -186,6 +199,11 @@ class SlurmEmulator:
         return f"id: {username}: no such user"
 
     @staticmethod
+    def _id_usage_error(message: str) -> str:
+        print(f"id: {message}\nTry 'id --help' for more information.", file=sys.stderr)
+        raise SystemExit(1)
+
+    @staticmethod
     def _id_nss(username: str, flags: set[str]) -> str:
         identity = nss.resolve(username)
         if identity is None:
@@ -198,8 +216,8 @@ class SlurmEmulator:
             return identity.group if names else str(identity.gid)
         groups = identity.groups or (identity.gid,)
         if "G" in flags:
-            return " ".join(nss.group_name(g) if names else str(g) for g in groups)
-        listed = ",".join(f"{g}({nss.group_name(g)})" for g in groups)
+            return " ".join(identity.group_name_of(g) if names else str(g) for g in groups)
+        listed = ",".join(f"{g}({identity.group_name_of(g)})" for g in groups)
         return f"uid={identity.uid}({identity.name}) gid={identity.gid}({identity.group}) groups={listed}"
 
 

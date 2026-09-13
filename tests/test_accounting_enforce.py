@@ -28,7 +28,7 @@ def enforced(monkeypatch):
 
 @pytest.fixture
 def permissive(monkeypatch):
-    monkeypatch.delenv(accounting.ENV_VAR, raising=False)
+    monkeypatch.setenv(accounting.ENV_VAR, "none")
 
 
 def _seed(state_env):
@@ -70,12 +70,36 @@ class TestSetting:
         monkeypatch.setenv(accounting.ENV_VAR, value)
         assert accounting.associations_enforced() is expected
 
-    def test_unset_is_off_like_slurm_conf(self, permissive):  # noqa: ARG002
-        assert accounting.associations_enforced() is False
+    def test_unset_means_associations(self, monkeypatch):
+        monkeypatch.delenv(accounting.ENV_VAR, raising=False)
+        assert accounting.DEFAULT == "associations"
+        assert accounting.associations_enforced() is True
+
+
+class TestRootSeed:
+    """slurmdbd always has user root under account root
+    (slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#_as_mysql_acct_check_tables,
+    slurm://src/plugins/accounting_storage/mysql/as_mysql_cluster.c#as_mysql_add_clusters)."""
+
+    def test_root_user_and_association_on_every_cluster(self, state_env):
+        db = SlurmDatabase()
+        assert db.get_user("root").default_account == "root"
+        assert db.get_association("root", "root", cluster="default") is not None
+        db.add_cluster("second")
+        assert db.get_association("root", "root", cluster="second") is not None
+
+    def test_root_submits_under_enforcement(self, restd, auth_headers, enforced):
+        # No user_name and no token user → slurm_user "root" → root's own association.
+        body = {"job": {"script": SCRIPT}}
+        resp = restd.post(f"/slurm/{V}/job/submit", json=body, headers=auth_headers)
+        assert resp.status_code == 200
+        jid = resp.json()["job_id"]
+        job = restd.get(f"/slurm/{V}/job/{jid}", headers=auth_headers).json()["jobs"][0]
+        assert (job["user_name"], job["account"]) == ("root", "root")
 
 
 class TestResolveJobAccount:
-    def test_enforced(self, state_env, enforced):  # noqa: ARG002
+    def test_enforced(self, state_env, enforced):
         db = _seed(state_env)
         assert accounting.resolve_job_account(db, "alice", "proj1", "compute") == "proj1"
         assert accounting.resolve_job_account(db, "alice", "", "compute") == "proj1"
@@ -87,13 +111,22 @@ class TestResolveJobAccount:
         assert accounting.resolve_job_account(db, "bob", "", "compute") is None
         assert accounting.resolve_job_account(db, "ghost", "", "compute") is None
 
-    def test_default_without_recorded_default_account(self, state_env, enforced):  # noqa: ARG002
+    def test_default_without_recorded_default_account(self, state_env, enforced):
         db = _seed(state_env)
         db.add_user("carol")
         db.add_association("carol", "proj2")
         assert accounting.resolve_job_account(db, "carol", "", "compute") == "proj2"
 
-    def test_permissive_legacy_chain(self, state_env, permissive):  # noqa: ARG002
+    def test_identity_precedes_association(self, state_env, enforced, monkeypatch):
+        # slurmctld order: USER_ID parse error before the association check.
+        db = _seed(state_env)
+        monkeypatch.setenv("SLURM_EMULATOR_NSS", "1")
+        monkeypatch.setattr(accounting.nss, "resolve", lambda _name: None)
+        admission = accounting.admit_job(db, "bob", "proj1", "compute")
+        assert admission.error == accounting.ESLURM_USER_ID_UNKNOWN
+        assert admission.message == "Unable to resolve user: bob"
+
+    def test_permissive_legacy_chain(self, state_env, permissive):
         db = _seed(state_env)
         assert accounting.resolve_job_account(db, "alice", "", "compute") == "proj1"
         assert accounting.resolve_job_account(db, "bob", "", "compute") == "root"
@@ -102,7 +135,7 @@ class TestResolveJobAccount:
 
 
 class TestRestSubmit:
-    def test_member_is_accepted(self, restd, auth_headers, state_env, enforced):  # noqa: ARG002
+    def test_member_is_accepted(self, restd, auth_headers, state_env, enforced):
         _seed(state_env)
         resp = _submit(restd, auth_headers, "alice", account="proj1")
         assert resp.status_code == 200
@@ -110,7 +143,7 @@ class TestRestSubmit:
         job = restd.get(f"/slurm/{V}/job/{jid}", headers=auth_headers).json()["jobs"][0]
         assert job["account"] == "proj1"
 
-    def test_default_account_when_none_requested(self, restd, auth_headers, state_env, enforced):  # noqa: ARG002
+    def test_default_account_when_none_requested(self, restd, auth_headers, state_env, enforced):
         _seed(state_env)
         jid = _submit(restd, auth_headers, "alice").json()["job_id"]
         job = restd.get(f"/slurm/{V}/job/{jid}", headers=auth_headers).json()["jobs"][0]
@@ -127,7 +160,7 @@ class TestRestSubmit:
     )
     def test_no_association_is_refused(
         self, restd, auth_headers, state_env, enforced, user, fields
-    ):  # noqa: ARG002
+    ):
         _seed(state_env)
         resp = _submit(restd, auth_headers, user, **fields)
         # slurmctld-range errno → 422 (slurm://src/common/http.c#http_status_from_error@25.11+)
@@ -138,7 +171,7 @@ class TestRestSubmit:
         assert err["description"].startswith("Invalid account or account/partition combination")
         assert restd.get(f"/slurm/{V}/jobs/", headers=auth_headers).json()["jobs"] == []
 
-    def test_removed_member_can_no_longer_submit(self, restd, auth_headers, state_env, enforced):  # noqa: ARG002
+    def test_removed_member_can_no_longer_submit(self, restd, auth_headers, state_env, enforced):
         _seed(state_env)
         assert _submit(restd, auth_headers, "alice", account="proj1").status_code == 200
         restd.delete(
@@ -148,7 +181,7 @@ class TestRestSubmit:
         )
         assert _submit(restd, auth_headers, "alice", account="proj1").status_code == 422
 
-    def test_permissive_keeps_legacy_fallback(self, restd, auth_headers, state_env, permissive):  # noqa: ARG002
+    def test_permissive_keeps_legacy_fallback(self, restd, auth_headers, state_env, permissive):
         _seed(state_env)
         jid = _submit(restd, auth_headers, "bob").json()["job_id"]
         job = restd.get(f"/slurm/{V}/job/{jid}", headers=auth_headers).json()["jobs"][0]
@@ -171,13 +204,13 @@ class TestRestSubmit:
 
 
 class TestSshSbatch:
-    def test_member_and_non_member(self, state_env, enforced):  # noqa: ARG002
+    def test_member_and_non_member(self, state_env, enforced):
         _seed(state_env)
         emu = SlurmEmulator()
-        out, err, code = server._sbatch(emu, "alice", ["-A", "proj1", "job.sh"])  # noqa: SLF001
+        out, err, code = server._sbatch(emu, "alice", ["-A", "proj1", "job.sh"])
         assert (err, code) == ("", 0)
         assert out.startswith("Submitted batch job ")
-        out, err, code = server._sbatch(emu, "bob", ["-A", "proj1", "job.sh"])  # noqa: SLF001
+        out, err, code = server._sbatch(emu, "bob", ["-A", "proj1", "job.sh"])
         assert (out, code) == ("", 1)
         assert err == (
             "sbatch: error: Batch job submission failed: "
@@ -185,17 +218,17 @@ class TestSshSbatch:
         )
         assert len(emu.database.jobs) == 1
 
-    def test_partition_bound_association(self, state_env, enforced):  # noqa: ARG002
+    def test_partition_bound_association(self, state_env, enforced):
         _seed(state_env)
         emu = SlurmEmulator()
-        _, _, code = server._sbatch(emu, "alice", ["-A", "proj2", "-p", "gpu", "job.sh"])  # noqa: SLF001
+        _, _, code = server._sbatch(emu, "alice", ["-A", "proj2", "-p", "gpu", "job.sh"])
         assert code == 0
-        _, _, code = server._sbatch(emu, "alice", ["-A", "proj2", "job.sh"])  # noqa: SLF001
+        _, _, code = server._sbatch(emu, "alice", ["-A", "proj2", "job.sh"])
         assert code == 1
 
-    def test_permissive(self, state_env, permissive):  # noqa: ARG002
+    def test_permissive(self, state_env, permissive):
         _seed(state_env)
         emu = SlurmEmulator()
-        out, _, code = server._sbatch(emu, "bob", ["job.sh"])  # noqa: SLF001
+        out, _, code = server._sbatch(emu, "bob", ["job.sh"])
         assert code == 0
         assert emu.database.get_job(out.split()[-1]).account == "root"

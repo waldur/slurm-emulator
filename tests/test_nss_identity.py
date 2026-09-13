@@ -43,9 +43,15 @@ DIRECTORY = {
         gecos="Test Person,Room 1,,",
         home="/home/hpc_9001",
         groups=(9001, 5000),
+        group_names=("hpc_9001", "project-a"),
     ),
 }
-GROUPS = {9001: "hpc_9001", 5000: "project-a"}
+
+
+@pytest.fixture(autouse=True)
+def permissive_accounting(monkeypatch):
+    """These tests are about identity; admission is covered in test_accounting_enforce."""
+    monkeypatch.setenv("SLURM_EMULATOR_ACCOUNTING_ENFORCE", "none")
 
 
 @pytest.fixture
@@ -53,7 +59,6 @@ def nss_on(monkeypatch):
     """Turn NSS mode on with a fake passwd/group database."""
     monkeypatch.setenv(nss.ENV_VAR, "1")
     monkeypatch.setattr(nss, "resolve", lambda name: DIRECTORY.get(name))
-    monkeypatch.setattr(nss, "group_name", lambda gid: GROUPS.get(gid, str(gid)))
     return DIRECTORY
 
 
@@ -68,7 +73,7 @@ def nss_off(monkeypatch):
 
 
 @pytest.fixture
-def emu(state_env):  # noqa: ARG001 - state files isolated by the env fixture
+def emu(state_env):  # state files isolated by the env fixture
     return SlurmEmulator()
 
 
@@ -98,9 +103,31 @@ class TestModule:
         assert root is not None
         assert root.uid == 0
         assert root.groups[0] == root.gid
+        assert root.group_names[0] == root.group
+        assert root.group_name_of(root.gid) == root.group
         assert nss.resolve("root") is root
         assert nss.resolve("no-such-user-for-the-emulator") is None
         assert "no-such-user-for-the-emulator" not in nss._cache
+
+    def test_misses_are_remembered_briefly(self, monkeypatch):
+        pytest.importorskip("pwd")
+        monkeypatch.setattr(nss, "_cache", {})
+        monkeypatch.setattr(nss, "_misses", {})
+        calls = []
+
+        class FakePwd:
+            @staticmethod
+            def getpwnam(name):
+                calls.append(name)
+                raise KeyError(name)
+
+        monkeypatch.setattr(nss, "pwd", FakePwd)
+        assert nss.resolve("ghost") is None
+        assert nss.resolve("ghost") is None
+        assert calls == ["ghost"]  # second call served from the negative cache
+        monkeypatch.setattr(nss, "NEGATIVE_TTL", 0.0)
+        assert nss.resolve("ghost") is None
+        assert calls == ["ghost", "ghost"]
 
     def test_proper_name_is_first_gecos_field(self):
         assert DIRECTORY["hpc_9001"].proper_name == "Test Person"
@@ -193,6 +220,7 @@ class TestSshTimeoutWrapper:
         ("command", "expected"),
         [
             ("timeout 10 id", ["id"]),
+            ("timeout 10 id -u", ["id", "-u"]),
             ("timeout 10 sacct -P -n -j 7", ["sacct", "-P", "-n", "-j", "7"]),
             (
                 "timeout -s KILL -k 5 10 /usr/bin/scontrol show job 7",
@@ -206,28 +234,36 @@ class TestSshTimeoutWrapper:
             ("ls", None),
         ],
     )
-    def test_slurm_argv(self, command, expected):
-        assert server._slurm_argv(command) == expected  # noqa: SLF001
+    def test_slurm_argv(self, nss_on, command, expected):
+        assert server._slurm_argv(command) == expected
+
+    @pytest.mark.parametrize("command", ["id", "timeout 10 id", "id -u alice", "/usr/bin/id"])
+    def test_id_goes_to_the_shell_when_nss_is_off(self, nss_off, command):
+        # Only NSS mode owns ``id``; otherwise real coreutils answers, as before.
+        assert server._slurm_argv(command) is None
+
+    def test_other_slurm_bins_unaffected_by_nss(self, nss_off):
+        assert server._slurm_argv("timeout 10 sacct -P") == ["sacct", "-P"]
 
 
 class TestShellRunsAsLoginUser:
-    def test_kwargs_when_root_in_nss_mode(self, nss_on, monkeypatch):  # noqa: ARG002
+    def test_kwargs_when_root_in_nss_mode(self, nss_on, monkeypatch):
         monkeypatch.setattr(server.os, "geteuid", lambda: 0)
-        assert server._run_as_kwargs("hpc_9001") == {  # noqa: SLF001
+        assert server._run_as_kwargs("hpc_9001") == {
             "user": 9001,
             "group": 9001,
             "extra_groups": [9001, 5000],
         }
-        assert server._run_as_kwargs("ghost") == {}  # noqa: SLF001
+        assert server._run_as_kwargs("ghost") == {}
 
-    def test_no_switch_without_root_or_nss(self, nss_on, monkeypatch):  # noqa: ARG002
+    def test_no_switch_without_root_or_nss(self, nss_on, monkeypatch):
         monkeypatch.setattr(server.os, "geteuid", lambda: 1000)
-        assert server._run_as_kwargs("hpc_9001") == {}  # noqa: SLF001
+        assert server._run_as_kwargs("hpc_9001") == {}
         monkeypatch.setattr(server.os, "geteuid", lambda: 0)
         monkeypatch.delenv(nss.ENV_VAR)
-        assert server._run_as_kwargs("hpc_9001") == {}  # noqa: SLF001
+        assert server._run_as_kwargs("hpc_9001") == {}
 
-    def test_run_shell_passes_identity(self, nss_on, monkeypatch, tmp_path):  # noqa: ARG002
+    def test_run_shell_passes_identity(self, nss_on, monkeypatch, tmp_path):
         monkeypatch.setenv("SLURM_EMULATOR_FS_ROOT", str(tmp_path / "fs"))
         monkeypatch.setattr(server.os, "geteuid", lambda: 0)
         monkeypatch.setattr(server.os, "chown", lambda *a: None)
@@ -238,7 +274,7 @@ class TestShellRunsAsLoginUser:
             return subprocess.CompletedProcess(argv, 0, "ok\n", "")
 
         monkeypatch.setattr(server.subprocess, "run", fake_run)
-        assert server._run_shell("hpc_9001", "id") == ("ok\n", "", 0)  # noqa: SLF001
+        assert server._run_shell("hpc_9001", "id") == ("ok\n", "", 0)
         assert (seen["user"], seen["group"], seen["extra_groups"]) == (9001, 9001, [9001, 5000])
         assert seen["env"]["USER"] == "hpc_9001"
         assert seen["env"]["HOME"].endswith("/home/hpc_9001")
@@ -262,10 +298,32 @@ class TestIdCommand:
             (["-G", "hpc_9001"], "9001 5000"),
             (["-Gn", "hpc_9001"], "hpc_9001 project-a"),
             (["hpc_9001", "-u"], "9001"),
+            (["--user", "hpc_9001"], "9001"),
+            (["--user", "--name", "hpc_9001"], "hpc_9001"),
+            (["--group", "hpc_9001"], "9001"),
+            (["--groups", "hpc_9001"], "9001 5000"),
+            (["--groups", "--name", "hpc_9001"], "hpc_9001 project-a"),
+            (
+                ["-r", "hpc_9001"],
+                "uid=9001(hpc_9001) gid=9001(hpc_9001) groups=9001(hpc_9001),5000(project-a)",
+            ),
         ],
     )
     def test_shapes(self, emu, nss_on, args, expected):
         assert emu.execute_command("id", args) == expected
+
+    @pytest.mark.parametrize(
+        ("args", "message"),
+        [
+            (["--bogus", "hpc_9001"], "unrecognized option '--bogus'"),
+            (["-x", "hpc_9001"], "invalid option -- 'x'"),
+        ],
+    )
+    def test_unknown_options_are_rejected(self, emu, nss_on, capsys, args, message):
+        with pytest.raises(SystemExit) as exc:
+            emu.execute_command("id", args)
+        assert exc.value.code == 1
+        assert capsys.readouterr().err == f"id: {message}\nTry 'id --help' for more information.\n"
 
     def test_unknown_user(self, emu, nss_on, capsys):
         with pytest.raises(SystemExit) as exc:
@@ -432,6 +490,10 @@ class TestStateCompatibility:
         assert (db.usage_records[0].uid, db.usage_records[0].gid) == (None, None)
         assert db.usage_records[0].group_name == ""
         assert (db.jobs["8"].uid, db.jobs["8"].gid, db.jobs["8"].group_name) == (None, None, "")
+        # slurmdbd's root user and its association are seeded into old files too
+        # (slurm://src/plugins/accounting_storage/mysql/as_mysql_cluster.c#as_mysql_add_clusters).
+        assert db.get_user("root").default_account == "root"
+        assert db.get_association("root", "root") is not None
 
     def test_identity_round_trips_and_reaches_accounting(self, tmp_path, monkeypatch):
         monkeypatch.setenv("SLURM_EMULATOR_JOB_CLOCK", "time")

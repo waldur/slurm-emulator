@@ -9,8 +9,11 @@ A client that authenticates as user X then sees X's real uid/gid in
 ``id``, ``scontrol show job``, ``sacct`` and the slurmrestd job views.
 
 Positive lookups are cached for the life of the process like
-slurm://src/common/uid.c#uid_from_string_cached@26.05+; misses are not, so a
-user created in the directory after a failed lookup resolves on retry.
+slurm://src/common/uid.c#uid_from_string_cached@26.05+; a miss is remembered
+for only :data:`NEGATIVE_TTL` seconds, so a burst of requests for an unknown
+name does not hammer the directory, yet a user created after a failed lookup
+resolves within seconds. Group names are resolved once and stored on the
+:class:`Identity`, so ``id`` is served entirely from the cache.
 Inert when the variable is unset: :func:`lookup` returns ``None`` and no
 NSS call is made.
 """
@@ -18,6 +21,7 @@ NSS call is made.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -30,7 +34,11 @@ except ImportError:  # pragma: no cover - no passwd database on this platform
 
 ENV_VAR = "SLURM_EMULATOR_NSS"
 
+# Values that switch the mode on. scripts/docker-entrypoint.sh accepts the
+# same set when deciding whether to start sssd — keep them in sync.
 _TRUE = {"1", "true", "yes", "on"}
+# How long a failed lookup is remembered before the directory is asked again.
+NEGATIVE_TTL = 5.0
 
 
 @dataclass(frozen=True)
@@ -44,8 +52,16 @@ class Identity:
     gecos: str = ""
     home: str = ""
     shell: str = ""
-    # Every gid the user belongs to, primary first (``initgroups`` order).
+    # Every gid the user belongs to, primary first (``initgroups`` order),
+    # and the matching names (``gid_to_string`` fallback: the number).
     groups: tuple[int, ...] = ()
+    group_names: tuple[str, ...] = ()
+
+    def group_name_of(self, gid: int) -> str:
+        try:
+            return self.group_names[self.groups.index(gid)]
+        except (ValueError, IndexError):
+            return str(gid)
 
     @property
     def proper_name(self) -> str:
@@ -58,6 +74,7 @@ class Identity:
 
 
 _cache: dict[str, Identity] = {}
+_misses: dict[str, float] = {}
 
 
 def enabled() -> bool:
@@ -67,6 +84,7 @@ def enabled() -> bool:
 
 def clear_cache() -> None:
     _cache.clear()
+    _misses.clear()
 
 
 def group_name(gid: int) -> str:
@@ -92,10 +110,15 @@ def resolve(name: str) -> Optional[Identity]:
         return cached
     if pwd is None:
         return None
+    missed_at = _misses.get(name)
+    if missed_at is not None and time.monotonic() - missed_at < NEGATIVE_TTL:
+        return None
     try:
         entry = pwd.getpwnam(name)
     except KeyError:
+        _misses[name] = time.monotonic()
         return None
+    _misses.pop(name, None)
     try:
         groups: tuple[int, ...] = tuple(os.getgrouplist(name, entry.pw_gid))
     except (AttributeError, OSError):
@@ -111,6 +134,7 @@ def resolve(name: str) -> Optional[Identity]:
         home=entry.pw_dir or "",
         shell=entry.pw_shell or "",
         groups=groups,
+        group_names=tuple(group_name(g) for g in groups),
     )
     _cache[name] = identity
     return identity

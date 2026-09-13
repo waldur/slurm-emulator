@@ -37,7 +37,7 @@ from typing import Any, Optional
 
 from emulator.commands.dispatcher import SlurmEmulator
 from emulator.core import nss
-from emulator.core.accounting import resolve_job_account
+from emulator.core.accounting import ESLURM_USER_ID_UNKNOWN, admit_job
 from emulator.core.database import Job
 from emulator.core.scheduler import advance_job_states, job_clock_now
 
@@ -226,25 +226,22 @@ def _flag_value(args: list[str], short: str, long: str) -> Optional[str]:
 def _sbatch(emu: SlurmEmulator, user: str, args: list[str]) -> tuple[str, str, int]:
     name = _flag_value(args, "-J", "--job-name") or "batch"
     partition = _flag_value(args, "-p", "--partition") or "compute"
-    # Association check as in slurmctld (slurm://src/slurmctld/job_mgr.c#_job_create);
-    # sbatch reports the errno through slurm://src/sbatch/sbatch.c#"Batch job submission failed".
-    account = resolve_job_account(
-        emu.database, user, _flag_value(args, "-A", "--account") or "", partition
-    )
-    if account is None:
+    script_path = next((a for a in args if not a.startswith("-")), "")
+    # Same admission as REST submit (emulator/core/accounting.py); sbatch
+    # reports the errno text through
+    # slurm://src/sbatch/sbatch.c#"Batch job submission failed".
+    admission = admit_job(emu.database, user, _flag_value(args, "-A", "--account") or "", partition)
+    if admission.error is not None:
+        if admission.error == ESLURM_USER_ID_UNKNOWN:
+            return "", f"sbatch: error: {admission.message}\n", 1
         return (
             "",
             "sbatch: error: Batch job submission failed: "
             "Invalid account or account/partition combination specified\n",
             1,
         )
-    script_path = next((a for a in args if not a.startswith("-")), "")
-    # NSS mode: record the submitter's real uid/gid; sbatch itself would
-    # fail earlier on a login node without a passwd entry, so refuse too
-    # (slurm://src/common/uid.c#uid_from_string).
-    identity = nss.lookup(user)
-    if nss.enabled() and identity is None:
-        return "", f"sbatch: error: Unable to resolve user: {user}\n", 1
+    identity = admission.identity
+    account = admission.account
 
     jid = emu.database.allocate_job_id()
     emu.database.add_job(
@@ -312,9 +309,13 @@ def _scontrol(emu, args: list[str]) -> tuple[str, str, int]:
 # --- Shell (filesystem) dispatch ---
 
 
+def _shell_context(user: str) -> tuple[Path, dict[str, str], dict[str, Any]]:
+    """(cwd, env, run-as kwargs) for a shell command by ``user`` — blocking."""
+    return _user_home(user), _command_env(user), _run_as_kwargs(user)
+
+
 def _run_shell(user: str, command: str) -> tuple[str, str, int]:
-    home = _user_home(user)
-    env = _command_env(user)
+    home, env, run_as = _shell_context(user)
     try:
         proc = subprocess.run(
             ["/bin/bash", "-c", command],
@@ -324,7 +325,7 @@ def _run_shell(user: str, command: str) -> tuple[str, str, int]:
             timeout=_SHELL_TIMEOUT,
             env=env,
             check=False,
-            **_run_as_kwargs(user),
+            **run_as,
         )
     except subprocess.TimeoutExpired:
         return "", "command timed out\n", 124
@@ -339,8 +340,9 @@ async def _run_shell_async(user: str, command: str, process) -> tuple[str, str, 
     lands empty. Commands that read no stdin still finish normally — we stop
     pumping once the process exits.
     """
-    home = _user_home(user)
-    env = _command_env(user)
+    # Home, env and identity may hit NSS (the directory) — resolve them off
+    # the event loop.
+    home, env, run_as = await asyncio.get_event_loop().run_in_executor(None, _shell_context, user)
     try:
         proc = await asyncio.create_subprocess_exec(
             "/bin/bash",
@@ -351,7 +353,7 @@ async def _run_shell_async(user: str, command: str, process) -> tuple[str, str, 
             stderr=asyncio.subprocess.PIPE,
             cwd=str(home),
             env=env,
-            **_run_as_kwargs(user),
+            **run_as,
         )
     except OSError as exc:
         return "", f"{exc}\n", 1
@@ -423,6 +425,10 @@ def _slurm_argv(command: str) -> Optional[list[str]]:
     if not argv or Path(argv[0]).name not in _SLURM_BINS:
         return None
     argv[0] = Path(argv[0]).name
+    if argv[0] == "id" and not nss.enabled():
+        # Only NSS mode owns ``id``: without it the real coreutils ``id`` in
+        # the shell path gives clients the genuine ``uid=…(…) gid=…`` output.
+        return None
     return argv
 
 

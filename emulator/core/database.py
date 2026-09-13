@@ -262,10 +262,28 @@ class SlurmDatabase:
             os.environ.get("SLURM_EMULATOR_STATE_FILE", "/tmp/slurm_emulator_db.json")
         )
 
-        # Create global root account and root association for default cluster
-        self.add_account("root", "Root account", "system")
-        root_key = self._association_key("", "root", "default")
-        self.associations[root_key] = Association(account="root", user="", cluster="default")
+        self._seed_root("default")
+
+    def _seed_root(self, cluster: str) -> None:
+        """Root account, root user and their associations on ``cluster``.
+
+        slurmdbd creates the ``root`` user and account when it builds its
+        tables (slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#_as_mysql_acct_check_tables)
+        and, for every cluster added, the account-level root association
+        plus one for user ``root`` under it
+        (slurm://src/plugins/accounting_storage/mysql/as_mysql_cluster.c#as_mysql_add_clusters).
+        Without the user row a submission that falls back to ``root`` would
+        be refused under AccountingStorageEnforce=associations.
+        """
+        if "root" not in self.accounts:
+            self.add_account("root", "Root account", "system")
+        if "root" not in self.users:
+            self.add_user("root", "root")
+        for user in ("", "root"):
+            key = self._association_key(user, "root", cluster)
+            self.associations.setdefault(
+                key, Association(account="root", user=user, cluster=cluster)
+            )
 
     def _allocate_cluster_id(self) -> int:
         """Allocate the next cluster ID."""
@@ -297,12 +315,7 @@ class SlurmDatabase:
             classification=cls_enum,
             id=self._allocate_cluster_id(),
         )
-        # Ensure root account exists globally
-        if "root" not in self.accounts:
-            self.add_account("root", "Root account", "system")
-        # Create root association for the new cluster
-        root_key = self._association_key("", "root", name)
-        self.associations[root_key] = Association(account="root", user="", cluster=name)
+        self._seed_root(name)
 
     def get_cluster(self, name: str) -> Optional[Cluster]:
         """Get cluster by name (excludes soft-deleted)."""
@@ -878,10 +891,6 @@ class SlurmDatabase:
                 self.jobs = {}
                 for jid, data in state.get("jobs", {}).items():
                     data.setdefault("cluster", "default")
-                    # Identity keys arrived with NSS mode (0.10); older files lack them.
-                    data.setdefault("uid", None)
-                    data.setdefault("gid", None)
-                    data.setdefault("group_name", "")
                     # Handle datetime fields
                     for dt_field in ["submit_time", "start_time", "end_time"]:
                         if data.get(dt_field):
@@ -892,6 +901,10 @@ class SlurmDatabase:
                 self.qos_list = {}
                 for name, data in state.get("qos", {}).items():
                     self.qos_list[name] = QOS(**data)
+
+                # Pre-0.10 state files have no root user / root user association.
+                for cluster in self.clusters:
+                    self._seed_root(cluster)
 
         except Exception as e:
             print(f"Warning: Failed to load database state: {e}")
@@ -908,7 +921,4 @@ class SlurmDatabase:
         data.setdefault("job_id", None)
         data.setdefault("state", "COMPLETED")
         data.setdefault("partition", "compute")
-        data.setdefault("uid", None)
-        data.setdefault("gid", None)
-        data.setdefault("group_name", "")
         return UsageRecord(**data)

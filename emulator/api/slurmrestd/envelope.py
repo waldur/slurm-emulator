@@ -14,6 +14,7 @@ from typing import Any, Optional
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from emulator.core.accounting import ESLURM_INVALID_ACCOUNT, ESLURM_USER_ID_UNKNOWN
 from emulator.slurm_version import current
 
 
@@ -37,12 +38,9 @@ SLURMCTLD_PLUGIN = ("openapi/slurmctld", "Slurm OpenAPI slurmctld")
 # Error numbers from slurm://slurm/slurm_errno.h (ESLURM_REST_* block and
 # the slurmctld block starting at ESLURM_INVALID_PARTITION_NAME).
 ESLURM_INVALID_JOB_ID = 2017
-# Raised by the USER_ID parser when a user name has no passwd entry
-# (slurm://src/plugins/data_parser/v0.0.45/parsers.c#USER_ID@26.05+).
-ESLURM_USER_ID_UNKNOWN = 2166
-# No association for (user, account, partition) under
-# AccountingStorageEnforce=associations (slurm://src/slurmctld/job_mgr.c#_job_create).
-ESLURM_INVALID_ACCOUNT = 2045
+# ESLURM_USER_ID_UNKNOWN / ESLURM_INVALID_ACCOUNT come from emulator.core.accounting
+# (the admission logic that raises them) and are re-exported here.
+__all__ = ["ESLURM_INVALID_ACCOUNT", "ESLURM_USER_ID_UNKNOWN"]
 ESLURM_REST_INVALID_QUERY = 9000
 ESLURM_REST_FAIL_PARSING = 9001
 ESLURM_REST_EMPTY_RESULT = 9003
