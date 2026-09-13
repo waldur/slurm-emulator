@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Request
 
 from emulator.api.slurmrestd.auth import slurmrestd_auth
 from emulator.api.slurmrestd.envelope import (
+    ESLURM_INVALID_ACCOUNT,
     ESLURM_INVALID_JOB_ID,
     ESLURM_USER_ID_UNKNOWN,
     SLURMCTLD_PLUGIN,
@@ -34,6 +35,7 @@ from emulator.api.slurmrestd.schemas import (
 )
 from emulator.api.slurmrestd.state import StateDep
 from emulator.core import nss
+from emulator.core.accounting import resolve_job_account
 from emulator.core.database import Job, SlurmDatabase
 from emulator.core.scheduler import advance_job_states, job_clock_now
 from emulator.slurm_version import at_least
@@ -212,10 +214,26 @@ async def submit_job(
                 )
             ],
         )
-    user_rec = db.get_user(user)
-    # A slurm job always has an account (the user's default association);
-    # fall back to the user's default, then "root", so it is never empty.
-    account = job_desc.get("account") or (user_rec.default_account if user_rec else "") or "root"
+    partition = job_desc.get("partition") or "compute"
+    # A slurm job always has an account (the user's default association).
+    # With AccountingStorageEnforce=associations the user must hold a row
+    # for it (slurm://src/slurmctld/job_mgr.c#_job_create →
+    # slurm://src/common/assoc_mgr.c#assoc_mgr_fill_in_assoc); otherwise
+    # the legacy fallback (default account, then "root") applies.
+    account = resolve_job_account(db, user, job_desc.get("account") or "", partition)
+    if account is None:
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    f"Invalid account or account/partition combination specified for user "
+                    f"{user}, account '{job_desc.get('account') or ''}', partition '{partition}'",
+                    ESLURM_INVALID_ACCOUNT,
+                    "slurm_submit_batch_job()",
+                )
+            ],
+        )
 
     jid = db.allocate_job_id()
     job = Job(
@@ -226,7 +244,7 @@ async def submit_job(
         submit_time=job_clock_now(state.time_engine),
         cluster=db.current_cluster,
         name=job_desc.get("name") or f"job_{jid}",
-        partition=job_desc.get("partition") or "compute",
+        partition=partition,
         qos=job_desc.get("qos") or "normal",
         working_directory=job_desc.get("current_working_directory")
         or (identity.home if identity and identity.home else f"/home/{user}"),

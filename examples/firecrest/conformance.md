@@ -70,6 +70,7 @@ by the sandbox working directory (`SLURM_EMULATOR_FS_ROOT`). Dev/test only.
 | `SLURM_EMULATOR_SSH_HOST_KEY` | (ephemeral) | path to persist the SSH host key |
 | `SLURM_EMULATOR_FS_ROOT` | `/tmp/slurm_emulator_fs` | sandbox filesystem root |
 | `SLURM_EMULATOR_STATE_FILE` / `SLURM_EMULATOR_TIME_FILE` | `/tmp/slurm_emulator_*.json` | shared state (REST + SSH + CLI) |
+| `SLURM_EMULATOR_ACCOUNTING_ENFORCE` | unset (image: `associations`) | submit refused with `ESLURM_INVALID_ACCOUNT` (422) when the user has no association for the account; `none` = legacy permissive fallback (the demo composes set this) |
 | `SLURM_EMULATOR_NSS` | unset | `1` = resolve users via the OS NSS (sssd → LDAP); `id` returns the real `uid=…(…) gid=…(…) groups=…` shape `/status/userinfo` parses, jobs carry real uid/gid, unknown users are refused. See `ui/docker-compose.nss.yml`; mount the sssd config at `/etc/slurm-emulator/sssd.conf` (`SLURM_EMULATOR_SSSD_CONF`) |
 
 ## Harnesses

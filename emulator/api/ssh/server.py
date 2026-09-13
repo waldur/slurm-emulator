@@ -37,6 +37,7 @@ from typing import Any, Optional
 
 from emulator.commands.dispatcher import SlurmEmulator
 from emulator.core import nss
+from emulator.core.accounting import resolve_job_account
 from emulator.core.database import Job
 from emulator.core.scheduler import advance_job_states, job_clock_now
 
@@ -225,10 +226,18 @@ def _flag_value(args: list[str], short: str, long: str) -> Optional[str]:
 def _sbatch(emu: SlurmEmulator, user: str, args: list[str]) -> tuple[str, str, int]:
     name = _flag_value(args, "-J", "--job-name") or "batch"
     partition = _flag_value(args, "-p", "--partition") or "compute"
-    account = _flag_value(args, "-A", "--account") or ""
-    if not account:
-        urec = emu.database.get_user(user)
-        account = (urec.default_account if urec else "") or "root"
+    # Association check as in slurmctld (slurm://src/slurmctld/job_mgr.c#_job_create);
+    # sbatch reports the errno through slurm://src/sbatch/sbatch.c#"Batch job submission failed".
+    account = resolve_job_account(
+        emu.database, user, _flag_value(args, "-A", "--account") or "", partition
+    )
+    if account is None:
+        return (
+            "",
+            "sbatch: error: Batch job submission failed: "
+            "Invalid account or account/partition combination specified\n",
+            1,
+        )
     script_path = next((a for a in args if not a.startswith("-")), "")
     # NSS mode: record the submitter's real uid/gid; sbatch itself would
     # fail earlier on a login node without a passwd entry, so refuse too

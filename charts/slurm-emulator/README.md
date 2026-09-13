@@ -43,6 +43,7 @@ The planes are separate processes sharing the same JSON state files, so an accou
 | `partitionQos` | `""` | Per-partition QoS gates, e.g. `gpu=allow:normal,high;gpu=qos:normal`. |
 | `jobs.clock` | `wall` | `wall` (real time) or `time` (emulator clock) for submitted-job progression. |
 | `jobs.runDelaySeconds` / `jobs.runDurationSeconds` | `2` / `8` | PENDING → RUNNING → COMPLETED timings. |
+| `accountingEnforce` | `""` | `SLURM_EMULATOR_ACCOUNTING_ENFORCE`; the image defaults to `associations` (submit refused without an association for the account). `none` restores the permissive legacy behaviour. |
 | `debug` | `false` | Sets `SLURM_EMULATOR_DEBUG=1`. |
 | `persistence.enabled` | `false` | When on, mounts a PVC and redirects state, clock, and SSH filesystem into it. |
 | `persistence.size` | `1Gi` | |

@@ -187,6 +187,26 @@ tests:
       - isNull:
           path: spec.template.spec.volumes
 
+  - it: leaves accounting enforcement to the image default
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_ACCOUNTING_ENFORCE
+          any: true
+
+  - it: passes accountingEnforce through when set
+    template: templates/deployment.yaml
+    set:
+      accountingEnforce: none
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SLURM_EMULATOR_ACCOUNTING_ENFORCE
+            value: "none"
+
   - it: leaves NSS identity mode off by default
     template: templates/deployment.yaml
     asserts:

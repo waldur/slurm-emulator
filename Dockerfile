@@ -15,6 +15,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i -E '/^(passwd|group|shadow):/{/\bsss\b/! s/$/ sss/}' /etc/nsswitch.conf
 
+# Production clusters enforce associations; the image does too so a user
+# without an association for the account is refused on submit, as a site
+# agent's integration tests expect. Set to "none" for the permissive legacy
+# behaviour (emulator/core/accounting.py).
+ENV SLURM_EMULATOR_ACCOUNTING_ENFORCE=associations
+
 COPY . .
 
 RUN pip install --no-cache-dir ".[ssh]" && chmod +x scripts/docker-entrypoint.sh

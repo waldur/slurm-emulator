@@ -19,6 +19,9 @@ services:
     #   context: /path/to/slurm-emulator
     environment:
       SLURM_EMULATOR_ENABLE_SSH: "1"
+      # Demo stack: nothing creates associations for the FireCREST user, so
+      # keep the permissive legacy submit behaviour (image default enforces).
+      SLURM_EMULATOR_ACCOUNTING_ENFORCE: "none"
       # FS_ROOT=/ so absolute paths (e.g. /home/user) sent over SSH resolve
       # against the emulator container's real filesystem.
       SLURM_EMULATOR_FS_ROOT: "/"

@@ -97,6 +97,10 @@ spec:
               value: {{ .Values.jobs.runDelaySeconds | quote }}
             - name: SLURM_EMULATOR_JOB_RUN_DURATION
               value: {{ .Values.jobs.runDurationSeconds | quote }}
+            {{- with .Values.accountingEnforce }}
+            - name: SLURM_EMULATOR_ACCOUNTING_ENFORCE
+              value: {{ . | quote }}
+            {{- end }}
             {{- if .Values.debug }}
             - name: SLURM_EMULATOR_DEBUG
               value: "1"
