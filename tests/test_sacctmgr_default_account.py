@@ -122,6 +122,19 @@ class TestShowFilters:
         out = em.handle_command(["-P", "-n", "show", "assoc", "user=other", "format=account,user"])
         assert out == "accc|other"
 
+    def test_site_agent_command_shapes(self, em):
+        """The exact invocations the site agent issues."""
+        em.handle_command(["modify", "user", "where", "name=twoacc", "set", "DefaultAccount=accb"])
+        assert em.exit_code == 0
+        out = em.handle_command(
+            ["-P", "-n", "show", "association", "where", "user=twoacc", "format=user,account"]
+        )
+        assert sorted(out.splitlines()) == ["twoacc|acca", "twoacc|accb"]
+        out = em.handle_command(
+            ["-P", "-n", "show", "user", "where", "name=twoacc", "format=user,defaultaccount"]
+        )
+        assert out == "twoacc|accb"
+
     def test_show_association_where_account(self, em):
         out = em.handle_command(
             ["-P", "-n", "show", "association", "where", "account=accb", "format=account,user"]

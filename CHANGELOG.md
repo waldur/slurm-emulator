@@ -4,6 +4,12 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+- Make `sacctmgr modify user … set DefaultAccount=` re-point the user's default account with real sacctmgr's output and its association check (`slurm://src/sacctmgr/user_functions.c#sacctmgr_modify_user`, `slurm://src/sacctmgr/user_functions.c#_check_default_assocs`) — previously a no-op, which left no way to move a default before removing that association
+- Honour `where name=`/`user=`/`defaultaccount=` on `sacctmgr show user` and `where user=` alone on `sacctmgr show association` (`slurm://src/sacctmgr/user_functions.c#_set_cond`, `slurm://src/sacctmgr/association_functions.c#_set_cond`) instead of listing every row
+
 ## [0.9.6] - 2026-09-14
 
 ### Added
