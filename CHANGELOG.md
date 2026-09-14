@@ -4,7 +4,7 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.9.7] - 2026-09-14
 
 ### Fixed
 - Make `sacctmgr modify user … set DefaultAccount=` re-point the user's default account with real sacctmgr's output: every user the condition matches is listed under ` Modified users...`, also when the default does not change (`  Nothing modified`, exit 1, only when no user matches), and the new account must be associated with each user on every cluster — or on the `cluster=` ones — else each missing user/cluster pair is listed and the command exits 1 (`slurm://src/sacctmgr/user_functions.c#sacctmgr_modify_user`, `slurm://src/plugins/accounting_storage/mysql/as_mysql_user.c#as_mysql_modify_users`, `slurm://src/sacctmgr/user_functions.c#_check_and_set_cluster_list`, `slurm://src/sacctmgr/user_functions.c#_check_default_assocs`) — previously a no-op, which left no way to move a default before removing that association
