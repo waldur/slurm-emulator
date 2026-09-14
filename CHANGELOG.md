@@ -13,11 +13,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [0.9.6] - 2026-09-14
 
 ### Added
-- Add opt-in NSS identity resolution (`SLURM_EMULATOR_NSS=1`) so user names resolve through the OS NSS: `id`, `scontrol show job`, sacct `UID`/`GID`/`Group` and slurmrestd `user_id`/`group_id` carry real ids, and unknown users are refused on job submit and `sacctmgr add user`
-
-## [0.10.0] - 2026-09-13
-
-### Added
 - Add opt-in NSS identity mode (`SLURM_EMULATOR_NSS=1`): user names resolve through the OS name service switch (sssd → LDAP in the Docker image, `examples/nss/`), so `id` prints the coreutils shape FireCREST's `/status/userinfo` parses, `POST /job/submit` / `sbatch` record real uid/gid/group (`user_id`/`group_id`/`group_name` per `slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_INFO@26.05+`, `scontrol show job` `UserId`/`GroupId`, sacct `UID`/`GID`/`Group` per `slurm://src/sacct/sacct.c#fields`) and refuse unknown users with `ESLURM_USER_ID_UNKNOWN` (`slurm://src/plugins/data_parser/v0.0.45/parsers.c#USER_ID@26.05+`); `sacctmgr add user` stops on a missing uid unless `-i` (`slurm://src/sacctmgr/user_functions.c#_check_uid`, `slurm://src/sacctmgr/common.c#commit_check`); `sreport` fills `Proper Name` from gecos
 - Run SSH-plane shell commands as the resolved login user (uid/gid/groups) when NSS mode is on and the emulator is root, and strip a leading coreutils `timeout N` wrapper before matching emulated Slurm binaries (FireCREST sends `timeout 10 id`)
 - Add `SLURM_EMULATOR_ACCOUNTING_ENFORCE` (`AccountingStorageEnforce=associations`, the default; chart `accountingEnforce`, `none` opts out): `POST /job/submit` and `sbatch` refuse a user with no association for the requested or default account with `ESLURM_INVALID_ACCOUNT` (`slurm://src/slurmctld/job_mgr.c#_job_create`, `slurm://src/common/assoc_mgr.c#assoc_mgr_fill_in_assoc`); unset/`none` keeps the legacy fallback
