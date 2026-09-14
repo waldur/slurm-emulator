@@ -62,6 +62,55 @@ class TestSacctmgrRouting:
         assert "Nothing modified" in captured.out
         assert captured.err == ""
 
+    @pytest.mark.parametrize(
+        ("argv", "message"),
+        [
+            # slurm://src/sacctmgr/user_functions.c#_set_cond: fprintf(stderr, ...)
+            (
+                ["show", "user", "where", "defaultaccounts=x"],
+                " Unknown condition: defaultaccounts=x\n Use keyword 'set' to modify value\n",
+            ),
+            (
+                ["modify", "user", "where", "bogus=x", "set", "DefaultAccount=root"],
+                " Unknown condition: bogus=x\n Use keyword 'set' to modify value\n",
+            ),
+            # slurm://src/sacctmgr/association_functions.c#_set_cond prints its own
+            # shorter text when slurm://src/sacctmgr/association_functions.c#sacctmgr_set_assoc_cond
+            # (which prints nothing) matches no keyword.
+            (["show", "assoc", "where", "a=x"], " Unknown condition: a=x\n"),
+        ],
+    )
+    def test_unknown_condition_stderr_exit_one(
+        self, fresh_emulator, monkeypatch, capsys, argv, message
+    ):
+        code = _run_main(monkeypatch, dispatcher.sacctmgr_main, ["sacctmgr", *argv])
+        captured = capsys.readouterr()
+        assert (code, captured.err, captured.out) == (1, message, "")
+
+    @pytest.mark.parametrize(
+        ("argv", "expected"),
+        [
+            # slurm://src/sacctmgr/user_functions.c#_check_default_assocs: printf, exit_code=1
+            (
+                ["modify", "user", "root", "set", "DefaultAccount=nope"],
+                " Can't modify because these users aren't associated",
+            ),
+            # slurm://src/sacctmgr/user_functions.c#sacctmgr_modify_user: printf, rc=SLURM_ERROR
+            (
+                ["modify", "user", "ghost-xyz", "set", "DefaultAccount=root"],
+                " Modified users...\n  Nothing modified\n",
+            ),
+        ],
+    )
+    def test_default_account_messages_stdout_exit_one(
+        self, fresh_emulator, monkeypatch, capsys, argv, expected
+    ):
+        code = _run_main(monkeypatch, dispatcher.sacctmgr_main, ["sacctmgr", *argv])
+        captured = capsys.readouterr()
+        assert code == 1
+        assert expected in captured.out
+        assert captured.err == ""
+
 
 class TestSacctRouting:
     def test_exit_code_propagated(self, fresh_emulator, monkeypatch, capsys):

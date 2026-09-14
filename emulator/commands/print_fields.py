@@ -27,6 +27,16 @@ from dataclasses import dataclass, replace
 from typing import Optional, Union
 
 
+def keyword_match(token: str, name: str, min_len: int) -> bool:
+    """``!xstrncasecmp(token, name, MAX(strlen(token), min_len))``.
+
+    True when ``token`` is a case-insensitive prefix of ``name`` at least
+    ``min_len`` characters long — how sacctmgr and sreport match keywords.
+    """
+    n = max(len(token), min_len)
+    return token[:n].lower() == name[:n].lower()
+
+
 @dataclass(frozen=True)
 class FieldSpec:
     """One output column, mirroring real Slurm's ``print_field_t``."""

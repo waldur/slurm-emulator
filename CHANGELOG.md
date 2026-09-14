@@ -4,12 +4,14 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+- Make `sacctmgr modify user … set DefaultAccount=` re-point the user's default account with real sacctmgr's output: every user the condition matches is listed under ` Modified users...`, also when the default does not change (`  Nothing modified`, exit 1, only when no user matches), and the new account must be associated with each user on every cluster — or on the `cluster=` ones — else each missing user/cluster pair is listed and the command exits 1 (`slurm://src/sacctmgr/user_functions.c#sacctmgr_modify_user`, `slurm://src/plugins/accounting_storage/mysql/as_mysql_user.c#as_mysql_modify_users`, `slurm://src/sacctmgr/user_functions.c#_check_and_set_cluster_list`, `slurm://src/sacctmgr/user_functions.c#_check_default_assocs`) — previously a no-op, which left no way to move a default before removing that association
+- Parse the `where` clause of `sacctmgr show user` and `modify user` like real sacctmgr: a bare word is a user name, `Names`/`Users` match from one letter (`n=`, `u=`), `DefaultAccount` from eight (singular only), and an unrecognised condition prints ` Unknown condition` and exits 1 (`slurm://src/sacctmgr/user_functions.c#_set_cond`) — previously `show user alice` listed every user
+- Parse the `where` clause of `sacctmgr list/show association` with real keyword prefixes — `Users`/`Clusters` from one letter, `Accounts` from two (`Acct` from four), `Partitions` from three — so `list` and `show` agree, an unrecognised condition exits 1, and the site agent's `accounts=` filter no longer lists every association (`slurm://src/sacctmgr/association_functions.c#_set_cond`, `slurm://src/sacctmgr/association_functions.c#sacctmgr_set_assoc_cond`)
+
 ## [0.9.6] - 2026-09-14
-
-### Added
-- Add opt-in NSS identity resolution (`SLURM_EMULATOR_NSS=1`) so user names resolve through the OS NSS: `id`, `scontrol show job`, sacct `UID`/`GID`/`Group` and slurmrestd `user_id`/`group_id` carry real ids, and unknown users are refused on job submit and `sacctmgr add user`
-
-## [0.10.0] - 2026-09-13
 
 ### Added
 - Add opt-in NSS identity mode (`SLURM_EMULATOR_NSS=1`): user names resolve through the OS name service switch (sssd → LDAP in the Docker image, `examples/nss/`), so `id` prints the coreutils shape FireCREST's `/status/userinfo` parses, `POST /job/submit` / `sbatch` record real uid/gid/group (`user_id`/`group_id`/`group_name` per `slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_INFO@26.05+`, `scontrol show job` `UserId`/`GroupId`, sacct `UID`/`GID`/`Group` per `slurm://src/sacct/sacct.c#fields`) and refuse unknown users with `ESLURM_USER_ID_UNKNOWN` (`slurm://src/plugins/data_parser/v0.0.45/parsers.c#USER_ID@26.05+`); `sacctmgr add user` stops on a missing uid unless `-i` (`slurm://src/sacctmgr/user_functions.c#_check_uid`, `slurm://src/sacctmgr/common.c#commit_check`); `sreport` fills `Proper Name` from gecos
