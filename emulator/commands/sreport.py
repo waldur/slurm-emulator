@@ -80,6 +80,7 @@ from emulator.commands.print_fields import (
     FieldSpec,
     OutputMode,
     UnknownFieldError,
+    keyword_match,
     parse_format_spec,
     render_table,
     resolve_format,
@@ -179,15 +180,15 @@ class SreportEmulator:
         if not positional:
             self._error("sreport: error: no report given (interactive mode is not emulated)")
             raise SystemExit(1)
-        if not _prefix(positional[0], "cluster", 2):
+        if not keyword_match(positional[0], "cluster", 2):
             self._error(f"sreport: error: only cluster reports are emulated, got {positional[0]}")
             raise SystemExit(1)
         if len(positional) < 2:
             self._error("Not valid report \nValid cluster reports are, ")
             raise SystemExit(1)
         report = positional[1]
-        if not _prefix(report, "AccountUtilizationByUser", 21):
-            if any(_prefix(report, name, 2) for name in _OTHER_CLUSTER_REPORTS):
+        if not keyword_match(report, "AccountUtilizationByUser", 21):
+            if any(keyword_match(report, name, 2) for name in _OTHER_CLUSTER_REPORTS):
                 self._error(f"sreport: error: cluster {report} is not emulated by slurm-emulator")
             else:
                 self._error(
@@ -335,7 +336,7 @@ class SreportEmulator:
 
     def _set_time_format(self, cfg: _Config, value: str) -> None:
         for name, min_prefix, _label in _TIME_FORMATS:
-            if _prefix(value, name, min_prefix):
+            if keyword_match(value, name, min_prefix):
                 cfg.time_format = name
                 return
         # Real sreport prints this without a newline and ignores the
@@ -351,22 +352,22 @@ class SreportEmulator:
             else:
                 key, value = arg, ""
                 has_value = False
-            if not has_value and _prefix(key, "all_clusters", 1):
+            if not has_value and keyword_match(key, "all_clusters", 1):
                 cfg.all_clusters = True
-            elif not has_value and _prefix(key, "Tree", 4):
+            elif not has_value and keyword_match(key, "Tree", 4):
                 cfg.tree = True
-            elif not has_value or _prefix(key, "Users", 1):
+            elif not has_value or keyword_match(key, "Users", 1):
                 cfg.users.extend(_csv(value or key))
-            elif _prefix(key, "Accounts", 2) or _prefix(key, "Acct", 4):
+            elif keyword_match(key, "Accounts", 2) or keyword_match(key, "Acct", 4):
                 cfg.accounts.extend(_csv(value))
-            elif _prefix(key, "Clusters", 1):
+            elif keyword_match(key, "Clusters", 1):
                 cfg.clusters.extend(_csv(value))
-            elif _prefix(key, "End", 1):
+            elif keyword_match(key, "End", 1):
                 # parse_time("") is 0 = "nothing specified" -> default window.
                 cfg.end = self._parse_time(value) if value else None
-            elif _prefix(key, "Format", 1):
+            elif keyword_match(key, "Format", 1):
                 cfg.format_spec = value
-            elif _prefix(key, "Start", 1):
+            elif keyword_match(key, "Start", 1):
                 cfg.start = self._parse_time(value) if value else None
             else:
                 self._error(f" Unknown condition: {arg}\nUse keyword set to modify value")
@@ -642,12 +643,6 @@ class SreportEmulator:
 
 
 # ------------------------------------------------------------------ helpers
-
-
-def _prefix(token: str, name: str, min_len: int) -> bool:
-    """``!xstrncasecmp(token, name, MAX(strlen(token), min_len))``."""
-    n = max(len(token), min_len)
-    return token[:n].lower() == name[:n].lower()
 
 
 def _csv(value: str) -> list[str]:

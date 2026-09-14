@@ -12,8 +12,9 @@ Output formatting and exit codes mirror real Slurm 26.05:
   ``sacctmgr/*_functions.c``;
 * errors print with a leading-space `` error: ...`` prefix and exit 1
   (the dispatcher routes failing output to stderr); ``Nothing
-  modified`` goes to stdout and exits 0 (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account —
-  only the local rc is set, the global ``exit_code`` stays 0);
+  modified`` goes to stdout but exits 1 (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account
+  returns SLURM_ERROR, which slurm://src/sacctmgr/sacctmgr.c#_modify_it
+  turns into the global ``exit_code``);
 * re-adding an existing account reports ``SLURM_NO_CHANGE_IN_DATA``:
   `` Data has not changed since time specified`` on stdout, exit 0
   (slurm://src/sacctmgr/account_functions.c#sacctmgr_add_account, slurm://src/common/slurm_errno.c#SLURM_NO_CHANGE_IN_DATA).
@@ -21,7 +22,15 @@ Output formatting and exit codes mirror real Slurm 26.05:
 Intentional deviations: no interactive commit prompt (``-i`` is an
 accepted no-op — the emulator is headless), and a leading ``-M
 <cluster>`` is tolerated and ignored for waldur-site-agent
-compatibility (real sacctmgr has no ``-M``).
+compatibility (real sacctmgr has no ``-M``). A user has one default
+account, not one per cluster: ``modify user … set DefaultAccount=``
+checks every cluster as real sacctmgr does, but where slurmdbd flags the
+user's association on each of those clusters as the default (``is_def``,
+slurm://src/plugins/accounting_storage/mysql/as_mysql_user.c#as_mysql_modify_users)
+the emulator moves that single default. The ``default`` cluster the
+emulator always seeds is left out of "every cluster" when
+``SLURM_EMULATOR_CLUSTER_NAME`` names another one — a real database has
+no such placeholder.
 """
 
 import dataclasses
@@ -33,6 +42,7 @@ from emulator.commands.print_fields import (
     OutputMode,
     UnknownFieldError,
     extract_output_flags,
+    keyword_match,
     parse_format_spec,
     render_table,
     resolve_format,
@@ -308,6 +318,131 @@ def _apply_list_operator(current: list[str], operator: str, value: str) -> list[
     return result
 
 
+class UnknownConditionError(ValueError):
+    """A ``where`` token no sacctmgr condition parser accepts."""
+
+
+@dataclasses.dataclass
+class _Conditions:
+    """The ``where`` lists the emulator models from a user_cond / assoc_cond."""
+
+    users: list[str] = dataclasses.field(default_factory=list)
+    accounts: list[str] = dataclasses.field(default_factory=list)
+    clusters: list[str] = dataclasses.field(default_factory=list)
+    partitions: list[str] = dataclasses.field(default_factory=list)
+    default_accounts: list[str] = dataclasses.field(default_factory=list)
+
+
+def _addto_list(target: list[str], value: str, fold: bool = False) -> None:
+    """Append a comma list without duplicates, like ``slurm_addto_char_list``."""
+    for item in value.split(","):
+        item = fold_account(item) if fold else item
+        if item and item not in target:
+            target.append(item)
+
+
+# Bare words slurm://src/sacctmgr/user_functions.c#_set_cond consumes as
+# flags (keyword, minimum prefix) before a bare word means a user name.
+_USER_COND_FLAGS = (
+    ("Set", 3),
+    ("WithAssoc", 5),
+    ("WithCoordinators", 5),
+    ("WithDeleted", 5),
+    ("WithRawQOSLevel", 5),
+    ("WOPLimits", 4),
+    ("where", 5),
+)
+
+# slurm://src/sacctmgr/association_functions.c#sacctmgr_set_assoc_cond in its
+# order: (keyword, minimum prefix, _Conditions list, or None if not modelled).
+_ASSOC_COND_KEYS = (
+    ("Accounts", 2, "accounts"),
+    ("Acct", 4, "accounts"),
+    ("Ids", 1, None),
+    ("Associations", 2, None),
+    ("Clusters", 1, "clusters"),
+    ("DefaultQOS", 8, None),
+    ("Partitions", 3, "partitions"),
+    ("Parents", 4, None),
+    ("QosLevel", 1, None),
+    ("Users", 1, "users"),
+)
+
+
+def _set_assoc_cond(cond: _Conditions, key: str, value: str) -> bool:
+    """Apply one condition like slurm://src/sacctmgr/association_functions.c#sacctmgr_set_assoc_cond.
+
+    Returns False when no keyword matches (the caller's "Unknown
+    condition"). Ids, DefaultQOS, Parents and QosLevel are accepted but do
+    not filter.
+    """
+    for name, min_len, attr in _ASSOC_COND_KEYS:
+        if keyword_match(key, name, min_len):
+            if attr:
+                _addto_list(getattr(cond, attr), value, fold=attr == "accounts")
+            return True
+    return False
+
+
+def _parse_user_cond(args: list[str]) -> _Conditions:
+    """Parse ``where`` tokens like slurm://src/sacctmgr/user_functions.c#_set_cond.
+
+    A bare word that is not a flag is a user name (the ``!end ||`` branch);
+    ``Names``/``Users`` and ``Clusters`` match from one character,
+    ``DefaultAccount`` from eight (singular only — ``DefaultAccounts`` is
+    not a prefix of it); everything else goes to sacctmgr_set_assoc_cond,
+    and a token nothing matches raises :class:`UnknownConditionError`.
+    AdminLevel, DefaultWCKey and WCKeys are accepted but do not filter.
+    """
+    cond = _Conditions()
+    for arg in args:
+        key, sep, value = arg.partition("=")
+        # parse_option_end: the keyword stops before a "+=" / "-=".
+        key, _ = _split_list_operator(key)
+        if not sep:
+            if not any(keyword_match(arg, name, n) for name, n in _USER_COND_FLAGS):
+                _addto_list(cond.users, arg)
+        elif keyword_match(key, "Names", 1) or keyword_match(key, "Users", 1):
+            _addto_list(cond.users, value)
+        elif keyword_match(key, "AdminLevel", 2):
+            continue
+        elif keyword_match(key, "Clusters", 1):
+            _addto_list(cond.clusters, value)
+        elif keyword_match(key, "DefaultAccount", 8):
+            _addto_list(cond.default_accounts, value, fold=True)
+        elif any(
+            keyword_match(key, name, n)
+            for name, n in (("DefaultWCKey", 8), ("Format", 1), ("WCKeys", 1))
+        ):
+            continue
+        elif not _set_assoc_cond(cond, key, value):
+            raise UnknownConditionError(
+                f" Unknown condition: {arg}\n Use keyword 'set' to modify value"
+            )
+    return cond
+
+
+def _parse_assoc_cond(args: list[str]) -> _Conditions:
+    """Parse ``where`` tokens like slurm://src/sacctmgr/association_functions.c#_set_cond.
+
+    Bare words are flags (OnlyDefaults, Tree, With*, WOPInfo, WOPLimits) or
+    association ids, neither modelled; ``Format`` is consumed; the rest goes
+    to sacctmgr_set_assoc_cond — ``Users`` and ``Clusters`` from one
+    character, ``Accounts`` from two (or ``Acct`` from four),
+    ``Partitions`` from three. A token nothing matches raises
+    :class:`UnknownConditionError` with this parser's shorter message.
+    """
+    cond = _Conditions()
+    for arg in args:
+        key, sep, value = arg.partition("=")
+        key, _ = _split_list_operator(key)
+        if not sep or keyword_match(key, "Format", 1):
+            continue
+        if not _set_assoc_cond(cond, key, value):
+            raise UnknownConditionError(f" Unknown condition: {arg}")
+    return cond
+
+
 class SacctmgrEmulator:
     """Emulates sacctmgr commands for account management."""
 
@@ -360,6 +495,8 @@ class SacctmgrEmulator:
         except UnknownFieldError as e:
             # slurm://src/sacctmgr/common.c#"Unknown field": bare "Unknown field '%s'" on stderr, exit 1.
             return self._fail(f"Unknown field '{e.token}'")
+        except UnknownConditionError as e:
+            return self._fail(str(e))
 
     def _dispatch(self, args: list[str]) -> str:
         if not args:
@@ -495,7 +632,7 @@ class SacctmgrEmulator:
         # Real sacctmgr prefix-matches the entity: "assoc" is accepted for
         # "association" (xstrncasecmp, common.c).
         if entity in {"association", "associations", "assoc"}:
-            return self._show_association(args[1:])
+            return self._list_associations(args[1:])
         if entity in {"qos", "qoss"}:
             return self._list_qos(args[1:])
         if entity in {"cluster", "clusters"}:
@@ -824,19 +961,27 @@ class SacctmgrEmulator:
         return f" Modified account...\n  {account.name}\n Settings\n  " + "\n  ".join(modifications)
 
     def _modify_user(self, args: list[str]) -> str:
-        """Modify user command.
+        """Modify user (slurm://src/sacctmgr/user_functions.c#sacctmgr_modify_user).
 
-        Applies QosLevel (=/+=/-=) and DefaultQOS to the matching user
-        association rows (slurmdb_assoc_rec_t.qos_list / def_qos_id), and
-        DefaultAccount to the user record itself
-        (slurm://src/sacctmgr/user_functions.c#sacctmgr_modify_user: user
-        changes print " Modified users...", association changes print
-        " Modified user associations..."). A new default account must
-        already be associated with the user on the cluster, else
-        slurm://src/sacctmgr/user_functions.c#_check_default_assocs refuses
-        with exit 1. The ``set`` and ``where`` clauses may appear in either
-        order, matching real sacctmgr (``modify user <name> set … where …``
-        and ``modify user where name=… set …``).
+        Tokens outside ``set`` form the user_cond (:func:`_parse_user_cond`),
+        so ``set`` and ``where`` may come in either order and a bare word is
+        a user name (``modify user <name> set …``).
+
+        DefaultAccount changes the user record. slurmdbd returns every user
+        the condition matches, changed or not
+        (slurm://src/plugins/accounting_storage/mysql/as_mysql_user.c#as_mysql_modify_users),
+        listed under `` Modified users...``; when none matches the block
+        says ``  Nothing modified`` and the process exits 1. Each matched
+        user must already be associated with the new account on every
+        cluster of the condition — all clusters when it names none
+        (slurm://src/sacctmgr/user_functions.c#_check_and_set_cluster_list)
+        — else slurm://src/sacctmgr/user_functions.c#_check_default_assocs
+        lists each missing (user, cluster) and exits 1. See the module
+        docstring for the single-default deviation.
+
+        QosLevel (=/+=/-=) and DefaultQOS go to the matching user
+        association rows (slurmdb_assoc_rec_t.qos_list / def_qos_id) under
+        `` Modified user associations...``.
         """
         set_index = next((i for i, a in enumerate(args) if a.lower() == "set"), -1)
         if set_index == -1:
@@ -856,24 +1001,8 @@ class SacctmgrEmulator:
             where_args = []
             pre_args = args[:set_index]
 
-        # Username: positional token before the first clause, else where name=.
-        username = ""
-        for a in pre_args:
-            if "=" not in a and a.lower() not in {"set", "where", "user", "users"}:
-                username = a
-                break
-        account = ""
-        partition = None
-        for a in where_args:
-            low = a.lower()
-            if low.startswith("account="):
-                account = a.split("=", 1)[1]
-            elif low.startswith("partition="):
-                partition = a.split("=", 1)[1]
-            elif low.startswith("name=") and not username:
-                username = a.split("=", 1)[1]
-
-        if not username:
+        cond = _parse_user_cond(pre_args + where_args)
+        if not cond.users and not cond.default_accounts:
             return self._fail(" error: No user name specified")
 
         # DefaultAccount is a user-record change (SA_SET_USER), handled
@@ -881,32 +1010,39 @@ class SacctmgrEmulator:
         new_default = ""
         assoc_set_args: list[str] = []
         for arg in set_args:
-            key = arg.split("=", 1)[0].lower()
-            # Real sacctmgr prefix-matches "DefaultAccount" from 8 characters.
-            if "=" in arg and key.startswith("defaulta") and "defaultaccount".startswith(key):
-                new_default = arg.split("=", 1)[1]
+            key, sep, value = arg.partition("=")
+            if sep and keyword_match(key, "DefaultAccount", 8):
+                # _set_rec: strip_quotes(value, NULL, make_lower=1).
+                new_default = fold_account(value.strip("\"'"))
             else:
                 assoc_set_args.append(arg)
+
         user_output = ""
         if new_default:
-            user_output = self._set_default_account(username, new_default)
-            if self.exit_code:
-                return user_output
-            if not any("=" in a for a in assoc_set_args):
+            users = self._users_matching(cond)
+            if not users:
+                user_output = " Modified users...\n" + self._nothing_modified()
+            else:
+                refusal = self._default_account_refusal(users, new_default, cond.clusters)
+                if refusal:
+                    return refusal
+                for name in users:
+                    self.database.users[name].default_account = new_default
                 self.database.save_state()
+                user_output = " Modified users...\n" + "\n".join(f"  {n}" for n in users)
+            if not any("=" in a for a in assoc_set_args):
                 return user_output
         set_args = assoc_set_args
 
-        folded_account = fold_account(account) if account else ""
-        rows = [
-            a
-            for a in self.database.associations.values()
-            if a.user == username
-            and (not folded_account or a.account == folded_account)
-            and (partition is None or a.partition == partition)
-        ]
+        def after_user_output(out: str) -> str:
+            return f"{user_output}\n{out}" if user_output else out
+
+        if not cond.users:
+            # A user-only condition (e.g. DefaultAccount=) selects no rows.
+            return after_user_output(self._fail(" There was a problem with your 'where' options."))
+        rows = self._matching_associations(cond)
         if not rows:
-            return self._nothing_modified()
+            return after_user_output(self._nothing_modified())
 
         snapshot = [(row, list(row.qos_list), row.def_qos) for row in rows]
 
@@ -926,7 +1062,7 @@ class SacctmgrEmulator:
                 modifications.append(f"defaultqos={value}")
 
         if not modifications:
-            return self._nothing_modified()
+            return after_user_output(self._nothing_modified())
 
         violations: list[str] = []
         for account_name in sorted({row.account for row in rows}):
@@ -936,35 +1072,76 @@ class SacctmgrEmulator:
         if violations:
             for row, qos_list, def_qos in snapshot:
                 row.qos_list, row.def_qos = qos_list, def_qos
-            return self._fail(self._default_qos_error(violations))
+            return after_user_output(self._fail(self._default_qos_error(violations)))
 
         self.database.save_state()
-        assoc_output = f" Modified user associations...\n  {username}\n Settings\n  " + "\n  ".join(
-            modifications
+        names = "\n".join(f"  {n}" for n in sorted({row.user for row in rows}))
+        return after_user_output(
+            f" Modified user associations...\n{names}\n Settings\n  " + "\n  ".join(modifications)
         )
-        return f"{user_output}\n{assoc_output}" if user_output else assoc_output
 
-    def _set_default_account(self, username: str, new_default: str) -> str:
-        """``set DefaultAccount=`` on one user, with sacctmgr's association check."""
-        user_rec = self.database.get_user(username)
-        if user_rec is None:
-            return self._nothing_modified()
-        folded = fold_account(new_default)
-        cluster = self.database.current_cluster
-        if not self.database.list_user_associations(username, folded, cluster):
-            # slurm://src/sacctmgr/user_functions.c#_check_default_assocs
-            self.exit_code = 1
-            self.stdout_error = True
-            return (
-                " Modified users...\n"
-                " Can't modify because these users aren't associated with new "
-                f"default account '{new_default}'...\n"
-                f"  U = {username} C = {cluster}"
-            )
-        if user_rec.default_account == folded:
-            return self._nothing_modified()
-        user_rec.default_account = folded
-        return f" Modified users...\n  {username}"
+    def _users_matching(self, cond: _Conditions) -> list[str]:
+        """Users a modify user_cond selects, in name order (user_table's key).
+
+        Named users that exist; without names, those whose default account
+        is in the DefaultAccount condition
+        (slurm://src/plugins/accounting_storage/mysql/as_mysql_user.c#_get_other_user_names_to_mod).
+        """
+        if cond.users:
+            return sorted(n for n in cond.users if self.database.get_user(n))
+        return sorted(
+            u.name
+            for u in self.database.users.values()
+            if fold_account(u.default_account) in cond.default_accounts
+        )
+
+    def _all_clusters(self) -> list[str]:
+        """The cluster list sacctmgr fills in when ``where`` names none.
+
+        slurm://src/sacctmgr/user_functions.c#_check_and_set_cluster_list
+        takes every cluster in the database, in name order (cluster_table's
+        key) — minus the emulator's placeholder ``default`` cluster when a
+        ClusterName is configured (see the module docstring).
+        """
+        names = sorted(c.name for c in self.database.list_clusters())
+        if self.database.current_cluster != "default":
+            names = [n for n in names if n != "default"]
+        return names
+
+    def _default_account_refusal(self, users: list[str], account: str, clusters: list[str]) -> str:
+        """Sacctmgr's check that ``account`` can become the users' default.
+
+        slurm://src/sacctmgr/user_functions.c#_check_default_assocs: every
+        (user, cluster) pair without an association to ``account`` — any
+        partition — is listed and the command exits 1, message on stdout.
+        Returns "" when every pair is associated.
+        """
+        missing = [
+            f"  U = {user} C = {cluster}"
+            for user in users
+            for cluster in clusters or self._all_clusters()
+            if not self.database.list_user_associations(user, account, cluster)
+        ]
+        if not missing:
+            return ""
+        self.exit_code = 1
+        self.stdout_error = True
+        return (
+            " Modified users...\n"
+            " Can't modify because these users aren't associated with new "
+            f"default account '{account}'...\n" + "\n".join(missing)
+        )
+
+    def _matching_associations(self, cond: _Conditions) -> list[Association]:
+        """Association rows an assoc_cond selects; no ``cluster=`` means every cluster."""
+        return [
+            a
+            for a in self.database.associations.values()
+            if (not cond.users or a.user in cond.users)
+            and (not cond.accounts or a.account in cond.accounts)
+            and (not cond.clusters or a.cluster in cond.clusters)
+            and (not cond.partitions or a.partition in cond.partitions)
+        ]
 
     @staticmethod
     def _default_qos_error(violations: list[str]) -> str:
@@ -1296,22 +1473,12 @@ class SacctmgrEmulator:
     def _list_users(self, args: list[str]) -> str:
         """List users (real default ``U,DefaultA,Ad``).
 
-        ``where name=``/``names=``/``user=`` (comma lists, ``where`` optional)
-        and ``defaultaccount=`` filter like the user_cond in
-        slurm://src/sacctmgr/user_functions.c#_set_cond.
+        Filters by the user names and DefaultAccount of the user_cond
+        (:func:`_parse_user_cond`, ``where`` optional); the association
+        conditions only matter with WithAssoc, which is not modelled.
         """
+        cond = _parse_user_cond(args)
         fields = self._resolve(_USER_DEFAULT, args)
-        names: set[str] = set()
-        def_accts: set[str] = set()
-        for arg in args:
-            key, _, value = arg.partition("=")
-            low = key.lower()
-            if not _:
-                continue
-            if low in {"name", "names", "user", "users"}:
-                names.update(v for v in value.split(",") if v)
-            elif low.startswith("defaulta") and "defaultaccounts".startswith(low):
-                def_accts.update(fold_account(v) for v in value.split(",") if v)
 
         rows = [
             {
@@ -1321,30 +1488,24 @@ class SacctmgrEmulator:
                 "Admin": "None",
             }
             for u in self.database.users.values()
-            if (not names or u.name in names)
-            and (not def_accts or fold_account(u.default_account) in def_accts)
+            if (not cond.users or u.name in cond.users)
+            and (
+                not cond.default_accounts
+                or fold_account(u.default_account) in cond.default_accounts
+            )
         ]
         return render_table(fields, rows, self._mode)
 
     def _list_associations(self, args: list[str]) -> str:
-        """List associations (real default from slurm://src/sacctmgr/association_functions.c#sacctmgr_list_assoc)."""
+        """List/show associations (real default from slurm://src/sacctmgr/association_functions.c#sacctmgr_list_assoc).
+
+        ``where`` is optional; conditions parse like :func:`_parse_assoc_cond`.
+        Account conditions fold to lower case, as slurm_addto_char_list
+        does, so ``account=2026_00A`` finds the stored ``2026_00a``.
+        """
+        cond = _parse_assoc_cond(args)
         fields = self._resolve(_ASSOC_DEFAULT, args)
-
-        account_filter = None
-        user_filter = None
-        for arg in args:
-            if arg.startswith("account="):
-                # Case-insensitive account filter (see _show_association).
-                account_filter = fold_account(arg.split("=", 1)[1])
-            elif arg.startswith("user="):
-                user_filter = arg.split("=", 1)[1]
-
-        associations = list(self.database.associations.values())
-        if account_filter:
-            associations = [a for a in associations if a.account == account_filter]
-        if user_filter:
-            associations = [a for a in associations if a.user == user_filter]
-
+        associations = self._matching_associations(cond)
         return render_table(fields, [self._assoc_row(a) for a in associations], self._mode)
 
     def _assoc_row(self, assoc: Association) -> dict[str, str]:
@@ -1462,37 +1623,6 @@ class SacctmgrEmulator:
                 )
                 rows.append(row)
         return render_table(fields, rows, self._mode)
-
-    def _show_association(self, args: list[str]) -> str:
-        """Show association command."""
-        # Parse where clause and optional format=. The ``where`` keyword is
-        # optional in real sacctmgr — ``user=``/``account=`` conditions are
-        # accepted whether or not it is present.
-        user = ""
-        account = ""
-        for arg in args:
-            if arg.startswith("user="):
-                user = arg.split("=", 1)[1]
-            elif arg.startswith("account="):
-                # Account filters are case-insensitive (folded to match the
-                # stored lower-cased rows), so ``account=2026_00A`` finds
-                # ``2026_00a`` — the mismatch real Slurm papers over.
-                account = fold_account(arg.split("=", 1)[1])
-
-        fields = self._resolve(_ASSOC_DEFAULT, args)
-
-        if user and account:
-            associations = self.database.list_user_associations(user, account)
-        else:
-            # Either condition alone filters too (assoc_cond user_list /
-            # acct_list, slurm://src/sacctmgr/association_functions.c#_set_cond).
-            associations = [
-                a
-                for a in self.database.associations.values()
-                if (not account or a.account == account) and (not user or a.user == user)
-            ]
-
-        return render_table(fields, [self._assoc_row(a) for a in associations], self._mode)
 
     def _show_help(self) -> str:
         """Show help message."""
