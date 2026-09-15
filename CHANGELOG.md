@@ -4,6 +4,11 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.8] - 2026-09-15
+
+### Fixed
+- Fix web UI template rendering to use the request-first `TemplateResponse` signature
+
 ## [0.9.7] - 2026-09-14
 
 ### Fixed
