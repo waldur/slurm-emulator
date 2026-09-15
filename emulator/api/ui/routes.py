@@ -480,7 +480,7 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
 
     def status_partial(request: Request, cluster: Optional[str] = None) -> HTMLResponse:
         return _templates.TemplateResponse(
-            "_status.html", _status_context(server, request, cluster)
+            request, "_status.html", _status_context(server, request, cluster)
         )
 
     @router.get("/", response_class=HTMLResponse)
@@ -488,7 +488,7 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
         ctx = _status_context(server, request)
         ctx["version"] = __version__
         ctx["scenarios"] = [s.get_summary() for s in server.scenario_registry.list_scenarios()]
-        return _templates.TemplateResponse("index.html", ctx)
+        return _templates.TemplateResponse(request, "index.html", ctx)
 
     @router.get("/status", response_class=HTMLResponse)
     async def status(request: Request, cluster: Optional[str] = None):
@@ -496,17 +496,19 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
 
     @router.get("/jobs", response_class=HTMLResponse)
     async def jobs(request: Request):
-        return _templates.TemplateResponse("_jobs.html", _jobs_context(server, request))
+        return _templates.TemplateResponse(request, "_jobs.html", _jobs_context(server, request))
 
     @router.get("/associations", response_class=HTMLResponse)
     async def associations(request: Request):
         return _templates.TemplateResponse(
-            "_associations.html", _associations_context(server, request)
+            request, "_associations.html", _associations_context(server, request)
         )
 
     @router.get("/config", response_class=HTMLResponse)
     async def config(request: Request):
-        return _templates.TemplateResponse("_config.html", _config_context(server, request))
+        return _templates.TemplateResponse(
+            request, "_config.html", _config_context(server, request)
+        )
 
     @router.post("/time/advance", response_class=HTMLResponse)
     async def time_advance(
@@ -643,7 +645,9 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
                 result["ok"] = False
                 result["error"] = str(e)
             result["log"] = buffer.getvalue().strip()
-        return _templates.TemplateResponse("_result.html", {"request": request, "result": result})
+        return _templates.TemplateResponse(
+            request, "_result.html", {"request": request, "result": result}
+        )
 
     @router.get("/scenario/steps", response_class=HTMLResponse)
     async def scenario_steps(request: Request, name: str = "sequence"):
@@ -667,7 +671,7 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
                         for step in definition.steps
                     ],
                 }
-        return _templates.TemplateResponse("_scenario_steps.html", ctx)
+        return _templates.TemplateResponse(request, "_scenario_steps.html", ctx)
 
     @router.get("/scenario/build", response_class=HTMLResponse)
     async def scenario_build(request: Request, name: str = ""):
@@ -685,7 +689,7 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
         if not actions:
             actions = [_blank_action()]
         return _templates.TemplateResponse(
-            "_scenario_builder.html", _builder_context(server, request, actions)
+            request, "_scenario_builder.html", _builder_context(server, request, actions)
         )
 
     @router.post("/scenario/build/rows", response_class=HTMLResponse)
@@ -706,7 +710,7 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
         if not actions:
             actions = [_blank_action()]
         return _templates.TemplateResponse(
-            "_builder_rows.html", _builder_context(server, request, actions)
+            request, "_builder_rows.html", _builder_context(server, request, actions)
         )
 
     @router.post("/scenario/build/run", response_class=HTMLResponse)
@@ -725,7 +729,9 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
             result["ok"] = False
             result["error"] = str(e)
         result["log"] = buffer.getvalue().strip()
-        return _templates.TemplateResponse("_result.html", {"request": request, "result": result})
+        return _templates.TemplateResponse(
+            request, "_result.html", {"request": request, "result": result}
+        )
 
     @router.get("/control/{action}", response_class=HTMLResponse)
     async def control_form(request: Request, action: str):
@@ -738,6 +744,7 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
             if s.name != "sequence"
         ]
         return _templates.TemplateResponse(
+            request,
             "_control.html",
             {"request": request, "action": action, "accounts": accounts, "scenarios": scenarios},
         )
@@ -745,7 +752,7 @@ def mount_ui(app: FastAPI, server: EmulatorServer) -> None:
     def assoc_modal(request: Request, account: str) -> HTMLResponse:
         ctx = _associations_context(server, request, account=account)
         ctx["account"] = account
-        return _templates.TemplateResponse("_assoc_modal.html", ctx)
+        return _templates.TemplateResponse(request, "_assoc_modal.html", ctx)
 
     @router.get("/associations/{account}", response_class=HTMLResponse)
     async def account_associations(request: Request, account: str):
