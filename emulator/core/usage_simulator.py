@@ -1,9 +1,10 @@
 """Usage simulation for injecting node-hour consumption."""
 
+import inspect
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional
 
-from emulator.core.database import SlurmDatabase, UsageRecord
+from emulator.core.database import FINISHED_JOB_STATES, SlurmDatabase, UsageRecord
 from emulator.core.energy import DEFAULT_PARTITION, energy_joules
 from emulator.core.time_engine import TimeEngine
 
@@ -36,6 +37,83 @@ def standard_node_raw_tres(
         if energy is None
         else int(energy),
     }
+
+
+def job_raw_tres(
+    elapsed_hours: float,
+    cpus: int = 1,
+    gpus: int = 0,
+    mem_gb: Optional[int] = None,
+    partition: str = DEFAULT_PARTITION,
+    energy: Optional[int] = None,
+) -> dict[str, int]:
+    """Raw TRES of one job with an explicit CPU/GPU allocation.
+
+    Records keep ``<count>-hours`` totals and sacct divides the per-job
+    count back out, so ``count * elapsed_hours`` must survive integer
+    rounding — true for any whole count once ``elapsed_hours >= 1``;
+    shorter jobs need a whole product and raise ``ValueError`` otherwise.
+    ``mem_gb`` defaults to the standard node's memory per CPU; without
+    ``energy`` the power model charges the job's share of a node
+    (``cpus / NODE_CPUS``) plus its GPUs.
+    """
+    if elapsed_hours <= 0:
+        msg = "elapsed_hours must be positive"
+        raise ValueError(msg)
+    if cpus < 1 or gpus < 0:
+        msg = "cpus must be >= 1 and gpus >= 0"
+        raise ValueError(msg)
+    mem = mem_gb if mem_gb is not None else cpus * NODE_MEM_GB // NODE_CPUS
+    raw: dict[str, int] = {}
+    for key, count in (("CPU", cpus), ("Mem", mem), ("GRES/gpu", gpus)):
+        total = round(count * elapsed_hours)
+        if round(total / elapsed_hours) != count:
+            msg = (
+                f"{key}={count} over {elapsed_hours}h does not round-trip; "
+                "choose a whole count x hours product"
+            )
+            raise ValueError(msg)
+        raw[key] = total
+    raw["energy"] = (
+        energy_joules(elapsed_hours * cpus / NODE_CPUS, gpus * elapsed_hours, partition)
+        if energy is None
+        else int(energy)
+    )
+    return raw
+
+
+def job_total_cpu(
+    cpus: int,
+    elapsed_hours: float,
+    cpu_efficiency: Optional[float] = None,
+    total_cpu_seconds: Optional[float] = None,
+) -> Optional[float]:
+    """CPU time a job consumed, from an efficiency or an explicit figure.
+
+    ``cpu_efficiency`` (0..1) scales ``cpus x elapsed``; the two inputs
+    are mutually exclusive, and neither leaves the record at "fully busy".
+    """
+    if cpu_efficiency is not None and total_cpu_seconds is not None:
+        msg = "give cpu_efficiency or total_cpu_seconds, not both"
+        raise ValueError(msg)
+    if cpu_efficiency is not None:
+        if not 0 <= cpu_efficiency <= 1:
+            msg = "cpu_efficiency must be between 0 and 1"
+            raise ValueError(msg)
+        return cpus * elapsed_hours * 3600 * cpu_efficiency
+    if total_cpu_seconds is not None and total_cpu_seconds < 0:
+        msg = "total_cpu_seconds must not be negative"
+        raise ValueError(msg)
+    return total_cpu_seconds
+
+
+def job_state(state: str) -> str:
+    """Upper-cased final state; anything but a finished base state is refused."""
+    upper = state.upper()
+    if upper not in FINISHED_JOB_STATES:
+        msg = f"state must be one of {', '.join(FINISHED_JOB_STATES)}"
+        raise ValueError(msg)
+    return upper
 
 
 class UsageSimulator:
@@ -101,6 +179,103 @@ class UsageSimulator:
 
         # Save state after injection
         self.database.save_state()
+
+    def inject_job(
+        self,
+        account: str,
+        user: str,
+        elapsed_hours: float,
+        cpus: int = 1,
+        gpus: int = 0,
+        mem_gb: Optional[int] = None,
+        partition: Optional[str] = None,
+        energy: Optional[int] = None,
+        admin_comment: str = "",
+        end_time: Optional[datetime] = None,
+        cluster: Optional[str] = None,
+        state: str = "COMPLETED",
+        cpu_efficiency: Optional[float] = None,
+        total_cpu_seconds: Optional[float] = None,
+    ) -> int:
+        """Record one finished job and return its job id.
+
+        Unlike :meth:`inject_usage`, which books whole standard nodes, this
+        describes a single job the way ``sacct`` shows it: ``AllocTRES`` is
+        ``cpu=<cpus>`` (``gres/gpu=<gpus>``), ``Elapsed`` is
+        ``elapsed_hours``, ``End`` is ``end_time`` (default: the simulated
+        now) and ``AdminComment`` is ``admin_comment`` verbatim. ``State``
+        is any finished base state (:data:`FINISHED_JOB_STATES`);
+        ``TotalCPU`` comes from ``cpu_efficiency`` or ``total_cpu_seconds``
+        (:func:`job_total_cpu`). See :func:`job_raw_tres` for the rounding
+        rule and the energy default. Does not save state;
+        :meth:`inject_jobs` does.
+        """
+        part = partition or DEFAULT_PARTITION
+        raw_tres = job_raw_tres(elapsed_hours, cpus, gpus, mem_gb, part, energy)
+        final_state = job_state(state)
+        total_cpu = job_total_cpu(cpus, elapsed_hours, cpu_efficiency, total_cpu_seconds)
+        end = end_time or self.time_engine.get_current_time()
+        cl = cluster or self.database.current_cluster
+
+        if not self.database.get_account(account):
+            self.database.add_account(account, f"Account {account}", "emulator")
+        if not self.database.get_user(user):
+            self.database.add_user(user, account)
+        if not self.database.get_association(user, account, cluster=cl):
+            self.database.add_association(user, account, cluster=cl)
+
+        record = UsageRecord(
+            account=account,
+            user=user,
+            node_hours=elapsed_hours,
+            billing_units=elapsed_hours,
+            timestamp=end,
+            period=f"{end.year}-Q{(end.month - 1) // 3 + 1}",
+            raw_tres=raw_tres,
+            cluster=cl,
+            partition=part,
+            state=final_state,
+            admin_comment=admin_comment,
+            total_cpu_seconds=total_cpu,
+        )
+        self.database.add_usage_record(record)
+        return int(record.job_id or 0)  # add_usage_record always assigns one
+
+    def inject_jobs(self, jobs: list[dict[str, Any]]) -> list[int]:
+        """Inject several jobs from plain dicts (control API, scenarios).
+
+        Keys are :meth:`inject_job`'s keyword arguments, with ``end`` as an
+        ISO 8601 string instead of ``end_time``. Every job is validated
+        before any is recorded, so a bad entry leaves the state untouched;
+        the state is saved once at the end.
+        """
+        prepared = []
+        for spec in jobs:
+            kwargs = dict(spec)
+            end = kwargs.pop("end", None)
+            if end is not None:
+                kwargs["end_time"] = datetime.fromisoformat(str(end))
+            # Missing/unknown keys raise TypeError here, before any write.
+            inspect.signature(self.inject_job).bind(**kwargs)
+            job_raw_tres(
+                kwargs.get("elapsed_hours", 0),
+                kwargs.get("cpus", 1),
+                kwargs.get("gpus", 0),
+                kwargs.get("mem_gb"),
+                energy=kwargs.get("energy"),
+            )
+            job_state(kwargs.get("state", "COMPLETED"))
+            job_total_cpu(
+                kwargs.get("cpus", 1),
+                kwargs["elapsed_hours"],
+                kwargs.get("cpu_efficiency"),
+                kwargs.get("total_cpu_seconds"),
+            )
+            prepared.append(kwargs)
+        job_ids = [self.inject_job(**kwargs) for kwargs in prepared]
+        self.database.save_state()
+        print(f"💾 Injected {len(job_ids)} job(s): {', '.join(map(str, job_ids))}")
+        return job_ids
 
     def inject_usage_pattern(self, account: str, user: str, pattern_config: dict) -> None:
         """Inject usage following a pattern over time."""

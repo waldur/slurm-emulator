@@ -1,5 +1,6 @@
 """Scenario registry for managing and visualizing test scenarios."""
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -12,6 +13,193 @@ REGULAR_ACCESS_ENERGY_USERS: list[tuple[str, float, str, int]] = [
     ("bob", 40.0, "gpu", 244_800_000),
 ]
 REGULAR_ACCESS_ENERGY_JOULES = sum(j for _u, _n, _p, j in REGULAR_ACCESS_ENERGY_USERS)
+
+# eessi_software_usage: the EESSI stack version and CPU target the jobs ran on.
+EESSI_VERSION = "2023.06"
+EESSI_CPU_TARGET = "x86_64/amd/zen3"
+EESSI_ACCOUNT = "eessi_demo"
+
+
+@dataclass(frozen=True)
+class EessiJob:
+    """One March 2024 job of the eessi_software_usage scenario."""
+
+    user: str
+    # Real EESSI 2023.06 modules; None = no module loaded (no AdminComment),
+    # ``mysite-tool/1.0`` = a site-local module outside EESSI.
+    modules: Optional[list[str]]
+    cpus: int
+    elapsed_hours: float
+    energy: int
+    end: str
+    gpus: int = 0
+    partition: str = "compute"
+    state: str = "COMPLETED"
+    cpu_efficiency: Optional[float] = None
+    total_cpu_seconds: Optional[float] = None
+    # CPU the job ran on, when it differs from the EESSI build it used.
+    host_cpu: Optional[str] = None
+    cpu_target: str = EESSI_CPU_TARGET
+
+    @property
+    def admin_comment(self) -> str:
+        return eessi_admin_comment(self.modules, self.cpu_target, self.host_cpu)
+
+    def inject_parameters(self) -> dict[str, Any]:
+        """``POST /api/inject-jobs`` / ``inject_job`` fields for this job."""
+        params: dict[str, Any] = {
+            "account": EESSI_ACCOUNT,
+            "user": self.user,
+            "cpus": self.cpus,
+            "gpus": self.gpus,
+            "elapsed_hours": self.elapsed_hours,
+            "partition": self.partition,
+            "energy": self.energy,
+            "admin_comment": self.admin_comment,
+            "end": self.end,
+            "state": self.state,
+        }
+        if self.cpu_efficiency is not None:
+            params["cpu_efficiency"] = self.cpu_efficiency
+        if self.total_cpu_seconds is not None:
+            params["total_cpu_seconds"] = self.total_cpu_seconds
+        return params
+
+
+_GROMACS = "GROMACS/2024.1-foss-2023b"
+_OPENFOAM = "OpenFOAM/11-foss-2023a"
+
+EESSI_SOFTWARE_JOBS: list[EessiJob] = [
+    # Built for zen3, ran on a zen4 host.
+    EessiJob(
+        "alice",
+        [_GROMACS],
+        32,
+        6.0,
+        5_412_600,
+        "2024-03-04T14:00:00",
+        cpu_efficiency=0.92,
+        host_cpu="x86_64/amd/zen4",
+    ),
+    EessiJob(
+        "alice",
+        [_GROMACS, "Python/3.11.5-GCCcore-13.2.0"],
+        16,
+        3.0,
+        1_361_700,
+        "2024-03-06T10:30:00",
+        cpu_efficiency=0.78,
+    ),
+    # Hit its time limit; TotalCPU spans more than a day of CPU time.
+    EessiJob(
+        "alice",
+        ["LAMMPS/2Aug2023_update2-foss-2023a-kokkos"],
+        64,
+        12.0,
+        21_744_000,
+        "2024-03-12T22:00:00",
+        state="TIMEOUT",
+        cpu_efficiency=0.97,
+    ),
+    # No module loaded; sub-hour TotalCPU with milliseconds.
+    EessiJob("alice", None, 2, 0.5, 56_400, "2024-03-13T09:15:00", total_cpu_seconds=1234.567),
+    EessiJob(
+        "bob",
+        [_OPENFOAM],
+        48,
+        8.0,
+        10_872_000,
+        "2024-03-05T18:00:00",
+        cpu_efficiency=0.88,
+        host_cpu="x86_64/amd/zen3",
+    ),
+    EessiJob(
+        "bob",
+        [_OPENFOAM, "Python/3.11.3-GCCcore-12.3.0"],
+        8,
+        2.0,
+        451_800,
+        "2024-03-07T11:00:00",
+        cpu_efficiency=0.61,
+    ),
+    EessiJob(
+        "bob",
+        ["QuantumESPRESSO/7.3.1-foss-2023a"],
+        32,
+        0.25,
+        225_540,
+        "2024-03-15T16:45:00",
+        state="FAILED",
+        cpu_efficiency=0.4,
+    ),
+    EessiJob(
+        "bob",
+        ["R/4.3.2-gfbf-2023a"],
+        4,
+        1.5,
+        169_200,
+        "2024-03-19T13:20:00",
+        state="CANCELLED",
+        cpu_efficiency=0.3,
+    ),
+    EessiJob(
+        "carol",
+        ["PyTorch/2.1.2-foss-2023a"],
+        16,
+        1.5,
+        677_700,
+        "2024-03-08T20:00:00",
+        state="OUT_OF_MEMORY",
+        cpu_efficiency=0.55,
+    ),
+    # GPU job: the CPUs mostly feed the GPUs.
+    EessiJob(
+        "carol",
+        ["GROMACS/2024.4-foss-2023b-CUDA-12.4.0"],
+        16,
+        10.0,
+        24_264_000,
+        "2024-03-18T07:30:00",
+        gpus=2,
+        partition="gpu",
+        cpu_efficiency=0.35,
+    ),
+    # Generic build on an Intel host.
+    EessiJob(
+        "carol",
+        ["TensorFlow/2.13.0-foss-2023a"],
+        8,
+        3.0,
+        676_800,
+        "2024-03-22T15:00:00",
+        cpu_efficiency=0.72,
+        host_cpu="x86_64/intel/sapphirerapids",
+        cpu_target="x86_64/generic",
+    ),
+    # Fully busy: no efficiency given.
+    EessiJob("carol", ["mysite-tool/1.0"], 4, 2.0, 225_900, "2024-03-27T10:00:00"),
+]
+
+
+def eessi_admin_comment(
+    modules: Optional[list[str]],
+    cpu_target: str = EESSI_CPU_TARGET,
+    host_cpu: Optional[str] = None,
+) -> str:
+    """AdminComment an Lmod load hook + slurmctld epilog would leave on a job.
+
+    Compact JSON namespaced under ``eessi``; module names contain no
+    ``|``, the separator of ``sacct -P``, nor a newline. ``host_cpu`` is
+    added only when given. ``None`` (no module loaded) leaves the comment
+    empty.
+    """
+    if modules is None:
+        return ""
+    eessi: dict[str, Any] = {"version": EESSI_VERSION, "cpu_target": cpu_target}
+    if host_cpu is not None:
+        eessi["host_cpu"] = host_cpu
+    eessi["modules"] = modules
+    return json.dumps({"eessi": eessi}, separators=(",", ":"))
 
 
 class ScenarioType(Enum):
@@ -30,6 +218,7 @@ class ActionType(Enum):
     TIME_SET = "time_set"
     TIME_ADVANCE = "time_advance"
     USAGE_INJECT = "usage_inject"
+    JOB_INJECT = "job_inject"
     ACCOUNT_CREATE = "account_create"
     ACCOUNT_DELETE = "account_delete"
     LIMITS_CALCULATE = "limits_calculate"
@@ -67,6 +256,9 @@ class ScenarioAction:
             if "energy" in self.parameters:
                 cmd += f"  # energy={self.parameters['energy']} J"
             return cmd
+        if self.type == ActionType.JOB_INJECT:
+            # No interactive command; the control API takes the same fields.
+            return f"# POST /api/inject-jobs {json.dumps({'jobs': [self.parameters]})}"
         if self.type == ActionType.ACCOUNT_CREATE:
             name = self.parameters["name"]
             desc = self.parameters.get("description", "Test Account")
@@ -201,6 +393,7 @@ class ScenarioRegistry:
         self._register_carryover_testing_scenario()
         self._register_configuration_comparison_scenario()
         self._register_regular_access_energy_scenario()
+        self._register_eessi_software_usage_scenario()
 
         # Register new limits configuration scenarios
         self._register_limits_configuration_scenarios()
@@ -692,6 +885,83 @@ class ScenarioRegistry:
             )
         )
         scenario.add_step(step2)
+
+        self.register_scenario(scenario)
+
+    def _register_eessi_software_usage_scenario(self) -> None:
+        """March 2024 jobs annotated with the EESSI modules they loaded.
+
+        Each job carries its module list in AdminComment (JSON under an
+        ``eessi`` key, some with the ``host_cpu`` they ran on), an exact
+        energy figure, a final state (incl. TIMEOUT, FAILED, CANCELLED,
+        OUT_OF_MEMORY) and a CPU efficiency behind TotalCPU, so
+        ``sacct --format=JobID,Account,User,AllocTRES,Elapsed,ConsumedEnergyRaw,State,TotalCPU,AdminComment
+        --parsable2 --noheader --allocations --allusers --starttime=2024-03-01
+        --endtime=2024-04-01 --accounts=eessi_demo`` yields one row per job
+        for per-software usage and energy reporting.
+        """
+        scenario = ScenarioDefinition(
+            name="eessi_software_usage",
+            title="EESSI: Per-Job Software and Energy Usage",
+            description=(
+                "Seed a month (March 2024) of completed jobs whose AdminComment "
+                "lists the EESSI modules each job loaded, with known energy, so "
+                "software usage can be attributed per job from sacct."
+            ),
+            scenario_type=ScenarioType.USAGE_PATTERNS,
+            duration_estimate="3 minutes",
+            complexity="basic",
+            learning_objectives=[
+                "Read a job's loaded modules from sacct AdminComment",
+                "Attribute CPU-hours (AllocTRES cpu x Elapsed) and energy to software",
+                "Handle jobs with no module or with a non-EESSI site module",
+            ],
+            key_concepts=[
+                "AdminComment as an opaque per-job annotation",
+                "One sacct row per job (--allocations)",
+                "ConsumedEnergyRaw in joules",
+            ],
+        )
+
+        step1 = ScenarioStep(
+            name="seed_march_jobs",
+            description="Record the March 2024 jobs with their module lists",
+            time_point=datetime(2024, 4, 2),
+        )
+        step1.add_action(
+            ScenarioAction(
+                type=ActionType.ACCOUNT_CREATE,
+                description="Create the EESSI demo project account",
+                parameters={"name": EESSI_ACCOUNT, "allocation": 5000},
+            )
+        )
+        for job in EESSI_SOFTWARE_JOBS:
+            label = ", ".join(job.modules) if job.modules else "no modules"
+            step1.add_action(
+                ScenarioAction(
+                    type=ActionType.JOB_INJECT,
+                    description=(
+                        f"{job.user}: {label} ({job.cpus} CPU, {job.gpus} GPU, "
+                        f"{job.elapsed_hours}h, {job.state})"
+                    ),
+                    parameters=job.inject_parameters(),
+                )
+            )
+        step1.add_action(
+            ScenarioAction(
+                type=ActionType.VALIDATE,
+                description=(
+                    "sacct --format=JobID,Account,User,AllocTRES,Elapsed,"
+                    "ConsumedEnergyRaw,State,TotalCPU,AdminComment --parsable2 --noheader "
+                    "--allocations --allusers --starttime=2024-03-01 "
+                    f"--endtime=2024-04-01 --accounts={EESSI_ACCOUNT}"
+                ),
+                parameters={"account": EESSI_ACCOUNT},
+                expected_outcome=f"{len(EESSI_SOFTWARE_JOBS)} rows, one per job",
+                validation={"jobs": len(EESSI_SOFTWARE_JOBS)},
+            )
+        )
+        scenario.add_step(step1)
 
         self.register_scenario(scenario)
 

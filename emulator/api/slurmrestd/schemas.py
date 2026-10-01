@@ -21,6 +21,8 @@ from emulator.commands.sacct import (
     _NODE_GPUS,
     _NODE_MEM_GB,
     SacctEmulator,
+    split_seconds,
+    total_cpu_seconds,
 )
 from emulator.core.database import QOS, Account, Association, Job, UsageRecord, User
 from emulator.core.tres import DYNAMIC_TRES_FIRST_ID, STATIC_TRES_IDS, tres_id
@@ -314,6 +316,8 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
     if gpus:
         tres_values["gres/gpu"] = gpus
     tres = tres_list_from_dict(tres_values)
+    cpu_sec, cpu_usec = split_seconds(total_cpu_seconds(record))
+    cpu_time = {"seconds": cpu_sec, "microseconds": cpu_usec}
 
     exit_code = {
         "status": ["ERROR"] if failed else ["SUCCESS"],
@@ -324,6 +328,14 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
         "allocation_nodes": 1,
         "array": {"job_id": 0},
         "cluster": record.cluster,
+        # JOB parser: admin_comment -> comment/administrator, derived_es ->
+        # comment/job, system_comment -> comment/system
+        # (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB@26.05+).
+        "comment": {
+            "administrator": record.admin_comment,
+            "job": "",
+            "system": "",
+        },
         "derived_exit_code": exit_code,
         "exit_code": exit_code,
         "flags": [],
@@ -348,9 +360,11 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
             "submission": start,
             "suspended": 0,
             "limit": uint_no_val(infinite=True),
+            # tot_cpu = user + system (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB@26.05+);
+            # the emulator books all of it as user time.
             "system": {"seconds": 0, "microseconds": 0},
-            "user": {"seconds": 0, "microseconds": 0},
-            "total": {"seconds": 0, "microseconds": 0},
+            "user": cpu_time,
+            "total": cpu_time,
         },
         "tres": {"allocated": tres, "requested": tres},
         "user": record.user,
@@ -381,6 +395,8 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
     }
 
     return {
+        # JOB_INFO dumps job_info_t.admin_comment as a flat ``admin_comment``.
+        "admin_comment": job.admin_comment,
         "job_id": int(job.job_id) if str(job.job_id).isdigit() else 0,
         "name": job.name or f"job_{job.job_id}",
         "account": job.account,

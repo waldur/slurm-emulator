@@ -187,6 +187,15 @@ class UsageRecord:
     uid: Optional[int] = None
     gid: Optional[int] = None
     group_name: str = ""
+    # Free-form text an administrator attached to the job
+    # (slurm://slurm/slurmdb.h#slurmdb_job_rec_t.admin_comment). Opaque to
+    # the emulator: stored and printed verbatim (sacct ``AdminComment``,
+    # slurmrestd ``comment.administrator``).
+    admin_comment: str = ""
+    # CPU time the job's processes consumed, user + system
+    # (slurm://slurm/slurmdb.h#slurmdb_job_rec_t.tot_cpu_sec); None means
+    # every allocated CPU was busy for the whole run (cpus x elapsed).
+    total_cpu_seconds: Optional[float] = None
 
     def __post_init__(self) -> None:
         """Fold the account name like Account/Association do.
@@ -236,7 +245,24 @@ class Job:
     uid: Optional[int] = None
     gid: Optional[int] = None
     group_name: str = ""
+    # Copied into the accounting record when the job completes, as slurmctld
+    # sends it to slurmdbd with the job (slurm://slurm/slurm.h#job_info_t.admin_comment).
+    admin_comment: str = ""
 
+
+# Base states a job can end in, as job_state_string() names them
+# (slurm://src/common/slurm_protocol_defs.c#job_state_string).
+FINISHED_JOB_STATES = (
+    "COMPLETED",
+    "CANCELLED",
+    "FAILED",
+    "TIMEOUT",
+    "NODE_FAIL",
+    "PREEMPTED",
+    "BOOT_FAIL",
+    "DEADLINE",
+    "OUT_OF_MEMORY",
+)
 
 CLUSTER_NAME_ENV_VAR = "SLURM_EMULATOR_CLUSTER_NAME"
 
@@ -986,6 +1012,7 @@ class SlurmDatabase:
                 self.jobs = {}
                 for jid, data in state.get("jobs", {}).items():
                     data.setdefault("cluster", "default")
+                    data.setdefault("admin_comment", "")
                     # Handle datetime fields
                     for dt_field in ["submit_time", "start_time", "end_time"]:
                         if data.get(dt_field):
@@ -1017,4 +1044,6 @@ class SlurmDatabase:
         data.setdefault("job_id", None)
         data.setdefault("state", "COMPLETED")
         data.setdefault("partition", "compute")
+        data.setdefault("admin_comment", "")
+        data.setdefault("total_cpu_seconds", None)
         return UsageRecord(**data)

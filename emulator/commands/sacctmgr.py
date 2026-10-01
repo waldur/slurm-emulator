@@ -34,6 +34,7 @@ no such placeholder.
 """
 
 import dataclasses
+from datetime import timedelta
 from typing import Optional
 
 from emulator import __version__
@@ -161,6 +162,25 @@ _QOS_DEFAULT = (  # slurm://src/sacctmgr/qos_functions.c#sacctmgr_list_qos
     "MaxTRESRunMinsPerUser%22,MaxJobsPerAcct,MaxSubmitJobsPerAcct,MinTRES"
 )
 _TRES_DEFAULT = "Type,Name%15,ID"  # slurm://src/sacctmgr/tres_function.c#sacctmgr_list_tres
+
+
+def _strip_quotes(option: str) -> str:
+    """Port of slurm://src/sacctmgr/common.c#strip_quotes (no lower-casing).
+
+    A leading quote opens a quoted value that ends at the matching quote;
+    every other ``"`` or ``'`` is replaced with a backtick, and leading and
+    trailing blanks are trimmed.
+    """
+    quote = ""
+    body = option
+    if body[:1] in {'"', "'"}:
+        quote, body = body[0], body[1:]
+    out = []
+    for ch in body.lstrip():
+        if quote and ch == quote:
+            break
+        out.append("`" if ch in {'"', "'"} else ch)
+    return "".join(out).rstrip()
 
 
 def _split_list_operator(key: str) -> tuple[str, str]:
@@ -582,6 +602,8 @@ class SacctmgrEmulator:
             return self._modify_user(args[1:])
         if entity == "qos":
             return self._modify_qos(args[1:])
+        if entity == "job":
+            return self._modify_job(args[1:])
         return self._fail(f" error: Unknown entity for modify: {entity}")
 
     def _handle_remove(self, args: list[str]) -> str:
@@ -1379,6 +1401,83 @@ class SacctmgrEmulator:
         self.database.qos_list[qos_name] = pending
         self.database.save_state()
         return f" Modified qos...\n  {qos_name}"
+
+    def _modify_job(self, args: list[str]) -> str:
+        """``modify job where JobID=<id>[,…] set AdminComment=<text>``.
+
+        Port of sacctmgr_modify_job (slurm://src/sacctmgr/job_functions.c#sacctmgr_modify_job):
+        conditions JobID (or a bare id), Accounts, Users, Cluster (default:
+        the local cluster); of the settable fields only AdminComment, the
+        one annotation tools write after a job has finished (slurmctld's
+        ``scontrol update`` refuses finished jobs). The value goes through
+        strip_quotes, so embedded quotes become backticks exactly as on a
+        real cluster. Success prints `` Modified jobs...`` then one
+        ``  <id> submitted at <time>`` line per job
+        (slurm://src/plugins/accounting_storage/mysql/as_mysql_job.c#as_mysql_modify_job);
+        no match fails with SLURM_NO_CHANGE_IN_DATA. Real slurmdbd also
+        requires AdminLevel=Operator for AdminComment; the emulator has no
+        caller identity here and does not check it.
+        """
+        job_ids: list[str] = []
+        accounts: list[str] = []
+        users: list[str] = []
+        clusters: list[str] = []
+        admin_comment: Optional[str] = None
+        in_set = False
+        for arg in args:
+            low = arg.lower()
+            if low == "where":
+                in_set = False
+                continue
+            if low == "set":
+                in_set = True
+                continue
+            key, sep, value = arg.partition("=")
+            k = key.lower()
+            if in_set:
+                if sep and k == "admincomment":
+                    admin_comment = _strip_quotes(value)
+                    continue
+                return self._fail(
+                    f" Unknown option: {arg}\n Use keyword 'where' to modify condition"
+                )
+            if not sep or keyword_match(k, "jobid", 1):
+                ids = [v.split(".", 1)[0] for v in (value if sep else arg).split(",") if v]
+                if not ids or not all(i.isdigit() for i in ids):
+                    return self._fail(f"Invalid job id(s) {value if sep else arg} specified")
+                job_ids.extend(ids)
+            elif keyword_match(k, "accounts", 1) or keyword_match(k, "accts", 1):
+                accounts.extend(fold_account(v) for v in value.split(",") if v)
+            elif keyword_match(k, "cluster", 1):
+                clusters.extend(v for v in value.split(",") if v)
+            elif keyword_match(k, "users", 1):
+                users.extend(v for v in value.split(",") if v)
+            else:
+                return self._fail(f" Unknown condition: {arg}\n Use keyword 'set' to modify value")
+        if admin_comment is None:
+            return self._fail(" You didn't give me anything to set")
+
+        self.database.ensure_job_ids()
+        wanted_clusters = clusters or [self.database.current_cluster]
+        matched = [
+            r
+            for r in self.database.usage_records
+            if r.cluster in wanted_clusters
+            and (not job_ids or str(r.job_id) in job_ids)
+            and (not accounts or r.account in accounts)
+            and (not users or r.user in users)
+        ]
+        if not matched:
+            # " Modified jobs..." is printf'd before the RPC result is known.
+            print(" Modified jobs...")
+            return self._fail(" Error with request: Data has not changed since time specified")
+        lines = [" Modified jobs..."]
+        for record in matched:
+            record.admin_comment = admin_comment
+            submitted = record.timestamp - timedelta(seconds=int(record.node_hours * 3600))
+            lines.append(f"  {record.job_id} submitted at {submitted:%Y-%m-%dT%H:%M:%S}")
+        self.database.save_state()
+        return "\n".join(lines)
 
     def _remove_cluster(self, args: list[str]) -> str:
         """Remove cluster command."""

@@ -269,3 +269,63 @@ class TestSiteAgentPath:
         )
         assert out == "proj-a|cpu=64,mem=512G,node=1,billing=64,gres/gpu=4|02:00:00|alice"
         assert sacct.exit_code == 0
+
+
+class TestAdminComment:
+    """``AdminComment`` column (slurm://src/sacct/print.c#PRINT_ADMIN_COMMENT).
+
+    Width 15 and its place right after ``Account`` come from the field
+    table (slurm://src/sacct/sacct.c#fields); the value is printed verbatim
+    and unescaped (slurm://src/common/print_fields.c#print_fields_str).
+    """
+
+    DOC = '{"eessi":{"version":"2023.06","modules":["GROMACS/2024.1-foss-2023b"]}}'
+
+    def test_value_verbatim_in_parsable2(self, env):
+        db, te, sacct = env
+        db.add_usage_record(_record(te, admin_comment=self.DOC))
+        out = sacct.handle_command(["-n", "-P", "-o", "JobID,AdminComment"])
+        assert out == f"1|{self.DOC}"
+
+    def test_unset_is_empty(self, env):
+        db, te, sacct = env
+        db.add_usage_record(_record(te))
+        assert sacct.handle_command(["-n", "-P", "-o", "JobID,AdminComment"]) == "1|"
+
+    def test_fixed_width_truncates_at_15(self, env):
+        db, te, sacct = env
+        db.add_usage_record(_record(te, admin_comment=self.DOC))
+        out = sacct.handle_command(["-n", "-o", "AdminComment"])
+        assert out == self.DOC[:14] + "+ "
+
+    def test_prefix_a_still_resolves_to_account(self, env):
+        db, te, sacct = env
+        db.add_usage_record(_record(te, admin_comment="x"))
+        assert sacct.handle_command(["-n", "-P", "-o", "A"]) == "proj-a"
+        assert sacct.handle_command(["-n", "-P", "-o", "Ad"]) == "x"
+
+    def test_site_agent_software_invocation(self, env):
+        db, te, sacct = env
+        db.add_usage_record(
+            _record(
+                te,
+                node_hours=2.0,
+                raw_tres={"CPU": 32, "Mem": 256, "GRES/gpu": 0, "energy": 3_600_000},
+                admin_comment=self.DOC,
+            )
+        )
+        out = sacct.handle_command(
+            [
+                "--format=JobID,Account,User,AllocTRES,Elapsed,ConsumedEnergyRaw,AdminComment",
+                "--parsable2",
+                "--noheader",
+                "--allocations",
+                "--allusers",
+                "--starttime=2024-05-01",
+                "--endtime=2024-05-31",
+                "--accounts=proj-a",
+            ]
+        )
+        assert out == (
+            f"1|proj-a|alice|cpu=16,mem=128G,node=1,billing=16|02:00:00|3600000|{self.DOC}"
+        )

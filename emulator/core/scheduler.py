@@ -135,6 +135,7 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
             uid=getattr(job, "uid", None),
             gid=getattr(job, "gid", None),
             group_name=getattr(job, "group_name", ""),
+            admin_comment=getattr(job, "admin_comment", ""),
         )
     )
     return True

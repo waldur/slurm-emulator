@@ -117,6 +117,36 @@ class AccountCreateRequest(BaseModel):
     allocation: Optional[int] = None
 
 
+class JobInjectSpec(BaseModel):
+    """One finished job, as ``UsageSimulator.inject_job`` records it."""
+
+    account: str
+    user: str
+    elapsed_hours: float
+    cpus: int = 1
+    gpus: int = 0
+    mem_gb: Optional[int] = None
+    partition: Optional[str] = None
+    # Joules; omitted = power model (emulator/core/energy.py).
+    energy: Optional[int] = None
+    # Stored verbatim; sacct AdminComment / slurmrestd comment.administrator.
+    admin_comment: str = ""
+    # ISO 8601 job end; omitted = the simulated now.
+    end: Optional[str] = None
+    cluster: Optional[str] = None
+    # Any finished base state: COMPLETED, CANCELLED, FAILED, TIMEOUT,
+    # NODE_FAIL, PREEMPTED, BOOT_FAIL, DEADLINE, OUT_OF_MEMORY.
+    state: str = "COMPLETED"
+    # TotalCPU: a 0..1 share of cpus x elapsed, or seconds; not both.
+    # Neither = every CPU busy for the whole run.
+    cpu_efficiency: Optional[float] = None
+    total_cpu_seconds: Optional[float] = None
+
+
+class JobInjectRequest(BaseModel):
+    jobs: list[JobInjectSpec]
+
+
 class EmulatorServer:
     """FastAPI server for waldur-site-agent integration."""
 
@@ -457,6 +487,23 @@ class EmulatorServer:
                 self.database.get_account(request.name).allocation = request.allocation
             self.database.save_state()
             return {"status": "success", "account": request.name}
+
+        @self.app.post("/api/inject-jobs")
+        async def inject_jobs(request: JobInjectRequest):
+            """Record finished jobs, one sacct row each (accounting stand-in).
+
+            Each entry becomes one job with its own id, ``AllocTRES``
+            ``cpu=<cpus>[,gres/gpu=<gpus>]``, ``Elapsed`` and
+            ``AdminComment`` — what a real cluster's accounting holds after
+            the job ran and an epilog annotated it.
+            """
+            try:
+                job_ids = self.usage_simulator.inject_jobs(
+                    [spec.model_dump(exclude_none=True) for spec in request.jobs]
+                )
+            except (TypeError, ValueError) as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            return {"status": "success", "job_ids": job_ids}
 
     def _parse_billing_period(self, billing_period: str) -> str:
         """Parse billing period string to quarter format."""

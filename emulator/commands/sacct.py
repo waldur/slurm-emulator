@@ -28,7 +28,21 @@ Output formatting and exit codes mirror real Slurm 26.05:
   (slurm://src/common/slurm_protocol_api.c#convert_num_unit2). The value is
   ``raw_tres["energy"]`` from the power model (``emulator/core/energy.py``).
   The ``energy`` TRES is deliberately *not* added to the ReqTRES/AllocTRES
-  string so the site-agent invocation shape stays byte-identical.
+  string so the site-agent invocation shape stays byte-identical;
+* ``TotalCPU`` is the job's user+system CPU time
+  (``tot_cpu_sec``/``tot_cpu_usec``) through sacct's own
+  ``_elapsed_time`` — ``D-HH:MM:SS``, ``HH:MM:SS``, below an hour
+  ``MM:SS.mmm`` with milliseconds or ``00:MM:SS`` without
+  (slurm://src/sacct/print.c#_elapsed_time); records without a figure
+  count every allocated CPU as busy for the whole run;
+* ``State`` of a cancelled job reads ``CANCELLED by <uid>``
+  (slurm://src/sacct/print.c#PRINT_STATE), the uid being the job owner's;
+* ``AdminComment`` prints ``job->admin_comment`` verbatim, empty when
+  unset (slurm://src/sacct/print.c#PRINT_ADMIN_COMMENT); the emulator
+  treats it as an opaque string. ``-p``/``-P`` print it unescaped
+  (slurm://src/common/print_fields.c#print_fields_str), so a comment
+  containing ``|`` or a newline breaks the row exactly as on a real
+  cluster; writers must keep both out of the value.
 
 Documented simplifications: ``-X``/``--allocations`` is a no-op (the
 emulator has no job steps, and real ``-X`` only filters step rows);
@@ -64,6 +78,8 @@ from emulator.core.time_engine import TimeEngine
 # match wins, no minimum prefix length).
 _REGISTRY: list[FieldSpec] = [
     FieldSpec("Account", 10),
+    # After Account, so ``-o A`` still resolves to Account and ``Ad`` here.
+    FieldSpec("AdminComment", 15),
     FieldSpec("AllocCPUS", 10, truncate=False),
     FieldSpec("AllocNodes", 10),
     FieldSpec("AllocTRES", 10),
@@ -87,6 +103,7 @@ _REGISTRY: list[FieldSpec] = [
     FieldSpec("State", 10),
     FieldSpec("Submit", 19),
     FieldSpec("Timelimit", 10),
+    FieldSpec("TotalCPU", 10),
     # UID precedes User in the real table, so ``-o U`` resolves to UID.
     FieldSpec("UID", 6, truncate=False),
     FieldSpec("User", 9),
@@ -325,6 +342,7 @@ class SacctEmulator:
             "JobName": f"job_{record.job_id}",
             "Partition": record.partition or "compute",
             "Account": record.account,
+            "AdminComment": record.admin_comment,
             "AllocCPUS": str(self._cpu_rate(record)),
             "AllocNodes": "1",
             "AllocTRES": tres,
@@ -339,12 +357,26 @@ class SacctEmulator:
             "NodeList": "node001",
             "ReqTRES": tres,
             "Start": start.strftime("%Y-%m-%dT%H:%M:%S"),
-            "State": state,
+            "State": self._state(record),
             "Submit": start.strftime("%Y-%m-%dT%H:%M:%S"),
             "Timelimit": "UNLIMITED",
+            "TotalCPU": _elapsed_time(total_cpu_seconds(record)),
             "UID": str(record.uid if record.uid is not None else 1000),
             "User": record.user,
         }
+
+    @staticmethod
+    def _state(record: UsageRecord) -> str:
+        """State column: ``CANCELLED by <uid>`` names who cancelled the job.
+
+        Real sacct appends the requester's uid whenever it is known
+        (slurm://src/sacct/print.c#PRINT_STATE). The emulator records no
+        separate requester, so the job's owner cancelled it.
+        """
+        state = record.state or "COMPLETED"
+        if state == "CANCELLED":
+            return f"CANCELLED by {record.uid if record.uid is not None else 1000}"
+        return state
 
     def _cpu_rate(self, record: UsageRecord) -> int:
         return self._rate(record, "CPU", _NODE_CPUS)
@@ -383,6 +415,41 @@ class SacctEmulator:
         if gpus:
             parts.append(f"gres/gpu={gpus}")
         return ",".join(parts)
+
+
+def total_cpu_seconds(record: UsageRecord) -> float:
+    """``tot_cpu_sec`` of a record; unset means cpus x elapsed (fully busy)."""
+    if record.total_cpu_seconds is not None:
+        return record.total_cpu_seconds
+    cpus = SacctEmulator._rate(record, "CPU", _NODE_CPUS)
+    return cpus * int(record.node_hours * 3600)
+
+
+def split_seconds(total_seconds: float) -> tuple[int, int]:
+    """Seconds as the (sec, usec) pair slurmdbd stores CPU times in."""
+    usecs_total = round(total_seconds * 1_000_000)
+    return usecs_total // 1_000_000, usecs_total % 1_000_000
+
+
+def _elapsed_time(total_seconds: float) -> str:
+    """Port of sacct's _elapsed_time (slurm://src/sacct/print.c#_elapsed_time).
+
+    ``D-HH:MM:SS`` from a day, ``HH:MM:SS`` from an hour; below an hour
+    ``MM:SS.mmm`` when there are whole milliseconds, else ``00:MM:SS``.
+    """
+    secs, usecs = split_seconds(total_seconds)
+    subsec = usecs // 1000
+    seconds = secs % 60
+    minutes = (secs // 60) % 60
+    hours = (secs // 3600) % 24
+    days = secs // 86400
+    if days:
+        return f"{days}-{hours:02d}:{minutes:02d}:{seconds:02d}"
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    if subsec:
+        return f"{minutes:02d}:{seconds:02d}.{subsec:03d}"
+    return f"00:{minutes:02d}:{seconds:02d}"
 
 
 def _energy_joules(record: UsageRecord) -> int:

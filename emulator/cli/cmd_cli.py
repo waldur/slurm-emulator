@@ -1384,6 +1384,9 @@ Type 'help <command>' for detailed help on specific commands.
                 energy_joules=action.parameters.get("energy"),
             )
 
+        elif action.type == ActionType.JOB_INJECT:
+            self.usage_simulator.inject_jobs([action.parameters])
+
         elif action.type == ActionType.ACCOUNT_CREATE:
             name = action.parameters["name"]
             desc = action.parameters.get("description", "Test Account")
@@ -1515,6 +1518,7 @@ Type 'help <command>' for detailed help on specific commands.
             "decay_comparison": ["decay_test_15", "decay_test_7"],
             "config_comparison": ["config_standard", "config_custom"],
             "sequence": ["slurm_account_123"],
+            "eessi_software_usage": ["eessi_demo"],
         }
 
         # Return accounts for this scenario, or empty list for unknown scenarios

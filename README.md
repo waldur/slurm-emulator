@@ -203,6 +203,103 @@ than from job rows. The emulator reproduces that pipeline:
   `--format=Account,ReqTRES,Elapsed,User` output is unchanged. `sshare
   GrpTRESRaw` sums it like any other TRES.
 
+### Per-job software annotations (`AdminComment`)
+
+Some sites record, per job, which software the job used — e.g. the EESSI
+(Lmod) modules it loaded — and store that in the job's **AdminComment** so
+accounting consumers can attribute usage and energy to software. The
+emulator stores `AdminComment` as an opaque string on every job and serves
+it wherever real Slurm does:
+
+- `sacct` has the real `AdminComment` column (width 15, right after
+  `Account`, so `-o A` is still `Account`). It is printed verbatim and,
+  as in real Slurm, **unescaped** in `-p`/`-P` output — a value containing
+  `|` or a newline breaks the row, so writers must keep both out:
+
+  ```bash
+  $ sacct --format=JobID,Account,User,AllocTRES,Elapsed,ConsumedEnergyRaw,State,TotalCPU,AdminComment \
+      --parsable2 --noheader --allocations --allusers \
+      --starttime=2024-03-01 --endtime=2024-04-01 --accounts=eessi_demo
+  1|eessi_demo|alice|cpu=32,mem=256G,node=1,billing=32|06:00:00|5412600|COMPLETED|7-08:38:24|{"eessi":{"version":"2023.06","cpu_target":"x86_64/amd/zen3","host_cpu":"x86_64/amd/zen4","modules":["GROMACS/2024.1-foss-2023b"]}}
+  4|eessi_demo|alice|cpu=2,mem=16G,node=1,billing=2|00:30:00|56400|COMPLETED|20:34.567|
+  7|eessi_demo|bob|cpu=32,mem=256G,node=1,billing=32|00:15:00|225540|FAILED|03:12:00|{"eessi":{"version":"2023.06","cpu_target":"x86_64/amd/zen3","modules":["QuantumESPRESSO/7.3.1-foss-2023a"]}}
+  8|eessi_demo|bob|cpu=4,mem=32G,node=1,billing=4|01:30:00|169200|CANCELLED by 1000|01:48:00|{"eessi":{"version":"2023.06","cpu_target":"x86_64/amd/zen3","modules":["R/4.3.2-gfbf-2023a"]}}
+  ```
+
+- `TotalCPU` is the CPU time the job's processes used (user + system,
+  summed over cores, so it exceeds `Elapsed` for parallel jobs). It uses
+  sacct's own formatter: `D-HH:MM:SS` from a day, `HH:MM:SS` from an
+  hour, and below an hour `MM:SS.mmm` when there are milliseconds — with
+  **no hours field** — or `00:MM:SS` when there are none (`20:34.567`,
+  `00:12:34`, `09:45:36`, `31-00:57:36`). In fixed-width output the
+  10-character column truncates long values (`31-00:57:+`), as real sacct
+  does. CPU efficiency is `TotalCPU / (cpus × Elapsed)`; slurmrestd
+  reports the same figure as `time.total` (and `time.user`).
+- `State` is any finished base state — `COMPLETED`, `FAILED`, `TIMEOUT`,
+  `OUT_OF_MEMORY`, `NODE_FAIL`, `CANCELLED`, `PREEMPTED`, `BOOT_FAIL`,
+  `DEADLINE`; a cancelled job reads `CANCELLED by <uid>` (the job owner's
+  uid in the emulator, 1000 without NSS mode).
+- slurmrestd: `comment.administrator` on `/slurmdb/.../jobs` and
+  `admin_comment` on `/slurm/.../jobs`; `POST /slurm/.../job/submit`
+  accepts `job.admin_comment` only from a super user (`root`/`slurm` —
+  the emulator keeps no AdminLevel), others get `ESLURM_ACCESS_DENIED`.
+
+**How it gets written on a real cluster, and here.** Only a super user may
+set it, and slurmctld refuses to update a job that has already finished:
+
+| Write path | When | Emulator |
+|------------|------|----------|
+| `scontrol update job=<id> AdminComment=<text>` | job still pending/running; `Job has already finished` afterwards | SSH plane (`scontrol`), stored on the job and copied to accounting when it completes |
+| `sacctmgr -i modify job where jobid=<id> set AdminComment=<text>` | any time, on the accounting record (what an `EpilogSlurmctld` has to use) | `sacctmgr modify job` |
+| `POST /api/inject-jobs` | seeding finished jobs directly | control API (below) |
+
+`sacctmgr` runs the value through `strip_quotes`, which turns every `"` or
+`'` inside it into a backtick — `{"a":"b"}` is stored as `` {`a`:`b`} ``.
+The emulator reproduces this, so a JSON payload written through
+`sacctmgr` must be encoded without quotes (e.g. base64 with a prefix) or
+decoded by swapping backticks back.
+
+**Seeding jobs.** `POST /api/inject-jobs` records finished jobs, one sacct
+row each, and returns their ids:
+
+```bash
+curl -X POST localhost:8080/api/inject-jobs -H 'Content-Type: application/json' -d '{
+  "jobs": [{"account": "eessi_demo", "user": "alice", "cpus": 16, "gpus": 0,
+            "elapsed_hours": 3, "energy": 1361700, "end": "2024-03-06T10:30:00",
+            "state": "COMPLETED", "cpu_efficiency": 0.78,
+            "admin_comment": "{\"eessi\":{\"version\":\"2023.06\",\"cpu_target\":\"x86_64/amd/zen3\",\"modules\":[\"GROMACS/2024.1-foss-2023b\"]}}"}]}'
+# {"status":"success","job_ids":[1]}
+```
+
+`AllocTRES` is `cpu=<cpus>` (+ `gres/gpu=<gpus>`, memory defaults to 8 GB
+per CPU or `mem_gb`), `Elapsed` is `elapsed_hours`, `End` is `end`
+(default: the simulated now). `energy` is joules; without it the power
+model charges `cpus/64` of a node plus the GPUs. `cpus × elapsed_hours`
+must be whole for jobs shorter than an hour. `state` is one of the
+finished states above (default `COMPLETED`). `TotalCPU` comes from
+`cpu_efficiency` (0–1, a share of `cpus × elapsed`) or `total_cpu_seconds`
+— not both; with neither, every CPU counts as busy for the whole run. Any
+invalid job rejects the whole request with 400, and nothing is written.
+
+**Scenario.** `scenario_run eessi_software_usage` (CLI or web UI) creates
+`eessi_demo` and records twelve March 2024 jobs by alice, bob and carol
+with real EESSI 2023.06 modules — some with two modules, one GPU job, one
+without any module (empty AdminComment) and one with a site-local
+`mysite-tool/1.0` — each with an explicit energy figure. Jobs end
+`COMPLETED`, `TIMEOUT`, `FAILED`, `CANCELLED` and `OUT_OF_MEMORY`, with CPU
+efficiencies from 0.3 to 0.97, and three AdminComments also carry the
+`host_cpu` the job ran on (e.g. a zen3 build on a zen4 host, a
+`x86_64/generic` build on Sapphire Rapids). Run it, then the `sacct`
+command above:
+
+```bash
+export SLURM_EMULATOR_STATE_FILE=/tmp/eessi/state.json SLURM_EMULATOR_TIME_FILE=/tmp/eessi/time.json
+printf 'scenario_run eessi_software_usage\nexit\n' | uv run slurm-emulator
+uv run sacct --format=JobID,Account,User,AllocTRES,Elapsed,ConsumedEnergyRaw,State,TotalCPU,AdminComment \
+  --parsable2 --noheader --allocations --allusers \
+  --starttime=2024-03-01 --endtime=2024-04-01 --accounts=eessi_demo
+```
+
 ## Web Dashboard
 
 A lightweight, browser-based control console is mounted on the API server at
@@ -241,6 +338,7 @@ uv run uvicorn emulator.api.emulator_server:app --host 0.0.0.0 --port 8080
 - `POST /api/downscale-resource` - Set QoS to slowdown
 - `POST /api/restore-resource` - Restore QoS to normal
 - `POST /api/submit-report` - Submit usage reports
+- `POST /api/inject-jobs` - Record finished jobs (one sacct row each, with `AdminComment`)
 - `GET /api/status` - Get emulator status
 - `POST /api/time/advance` - Advance emulator time
 

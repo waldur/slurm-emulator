@@ -37,7 +37,7 @@ from typing import Any, Optional
 
 from emulator.commands.dispatcher import SlurmEmulator
 from emulator.core import nss
-from emulator.core.accounting import ESLURM_USER_ID_UNKNOWN, admit_job
+from emulator.core.accounting import ESLURM_USER_ID_UNKNOWN, admit_job, is_super_user
 from emulator.core.database import Job
 from emulator.core.scheduler import advance_job_states, job_clock_now
 
@@ -219,7 +219,7 @@ def _run_slurm(user: str, argv: list[str]) -> tuple[str, str, int]:
                 return _nl(_squeue(emu)), err.getvalue(), 0
             if name == "scontrol":
                 _advance(emu)
-                out, serr, code = _scontrol(emu, args)
+                out, serr, code = _scontrol(emu, args, user)
                 return out, serr or err.getvalue(), code
             if name == "srun":
                 return "", "srun: unsupported in emulator\n", 1
@@ -304,7 +304,50 @@ def _squeue(emu) -> str:
     return "\n".join(rows)
 
 
-def _scontrol(emu, args: list[str]) -> tuple[str, str, int]:
+# Base states for which IS_JOB_FINISHED is false
+# (slurm://src/common/slurm_protocol_defs.h#IS_JOB_FINISHED).
+_ACTIVE_JOB_STATES = {"PENDING", "RUNNING", "SUSPENDED"}
+
+
+def _scontrol_update_job(emu, args: list[str], user: str) -> tuple[str, str, int]:
+    """``scontrol update job=<id> AdminComment=<text>`` — the only field supported.
+
+    slurmctld's _update_job refuses a finished job with ESLURM_JOB_FINISHED
+    before it checks the admin_comment permission, and only a super user may
+    set admin_comment (slurm://src/slurmctld/job_mgr.c#_update_job). Errors
+    print as ``<slurm_strerror> for job <id>``
+    (slurm://src/scontrol/update_job.c#scontrol_update_job). The value is
+    stored verbatim; it reaches accounting when the job completes.
+    """
+    job_id = ""
+    admin_comment: Optional[str] = None
+    for arg in args:
+        tag, sep, val = arg.partition("=")
+        low = tag.lower()
+        if sep and low in {"job", "jobid"}:
+            job_id = val
+        elif sep and len(low) >= 6 and "admincomment".startswith(low):
+            admin_comment = val
+        else:
+            msg = f"Update of this parameter is not supported: {arg}\nRequest aborted\n"
+            return "", msg, 1
+    if admin_comment is None:
+        return "", "No changes specified\n", 1
+    job = emu.database.get_job(job_id)
+    if job is None:
+        return "", f"Invalid job id specified for job {job_id}\n", 1
+    if job.state not in _ACTIVE_JOB_STATES:
+        return "", f"Job has already finished for job {job_id}\n", 1
+    if not is_super_user(user):
+        return "", f"Access/permission denied for job {job_id}\n", 1
+    job.admin_comment = admin_comment
+    emu.database.save_state()
+    return "", "", 0
+
+
+def _scontrol(emu, args: list[str], user: str = "root") -> tuple[str, str, int]:
+    if len(args) >= 2 and args[0] == "update":
+        return _scontrol_update_job(emu, args[1:], user)
     if len(args) >= 2 and args[0] == "show" and args[1] == "job":
         job_id = args[2] if len(args) > 2 else ""
         job = emu.database.get_job(job_id)
@@ -327,6 +370,9 @@ def _scontrol(emu, args: list[str]) -> tuple[str, str, int]:
             f"   Command={job.script}\n"
             f"   WorkDir={wd}\n"
         )
+        if job.admin_comment:
+            # Printed only when set (slurm://src/scontrol/info_job.c#_sprint_job_info).
+            out += f"   AdminComment={job.admin_comment}\n"
         return out, "", 0
     return "", "scontrol: unsupported subcommand\n", 1
 

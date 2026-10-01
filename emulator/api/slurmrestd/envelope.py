@@ -37,6 +37,7 @@ SLURMCTLD_PLUGIN = ("openapi/slurmctld", "Slurm OpenAPI slurmctld")
 
 # Error numbers from slurm://slurm/slurm_errno.h (ESLURM_REST_* block and
 # the slurmctld block starting at ESLURM_INVALID_PARTITION_NAME).
+ESLURM_ACCESS_DENIED = 2002
 ESLURM_INVALID_JOB_ID = 2017
 # ESLURM_USER_ID_UNKNOWN / ESLURM_INVALID_ACCOUNT come from emulator.core.accounting
 # (the admission logic that raises them) and are re-exported here.
