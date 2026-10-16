@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta
 
+from emulator.core import job_execution
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
 from emulator.core.usage_simulator import standard_node_raw_tres
@@ -96,8 +97,16 @@ def advance_job_states(database: SlurmDatabase, time_engine: TimeEngine) -> bool
         ):
             job.state = "COMPLETED"
             job.end_time = job.start_time + timedelta(seconds=run_duration)
+            if job_execution.execution_enabled():
+                # A failing script ends the job FAILED with its exit code
+                # (slurm://src/slurmctld/job_mgr.c#job_complete).
+                job.exit_code = job_execution.execute_once(job)
+                if job.exit_code != 0:
+                    job.state = "FAILED"
             changed = True
-        if job.state == "COMPLETED" and _ensure_usage_record(database, job, sim_now):
+        if (
+            job.state == "COMPLETED" or (job.state == "FAILED" and job.end_time)
+        ) and _ensure_usage_record(database, job, sim_now):
             changed = True
 
     return changed
@@ -131,10 +140,16 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
             cluster=job.cluster,
             partition=job.partition,
             job_id=jid,
-            state="COMPLETED",
+            state=job.state,
             uid=getattr(job, "uid", None),
             gid=getattr(job, "gid", None),
             group_name=getattr(job, "group_name", ""),
+            job_name=job.name or "",
+            working_directory=job.working_directory or "",
+            exit_code=getattr(job, "exit_code", None),
+            standard_input=job.standard_input or "",
+            standard_output=job.standard_output or "",
+            standard_error=job.standard_error or "",
         )
     )
     return True

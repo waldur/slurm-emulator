@@ -403,6 +403,9 @@ so they also appear in the accounting (`/slurmdb` / `sacct`) view. Configurable 
   (`/slurm/v0.0.42/` … `/slurm/v0.0.46/`), `meta.slurm.release` and version-gated response
   shapes; see `emulator/slurm_version.py` `RELEASES` and `docs/slurm-parity.md`
 - `SLURM_EMULATOR_JOB_CLOCK` = `wall` (default, real-time) or `time` (simulated clock)
+- `SLURM_EMULATOR_JOB_EXECUTE` = `1` runs each batch script at the end of its emulated run
+  (`emulator/core/job_execution.py`): real stdout/stderr files, FAILED + exit code on error,
+  once across processes (marker files next to the state file)
 - `SLURM_EMULATOR_JOB_RUN_DELAY` (default 2s to RUNNING), `SLURM_EMULATOR_JOB_RUN_DURATION`
   (default 8s to COMPLETED)
 - `SLURM_EMULATOR_NSS` = `1` resolves user names through the OS NSS (`emulator/core/nss.py`;

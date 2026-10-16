@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from emulator.commands.dispatcher import SlurmEmulator
-from emulator.core import nss
+from emulator.core import job_execution, nss
 from emulator.core.accounting import ESLURM_USER_ID_UNKNOWN, admit_job
 from emulator.core.database import Job
 from emulator.core.scheduler import advance_job_states, job_clock_now
@@ -322,8 +322,10 @@ def _scontrol(emu, args: list[str]) -> tuple[str, str, int]:
             f"   UserId={job.user}({uid}) GroupId={group}({gid})\n"
             f"   Account={job.account} QOS={job.qos} Partition={job.partition}\n"
             f"   JobState={job.state} Reason=None Dependency=(null)\n"
-            f"   StdOut={job.standard_output or f'{wd}/slurm-{job.job_id}.out'}\n"
-            f"   StdErr={job.standard_error or f'{wd}/slurm-{job.job_id}.err'}\n"
+            # Filename patterns expanded, as slurm_get_job_stdout() does
+            # (slurm://src/api/job_info.c#slurm_get_job_stdout).
+            f"   StdOut={job_execution.stdout_path(job)}\n"
+            f"   StdErr={job_execution.stderr_path(job)}\n"
             f"   Command={job.script}\n"
             f"   WorkDir={wd}\n"
         )

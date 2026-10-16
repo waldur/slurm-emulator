@@ -187,6 +187,20 @@ class UsageRecord:
     uid: Optional[int] = None
     gid: Optional[int] = None
     group_name: str = ""
+    # Name, working directory and script exit status of the job a record
+    # mirrors (submitted jobs only); "" / None keep the legacy job_<id>,
+    # /home/<user> and state-derived 0/1 renderings.
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.jobname,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.work_dir,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.exitcode
+    job_name: str = ""
+    working_directory: str = ""
+    exit_code: Optional[int] = None
+    # Output paths as submitted (patterns unexpanded), what sacct's
+    # StdIn/StdOut/StdErr print for a job (slurm://src/sacct/print.c#print_fields).
+    standard_input: str = ""
+    standard_output: str = ""
+    standard_error: str = ""
 
     def __post_init__(self) -> None:
         """Fold the account name like Account/Association do.
@@ -236,6 +250,10 @@ class Job:
     uid: Optional[int] = None
     gid: Optional[int] = None
     group_name: str = ""
+    # Exit status of the batch script once it ran (SLURM_EMULATOR_JOB_EXECUTE);
+    # ``None`` = not run, rendered from the state alone.
+    # slurm://slurm/slurm.h#job_info_t.exit_code
+    exit_code: Optional[int] = None
 
 
 CLUSTER_NAME_ENV_VAR = "SLURM_EMULATOR_CLUSTER_NAME"

@@ -315,9 +315,12 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
         tres_values["gres/gpu"] = gpus
     tres = tres_list_from_dict(tres_values)
 
+    return_code = getattr(record, "exit_code", None)
+    if return_code is None:
+        return_code = 1 if failed else 0
     exit_code = {
         "status": ["ERROR"] if failed else ["SUCCESS"],
-        "return_code": uint_no_val(1 if failed else 0),
+        "return_code": uint_no_val(return_code),
     }
     return {
         "account": record.account,
@@ -334,7 +337,7 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
         "het": {"job_id": 0},
         "job_id": record.job_id,
         "kill_request_user": "",
-        "name": f"job_{record.job_id}",
+        "name": getattr(record, "job_name", "") or f"job_{record.job_id}",
         "nodes": "node001",
         "partition": record.partition or "compute",
         "qos": "normal",
@@ -355,7 +358,7 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
         "tres": {"allocated": tres, "requested": tres},
         "user": record.user,
         "wckey": {"wckey": "", "flags": []},
-        "working_directory": f"/home/{record.user}",
+        "working_directory": getattr(record, "working_directory", "") or f"/home/{record.user}",
     }
 
 
@@ -375,9 +378,14 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
     total_cpus = _NODE_CPUS * node_count
     time_limit = getattr(job, "time_limit", None)
     failed = job.state.startswith(_FAILED_STATES)
+    # The script's own status when it ran (SLURM_EMULATOR_JOB_EXECUTE),
+    # else 1/0 from the state (slurm://slurm/slurm.h#job_info_t.exit_code).
+    return_code = getattr(job, "exit_code", None)
+    if return_code is None:
+        return_code = 1 if failed else 0
     exit_code = {
         "status": ["ERROR"] if failed else ["SUCCESS"],
-        "return_code": uint_no_val(1 if failed else 0),
+        "return_code": uint_no_val(return_code),
     }
 
     return {

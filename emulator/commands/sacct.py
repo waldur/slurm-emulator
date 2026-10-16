@@ -85,11 +85,15 @@ _REGISTRY: list[FieldSpec] = [
     FieldSpec("ReqTRES", 10),
     FieldSpec("Start", 19),
     FieldSpec("State", 10),
+    FieldSpec("StdErr", 20),
+    FieldSpec("StdIn", 20),
+    FieldSpec("StdOut", 20),
     FieldSpec("Submit", 19),
     FieldSpec("Timelimit", 10),
     # UID precedes User in the real table, so ``-o U`` resolves to UID.
     FieldSpec("UID", 6, truncate=False),
     FieldSpec("User", 9),
+    FieldSpec("WorkDir", 20),
 ]
 
 _DEFAULT_FORMAT = "JobID,JobName,Partition,Account,AllocCPUS,State,ExitCode"  # slurm://src/sacct/sacct.h#DEFAULT_FIELDS
@@ -176,6 +180,7 @@ class SacctEmulator:
             "-o": "format",
             "--format": "format",
             "--fields": "format",
+            "--delimiter": "delimiter",
         }
         flag_opts = {
             "-V": "version",
@@ -212,6 +217,8 @@ class SacctEmulator:
                 cfg.jobs.extend(item.split(".", 1)[0] for item in _csv(value))
             elif key == "format":
                 cfg.format_spec = value
+            elif key == "delimiter":
+                cfg.mode.delimiter = value
 
         i = 0
         while i < len(args):
@@ -293,6 +300,7 @@ class SacctEmulator:
             records = [r for r in records if r.user in config.users]
         if config.jobs:
             records = [r for r in records if str(r.job_id) in config.jobs]
+            records += self._unfinished_job_records(config.jobs, records)
 
         # Explicit job ids bypass the default time window — real sacct
         # returns the job regardless of when it ran unless -S/-E are given.
@@ -306,12 +314,55 @@ class SacctEmulator:
         end = config.end_time or now
         return [r for r in records if start <= r.timestamp <= end]
 
+    def _unfinished_job_records(
+        self, job_ids: list[str], finished: list[UsageRecord]
+    ) -> list[UsageRecord]:
+        """Rows for requested jobs that have no accounting record yet.
+
+        slurmdbd holds pending and running jobs too, so ``sacct -j`` finds a
+        job from submission on (slurm://src/sacct/sacct.c#main). The emulator
+        records accounting at completion; until then the row is built from
+        the job itself. Deviation: only for explicit ``-j``, so time-window
+        listings stay as before.
+        """
+        have = {str(r.job_id) for r in finished}
+        now = self.time_engine.get_current_time()
+        rows = []
+        for job_id in job_ids:
+            job = self.database.jobs.get(job_id)
+            if job is None or job_id in have or not job_id.isdigit():
+                continue
+            rows.append(
+                UsageRecord(
+                    account=job.account,
+                    user=job.user,
+                    node_hours=0.0,
+                    billing_units=0.0,
+                    timestamp=now,
+                    period="",
+                    cluster=job.cluster,
+                    partition=job.partition,
+                    job_id=int(job_id),
+                    state=job.state,
+                    job_name=job.name,
+                    working_directory=job.working_directory,
+                    exit_code=job.exit_code,
+                    standard_input=job.standard_input,
+                    standard_output=job.standard_output,
+                    standard_error=job.standard_error,
+                )
+            )
+        return rows
+
     def _row(self, record: UsageRecord, config: _Config) -> dict[str, str]:
         elapsed_secs = int(record.node_hours * 3600)
         end = record.timestamp
         start = end - timedelta(seconds=elapsed_secs)
         state = record.state or "COMPLETED"
-        exit_code = "1:0" if state.startswith(_FAILED_STATES) else "0:0"
+        exit_status = record.exit_code
+        if exit_status is None:
+            exit_status = 1 if state.startswith(_FAILED_STATES) else 0
+        exit_code = f"{exit_status}:0"
         tres = self._tres_string(record, config.noconvert)
         job_id = str(record.job_id)
 
@@ -322,7 +373,7 @@ class SacctEmulator:
             "JobIDRaw": job_id,
             "ConsumedEnergy": str(energy) if config.noconvert else _convert_num_unit(energy),
             "ConsumedEnergyRaw": str(energy),
-            "JobName": f"job_{record.job_id}",
+            "JobName": record.job_name or f"job_{record.job_id}",
             "Partition": record.partition or "compute",
             "Account": record.account,
             "AllocCPUS": str(self._cpu_rate(record)),
@@ -344,6 +395,10 @@ class SacctEmulator:
             "Timelimit": "UNLIMITED",
             "UID": str(record.uid if record.uid is not None else 1000),
             "User": record.user,
+            "StdIn": record.standard_input,
+            "StdOut": record.standard_output,
+            "StdErr": record.standard_error,
+            "WorkDir": record.working_directory or f"/home/{record.user}",
         }
 
     def _cpu_rate(self, record: UsageRecord) -> int:

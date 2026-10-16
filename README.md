@@ -427,6 +427,8 @@ docker compose exec slurm id hpc_9001
 | `SLURM_EMULATOR_CLUSTER_NAME` | `default` | slurm.conf `ClusterName`: the cluster associations, submitted jobs and `/slurm/…/conf` are filed under; set it to the site agent's `cluster_name` so the association check on submit sees the agent's rows |
 | `SLURM_EMULATOR_NSS_CACHE_TTL` | `60` | seconds a resolved identity (uid/gid/groups) is trusted before NSS is asked again; misses are retried after 5 s |
 | `SLURM_EMULATOR_ACCOUNTING_ENFORCE` | `associations` | `AccountingStorageEnforce`: with `associations` (or `limits`/`qos`/`safe`/`wckeys`) a submit by a user with no association for the account fails with `ESLURM_INVALID_ACCOUNT`; `none` = permissive pre-0.10 fallback to the default account, then `root` |
+| `SLURM_EMULATOR_JOB_EXECUTE` | off | `1` runs each submitted batch script (bash, in the job's working directory, `module`/`spack`/`srun` stand-ins) when its emulated run ends: stdout/stderr are written with `%j`/`%x`/`%u` expanded, and a non-zero exit ends the job `FAILED` with that exit code. Runs inside the emulator — enable only where executing submitted scripts is acceptable |
+| `SLURM_EMULATOR_JOB_EXECUTE_TIMEOUT` | `60` | Seconds a script may run before it is stopped and the job fails with the time-limit message |
 | `SLURM_EMULATOR_SSSD_CONF` | `/etc/slurm-emulator/sssd.conf` | sssd config the entrypoint installs as a private root-only copy (falls back to `/etc/sssd/sssd.conf`) |
 
 In Kubernetes the chart exposes it as `nss.enabled` + `nss.sssdConfSecret`;

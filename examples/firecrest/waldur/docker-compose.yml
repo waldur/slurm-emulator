@@ -1,0 +1,130 @@
+# Waldur HPC workspace on the slurm-emulator, through FireCREST v2.
+#
+#   Waldur (mastermind + homeport, run natively by the dev stack)
+#      │  browser OIDC login ─────────────► keycloak (realm kcrealm)
+#      │  user's token (server side) ─────► firecrest (API)
+#                                              │  slurmrestd REST ─► slurm (emulator :6820)
+#                                              │  SSH filesystem  ─► slurm (emulator :22)
+#
+# Unlike ../ui, Keycloak's public hostname is localhost, so the browser and
+# Waldur reach it without a hosts entry. FireCREST fetches the signing keys
+# over the compose network and does not check the issuer, so tokens issued
+# for http://localhost:<port> validate there too.
+#
+# Ports come from the environment so the stack fits a shared machine's port
+# block; up.sh sets them.
+
+name: hpc-workspace-poc
+
+secrets:
+  service_account_client_secret:
+    file: ./secrets/service_account_client_secret
+  ssh_private_key:
+    file: ./secrets/ssh_private_key
+
+volumes:
+  slurm_state:
+  slurm_home:
+
+services:
+  slurm:
+    build:
+      context: ../../..
+      dockerfile: Dockerfile
+    image: slurm-emulator:hpc-workspace-poc
+    hostname: slurm
+    environment:
+      SLURM_EMULATOR_ENABLE_SSH: "1"
+      # Associations are enforced (the default), as on a real cluster: the
+      # Waldur allocation's account must exist and hold the user, which
+      # up.sh seeds, and a job charged to any other account is refused.
+      SLURM_EMULATOR_SSH_PORT: "22"
+      SLURM_EMULATOR_FS_ROOT: "/"
+      SLURM_EMULATOR_JOB_CLOCK: "wall"
+      SLURM_EMULATOR_JOB_RUN_DELAY: "5"
+      SLURM_EMULATOR_JOB_RUN_DURATION: "40"
+      # Run each batch script when its emulated run ends, so jobs leave real
+      # stdout/stderr files and a failing script ends FAILED with its exit
+      # code -- what the portal's output view and the assistant read.
+      SLURM_EMULATOR_JOB_EXECUTE: "1"
+      SLURM_EMULATOR_STATE_FILE: "/state/db.json"
+      SLURM_EMULATOR_TIME_FILE: "/state/time.json"
+      SLURM_EMULATOR_PARTITIONS: "debug:1-4,batch:5-36,gpu:37-40"
+    volumes:
+      - slurm_state:/state
+      - slurm_home:/home
+    ports:
+      - "127.0.0.1:${SLURM_REST_PORT:-6820}:6820"
+      - "127.0.0.1:${SLURM_SSH_PORT:-2222}:22"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen(u.Request('http://localhost:6820/slurm/v0.0.45/ping/', headers={'X-SLURM-USER-TOKEN': 'x'}), timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.7
+    env_file: ../ui/keycloak/keycloak.env
+    environment:
+      KC_HOSTNAME: "http://localhost:${KC_PORT:-8080}/auth"
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    command: start-dev --http-relative-path /auth --import-realm --health-enabled=true
+    volumes:
+      - ../ui/keycloak/realm-kcrealm.json:/opt/keycloak/data/import/config.json:ro
+    ports:
+      - "127.0.0.1:${KC_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; echo -e 'GET /auth/health/ready HTTP/1.1\r\nHost: localhost:9000\r\nConnection: close\r\n\r\n' >&3; cat <&3 | grep -q '\"status\": \"UP\"' && exit 0 || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  # One-shot: the people (alice, bob) and the confidential client Waldur
+  # signs users in with.
+  keycloak-setup:
+    image: quay.io/keycloak/keycloak:26.0.7
+    restart: "no"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      WALDUR_CLIENT_SECRET: "${WALDUR_CLIENT_SECRET:-waldur-poc-secret}"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        kc=/opt/keycloak/bin/kcadm.sh
+        $$kc config credentials --server http://keycloak:8080/auth/ --realm master --user admin --password admin2
+        for u in alice bob; do
+          $$kc create users -r kcrealm -s username=$$u -s enabled=true -s email=$$u@example.org \
+            -s firstName=$$u -s lastName=Researcher -s emailVerified=true || echo "user $$u exists"
+          $$kc set-password -r kcrealm --username $$u -p password
+        done
+        $$kc create clients -r kcrealm -s clientId=waldur -s enabled=true -s publicClient=false \
+          -s secret=$$WALDUR_CLIENT_SECRET -s standardFlowEnabled=true -s directAccessGrantsEnabled=true \
+          -s 'redirectUris=["*"]' -s 'webOrigins=["*"]' || echo "client waldur exists"
+
+  firecrest:
+    build:
+      context: ${FIRECREST_V2_DIR:?set FIRECREST_V2_DIR to a firecrest-v2 checkout (up.sh does this)}
+      dockerfile: ./build/docker/firecrest-api/Dockerfile
+      args:
+        ENVIRONMENT: development
+    image: firecrest-v2-api:hpc-workspace-poc
+    environment:
+      ENVIRONMENT: development
+      YAML_CONFIG_FILE: "/app/config/app-config.yaml"
+    secrets:
+      - service_account_client_secret
+      - ssh_private_key
+    volumes:
+      - ./firecrest-config.yaml:/app/config/app-config.yaml:ro
+    command: ["uvicorn", "firecrest.main:app", "--host", "0.0.0.0", "--port", "5000"]
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      slurm:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FIRECREST_PORT:-8000}:5000"
