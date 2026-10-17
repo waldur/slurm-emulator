@@ -50,6 +50,15 @@ services:
       SLURM_EMULATOR_STATE_FILE: "/state/db.json"
       SLURM_EMULATOR_TIME_FILE: "/state/time.json"
       SLURM_EMULATOR_PARTITIONS: "debug:1-4,batch:5-36,gpu:37-40"
+      # A live cluster for the allocation's charts: the accounting clock is
+      # the wall clock (FireCREST asks slurmdb for "the last N days"), two
+      # batch nodes are drained and one is down, other tenants keep part of
+      # batch and gpu busy, and reservations show up on the maintenance strip.
+      # Offsets count from the first start and are then fixed in the state file.
+      SLURM_EMULATOR_TIME_FOLLOW_WALL: "1"
+      SLURM_EMULATOR_NODE_STATES: "node012=DRAIN:Bad DIMM;node013=DRAIN:Kernel panic, awaiting RMA;node030=DOWN:Not responding"
+      SLURM_EMULATOR_BACKGROUND_LOAD: "batch=0.4,gpu=0.6"
+      SLURM_EMULATOR_RESERVATIONS: "maint-oct:ALL:+72h:12h:MAINT:users=root;hpc101:debug:+120h:32h::users=alice,bob;gpu-bench:gpu:+216h:48h::accounts=alloc_climate"
     volumes:
       - slurm_state:/state
       - slurm_home:/home

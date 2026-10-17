@@ -33,9 +33,12 @@ Output formatting and exit codes mirror real Slurm 26.05:
 Documented simplifications: ``-X``/``--allocations`` is a no-op (the
 emulator has no job steps, and real ``-X`` only filters step rows);
 ``-a``/``--allusers`` is a no-op (every caller sees every job — the
-emulator never compares the caller's uid to the job's); jobs are
-single-node (``node001``, partition ``compute``, matching the sinfo
-emulator). ``UID``/``GID``/``Group`` print the identity recorded at
+emulator never compares the caller's uid to the job's); injected usage
+records are single-node (``node001``), while records of submitted or
+seeded jobs carry their real node list, CPUs, time limit, submit/eligible
+times, CPU time and MaxRSS. There are no step rows: ``MaxRSS`` (a step
+field in real sacct, slurm://src/sacct/print.c#PRINT_MAXRSS) prints on the
+job row from its batch step, and ``TotalCPU`` is the job total. ``UID``/``GID``/``Group`` print the identity recorded at
 submission (slurm://src/sacct/print.c#PRINT_UID, ``PRINT_GID``,
 ``PRINT_GROUP`` via ``gid_to_string``); without ``SLURM_EMULATOR_NSS``
 every job is uid/gid 1000 in a group named after the user.
@@ -56,6 +59,7 @@ from emulator.commands.print_fields import (
     resolve_format,
 )
 from emulator.commands.slurm_time import parse_time_spec
+from emulator.core.cluster_model import partition_has_gpus
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
 
@@ -72,6 +76,7 @@ _REGISTRY: list[FieldSpec] = [
     FieldSpec("ConsumedEnergyRaw", 17, truncate=False),
     FieldSpec("Elapsed", 10),
     FieldSpec("ElapsedRaw", 10, truncate=False),
+    FieldSpec("Eligible", 19),
     FieldSpec("End", 19),
     FieldSpec("ExitCode", 8),
     FieldSpec("GID", 6, truncate=False),
@@ -79,9 +84,11 @@ _REGISTRY: list[FieldSpec] = [
     FieldSpec("JobID", -12),
     FieldSpec("JobIDRaw", -12),
     FieldSpec("JobName", 10),
+    FieldSpec("MaxRSS", 10),
     FieldSpec("NNodes", 8, truncate=False),
     FieldSpec("NodeList", 15),
     FieldSpec("Partition", 10),
+    FieldSpec("ReqMem", 10),
     FieldSpec("ReqTRES", 10),
     FieldSpec("Start", 19),
     FieldSpec("State", 10),
@@ -89,10 +96,13 @@ _REGISTRY: list[FieldSpec] = [
     FieldSpec("StdIn", 20),
     FieldSpec("StdOut", 20),
     FieldSpec("Submit", 19),
+    FieldSpec("SystemCPU", 10),
     FieldSpec("Timelimit", 10),
+    FieldSpec("TotalCPU", 10),
     # UID precedes User in the real table, so ``-o U`` resolves to UID.
     FieldSpec("UID", 6, truncate=False),
     FieldSpec("User", 9),
+    FieldSpec("UserCPU", 10),
     FieldSpec("WorkDir", 20),
 ]
 
@@ -355,18 +365,57 @@ class SacctEmulator:
         return rows
 
     def _row(self, record: UsageRecord, config: _Config) -> dict[str, str]:
-        elapsed_secs = int(record.node_hours * 3600)
-        end = record.timestamp
-        start = end - timedelta(seconds=elapsed_secs)
         state = record.state or "COMPLETED"
         exit_status = record.exit_code
         if exit_status is None:
             exit_status = 1 if state.startswith(_FAILED_STATES) else 0
         exit_code = f"{exit_status}:0"
-        tres = self._tres_string(record, config.noconvert)
         job_id = str(record.job_id)
-
         energy = _energy_joules(record)
+        fmt = "%Y-%m-%dT%H:%M:%S"
+
+        if record.start_time is not None and record.end_time is not None:
+            # A record of a real run: the values slurmdbd stored for it.
+            start, end = record.start_time, record.end_time
+            submit = record.submit_time or start
+            eligible = record.eligible_time or submit
+            elapsed_secs = max(int((end - start).total_seconds()), 0)
+            nnodes = record.node_count
+            node_list = record.node_list or "None assigned"
+            alloc_cpus = record.alloc_cpus
+            req_tres = self._explicit_tres(record, allocated=False, noconvert=config.noconvert)
+            alloc_tres = self._explicit_tres(record, allocated=True, noconvert=config.noconvert)
+            req_mem_mb = record.req_mem_mb * max(nnodes, 1)
+            req_mem = str(req_mem_mb) + "M" if config.noconvert else _convert_exact(req_mem_mb, 2)
+            # Timelimit through mins2time_str (slurm://src/common/parse_time.c#mins2time_str).
+            limit = _mins2time_str(record.time_limit) if record.time_limit else "UNLIMITED"
+            total = record.cpu_time_seconds
+            system = total * 0.04
+            total_cpu = _elapsed_time(total)
+            user_cpu = _elapsed_time(total - system)
+            system_cpu = _elapsed_time(system)
+            max_rss = (
+                ""
+                if not record.max_rss_bytes
+                else (
+                    str(record.max_rss_bytes)
+                    if config.noconvert
+                    else _convert_exact(record.max_rss_bytes, 0)
+                )
+            )
+        else:
+            elapsed_secs = int(record.node_hours * 3600)
+            end = record.timestamp
+            start = submit = eligible = end - timedelta(seconds=elapsed_secs)
+            nnodes = 1
+            node_list = "node001"
+            alloc_cpus = self._cpu_rate(record)
+            req_tres = alloc_tres = self._tres_string(record, config.noconvert)
+            mem_mb = self._rate(record, "Mem", _NODE_MEM_GB) * 1024
+            req_mem = f"{mem_mb}M" if config.noconvert else _convert_exact(mem_mb, 2)
+            limit = "UNLIMITED"
+            total_cpu = user_cpu = system_cpu = "00:00:00"
+            max_rss = ""
 
         return {
             "JobID": job_id,
@@ -376,30 +425,50 @@ class SacctEmulator:
             "JobName": record.job_name or f"job_{record.job_id}",
             "Partition": record.partition or "compute",
             "Account": record.account,
-            "AllocCPUS": str(self._cpu_rate(record)),
-            "AllocNodes": "1",
-            "AllocTRES": tres,
+            "AllocCPUS": str(alloc_cpus),
+            "AllocNodes": str(nnodes),
+            "AllocTRES": alloc_tres,
             "Cluster": record.cluster,
             "Elapsed": _secs2time_str(elapsed_secs),
             "ElapsedRaw": str(elapsed_secs),
-            "End": end.strftime("%Y-%m-%dT%H:%M:%S"),
+            "Eligible": eligible.strftime(fmt),
+            "End": end.strftime(fmt),
             "ExitCode": exit_code,
             "GID": str(record.gid if record.gid is not None else 1000),
             "Group": record.group_name or record.user,
-            "NNodes": "1",
-            "NodeList": "node001",
-            "ReqTRES": tres,
-            "Start": start.strftime("%Y-%m-%dT%H:%M:%S"),
+            "MaxRSS": max_rss,
+            "NNodes": str(nnodes),
+            "NodeList": node_list,
+            "ReqMem": req_mem,
+            "ReqTRES": req_tres,
+            "Start": start.strftime(fmt),
             "State": state,
-            "Submit": start.strftime("%Y-%m-%dT%H:%M:%S"),
-            "Timelimit": "UNLIMITED",
+            "Submit": submit.strftime(fmt),
+            "SystemCPU": system_cpu,
+            "Timelimit": limit,
+            "TotalCPU": total_cpu,
             "UID": str(record.uid if record.uid is not None else 1000),
             "User": record.user,
+            "UserCPU": user_cpu,
             "StdIn": record.standard_input,
             "StdOut": record.standard_output,
             "StdErr": record.standard_error,
             "WorkDir": record.working_directory or f"/home/{record.user}",
         }
+
+    def _explicit_tres(self, record: UsageRecord, allocated: bool, noconvert: bool) -> str:
+        """ReqTRES / AllocTRES of a real run, in TRES-id order."""
+        nodes = record.node_count
+        if allocated and not nodes:
+            return ""
+        nodes = max(nodes, 1)
+        cpus = record.alloc_cpus or _NODE_CPUS * nodes
+        mem_mb = record.req_mem_mb * nodes
+        mem = f"{mem_mb}M" if noconvert else _convert_exact(mem_mb, 2)
+        parts = [f"cpu={cpus}", f"mem={mem}", f"node={nodes}", f"billing={cpus}"]
+        if partition_has_gpus(record.partition):
+            parts.append(f"gres/gpu={_NODE_GPUS * nodes}")
+        return ",".join(parts)
 
     def _cpu_rate(self, record: UsageRecord) -> int:
         return self._rate(record, "CPU", _NODE_CPUS)
@@ -478,3 +547,49 @@ def _secs2time_str(secs: int) -> str:
     if days:
         return f"{days}-{hours:02d}:{minutes:02d}:{seconds:02d}"
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _convert_exact(number: float, unit: int) -> str:
+    """convert_num_unit with sacct's default CONVERT_NUM_UNIT_EXACT.
+
+    sacct sets ``params.convert_flags = CONVERT_NUM_UNIT_EXACT``
+    (slurm://src/sacct/options.c#CONVERT_NUM_UNIT_EXACT): divide by 1024 only
+    while the value stays a multiple of 512, so 262144M prints ``256G`` and
+    4000M stays ``4000M`` (slurm://src/common/slurm_protocol_api.c#convert_num_unit2).
+    ``unit`` is the starting unit index (0 = bytes, 2 = MB).
+    """
+    units = ["", "K", "M", "G", "T", "P"]
+    if int(number) == 0:
+        return "0"
+    num = float(number)
+    while num >= 1024 and int(num) % 512 == 0 and unit < len(units) - 1:
+        num /= 1024
+        unit += 1
+    if float(int(num)) == num:
+        return f"{int(num)}{units[unit]}"
+    return f"{num:.2f}{units[unit]}"
+
+
+def _mins2time_str(minutes: int) -> str:
+    """Port of mins2time_str (slurm://src/common/parse_time.c#mins2time_str)."""
+    days, rem = divmod(int(minutes), 1440)
+    hours, mins = divmod(rem, 60)
+    if days:
+        return f"{days}-{hours:02d}:{mins:02d}:00"
+    return f"{hours:02d}:{mins:02d}:00"
+
+
+def _elapsed_time(seconds: float) -> str:
+    """Port of sacct's _elapsed_time for TotalCPU/UserCPU/SystemCPU (slurm://src/sacct/print.c#_elapsed_time)."""
+    secs = int(seconds)
+    subsec = round((seconds - secs) * 1_000_000) // 1000
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, sec = divmod(rem, 60)
+    if days:
+        return f"{days}-{hours:02d}:{minutes:02d}:{sec:02d}"
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+    if subsec:
+        return f"{minutes:02d}:{sec:02d}.{subsec:03d}"
+    return f"00:{minutes:02d}:{sec:02d}"

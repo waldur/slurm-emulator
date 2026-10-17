@@ -100,7 +100,7 @@ def expand_stdio_path(pattern: str, job, default: str) -> str:
         "%A": str(job.job_id),
         "%x": job.name or "",
         "%u": job.user or "",
-        "%N": "node001",
+        "%N": (getattr(job, "node_list", None) or ["node001"])[0],
     }
     for key, value in replacements.items():
         pattern = pattern.replace(key, value)

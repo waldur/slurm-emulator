@@ -27,6 +27,24 @@ if [ ! -d "${FIRECREST_V2_DIR}/.git" ]; then
         https://github.com/eth-cscs/firecrest-v2 "${FIRECREST_V2_DIR}"
 fi
 
+# Local fixes to FireCREST (firecrest-patches/*.patch), applied once: a patch
+# that is already in the checkout is skipped; one that neither applies nor is
+# applied stops the script.
+shopt -s nullglob
+for patch in "$PWD"/firecrest-patches/*.patch; do
+    if git -C "${FIRECREST_V2_DIR}" apply --reverse --check "$patch" 2>/dev/null; then
+        echo ">> FireCREST patch already applied: $(basename "$patch")"
+    elif git -C "${FIRECREST_V2_DIR}" apply --check "$patch" 2>/dev/null; then
+        echo ">> Applying FireCREST patch: $(basename "$patch")"
+        git -C "${FIRECREST_V2_DIR}" apply "$patch"
+    else
+        echo "!! FireCREST patch neither applies nor is applied: $patch" >&2
+        git -C "${FIRECREST_V2_DIR}" apply --check "$patch" || true
+        exit 1
+    fi
+done
+shopt -u nullglob
+
 mkdir -p secrets
 [ -f secrets/ssh_private_key ] ||
     ssh-keygen -t ed25519 -N "" -f secrets/ssh_private_key -C hpc-workspace@emulator >/dev/null
@@ -58,6 +76,11 @@ slurmdb associations/ '{"associations":[
   {"account":"alloc_climate","user":"bob"},
   {"account":"alloc_genomics","user":"alice"},
   {"account":"alloc_private","user":"bob"}]}'
+
+# Three weeks of finished jobs (+ sample output files in /home/alice) so the
+# allocation's charts have history; skipped when already seeded.
+echo ">> Seeding job history"
+docker compose exec -T slurm python3 - < seed_history.py
 
 cat <<EOF
 

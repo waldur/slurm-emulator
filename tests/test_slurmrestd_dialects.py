@@ -115,3 +115,25 @@ def test_partition_memory_limits_dialect(client, target, auth_headers):
     has_mem = "memory_per_cpu" in part["defaults"]
     assert has_mem == ("memory_per_cpu" in part["maximums"])
     assert has_mem == (not slurm_version.at_least("master"))
+
+
+def test_node_and_reservation_shapes_in_every_dialect(client, target, auth_headers, monkeypatch):
+    """NODE ``cpu_load``/``free_mem``/``alloc_idle_cpus``/``tres_used`` and the
+    RESERVATION_INFO fields are the same from v0.0.42 to v0.0.45
+    (slurm://src/plugins/data_parser/v0.0.42/parsers.c#RESERVATION_INFO@24.11,
+    slurm://src/plugins/data_parser/v0.0.45/parsers.c#RESERVATION_INFO@26.05+;
+    ``watts`` is already add_removed in v0.0.42)."""
+    monkeypatch.setenv("SLURM_EMULATOR_RESERVATIONS", "maint:ALL:+1h:2h:MAINT")
+    node = client.get(f"/slurm/{target.api_version}/nodes/", headers=auth_headers).json()["nodes"][
+        0
+    ]
+    assert {"cpu_load", "free_mem", "alloc_idle_cpus", "tres_used", "reason"} <= set(node)
+    assert set(node["free_mem"]) == {"set", "infinite", "number"}
+    resv = client.get(f"/slurm/{target.api_version}/reservations/", headers=auth_headers).json()[
+        "reservations"
+    ][0]
+    assert {"name", "node_list", "node_count", "partition", "flags", "users", "accounts"} <= set(
+        resv
+    )
+    assert "watts" not in resv
+    assert set(resv["start_time"]) == {"set", "infinite", "number"}

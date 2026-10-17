@@ -38,6 +38,7 @@ from typing import Any, Optional
 from emulator.commands.dispatcher import SlurmEmulator
 from emulator.core import job_execution, nss
 from emulator.core.accounting import ESLURM_USER_ID_UNKNOWN, admit_job
+from emulator.core.cluster_model import compress_hostlist
 from emulator.core.database import Job
 from emulator.core.scheduler import advance_job_states, job_clock_now
 
@@ -298,8 +299,16 @@ def _squeue(emu) -> str:
         if job.cluster != emu.database.current_cluster:
             continue
         st = st_map.get(job.state, job.state[:2])
+        # NODELIST(REASON): the allocated hostlist, or the pending reason in
+        # parentheses (slurm://src/squeue/print.c#_print_job_reason_list).
+        if job.node_list:
+            where = compress_hostlist(job.node_list)
+        elif job.state == "PENDING":
+            where = f"({job.state_reason or 'None'})"
+        else:
+            where = ""
         rows.append(
-            f"{job.job_id} {job.partition} {job.name} {job.user} {st} 0:00 {job.node_count} node001"
+            f"{job.job_id} {job.partition} {job.name} {job.user} {st} 0:00 {job.node_count} {where}"
         )
     return "\n".join(rows)
 

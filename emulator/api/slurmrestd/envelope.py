@@ -38,6 +38,8 @@ SLURMCTLD_PLUGIN = ("openapi/slurmctld", "Slurm OpenAPI slurmctld")
 # Error numbers from slurm://slurm/slurm_errno.h (ESLURM_REST_* block and
 # the slurmctld block starting at ESLURM_INVALID_PARTITION_NAME).
 ESLURM_INVALID_JOB_ID = 2017
+# slurm://slurm/slurm_errno.h#ESLURM_RESERVATION_INVALID (2000 + 53)
+ESLURM_RESERVATION_INVALID = 2053
 # ESLURM_USER_ID_UNKNOWN / ESLURM_INVALID_ACCOUNT come from emulator.core.accounting
 # (the admission logic that raises them) and are re-exported here.
 __all__ = ["ESLURM_INVALID_ACCOUNT", "ESLURM_USER_ID_UNKNOWN"]
@@ -54,6 +56,7 @@ _STRERROR = {
     ESLURM_INVALID_JOB_ID: "Invalid job id specified",
     ESLURM_USER_ID_UNKNOWN: "Unable to resolve user ID to user name",
     ESLURM_INVALID_ACCOUNT: "Invalid account or account/partition combination specified",
+    ESLURM_RESERVATION_INVALID: "Requested reservation is invalid",
     ESLURM_REST_INVALID_QUERY: "Query empty or incorrect type",
     ESLURM_REST_FAIL_PARSING: "Unable to parse request",
     ESLURM_REST_EMPTY_RESULT: "Nothing found with query",

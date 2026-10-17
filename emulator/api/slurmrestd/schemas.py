@@ -13,6 +13,7 @@ Waldur's parsers touch, plus enough context to look real.
 from __future__ import annotations
 
 import os
+from datetime import timedelta
 from typing import Any, Optional
 
 from emulator.commands.sacct import (
@@ -22,7 +23,22 @@ from emulator.commands.sacct import (
     _NODE_MEM_GB,
     SacctEmulator,
 )
-from emulator.core.database import QOS, Account, Association, Job, UsageRecord, User
+from emulator.core.cluster_model import (
+    NodeView,
+    compress_hostlist,
+    expand_hostlist,
+    job_request,
+    partition_has_gpus,
+)
+from emulator.core.database import (
+    QOS,
+    Account,
+    Association,
+    Job,
+    Reservation,
+    UsageRecord,
+    User,
+)
 from emulator.core.tres import DYNAMIC_TRES_FIRST_ID, STATIC_TRES_IDS, tres_id
 from emulator.slurm_version import at_least
 
@@ -294,37 +310,163 @@ def qos_to_dict(qos: QOS, qos_id: int) -> dict[str, Any]:
     }
 
 
-def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
-    """One slurmdb JOB per usage record — agrees with sacct output.
+def _cpu_time(seconds: float) -> dict[str, int]:
+    whole = int(seconds)
+    return {"seconds": whole, "microseconds": round((seconds - whole) * 1_000_000) % 1_000_000}
 
-    Same math as SacctEmulator._row: Elapsed = node_hours in seconds,
-    End = record timestamp, per-hour TRES rates from raw_tres.
-    """
-    rate = SacctEmulator._rate
-    elapsed = int(record.node_hours * 3600)
-    end = int(record.timestamp.timestamp())
-    start = end - elapsed
-    state = record.state or "COMPLETED"
+
+def _exit_code(state: str, return_code: Optional[int]) -> dict[str, Any]:
     failed = state.startswith(_FAILED_STATES)
-
-    cpus = rate(record, "CPU", _NODE_CPUS)
-    mem_mb = rate(record, "Mem", _NODE_MEM_GB) * 1024
-    gpus = rate(record, "GRES/gpu", _NODE_GPUS)
-    tres_values = {"cpu": cpus, "mem": mem_mb, "node": 1, "billing": cpus}
-    if gpus:
-        tres_values["gres/gpu"] = gpus
-    tres = tres_list_from_dict(tres_values)
-
-    return_code = getattr(record, "exit_code", None)
     if return_code is None:
         return_code = 1 if failed else 0
-    exit_code = {
+    return {
         "status": ["ERROR"] if failed else ["SUCCESS"],
         "return_code": uint_no_val(return_code),
     }
+
+
+def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) -> dict[str, Any]:
+    """The ``batch`` step of a job (STEP, slurm://src/plugins/data_parser/v0.0.45/parsers.c#STEP@26.05+).
+
+    It runs on the first allocated node; ``tres/requested/max`` carries the
+    peak task memory in bytes -- what sacct prints as MaxRSS
+    (slurm://src/plugins/data_parser/v0.0.45/parsers.c#STEP_TRES_REQ_MAX@26.05+,
+    slurm://src/sacct/print.c#PRINT_MAXRSS). A timed-out job's batch step is
+    CANCELLED by the time-limit signal.
+    """
+    first_node = (expand_hostlist(record.node_list) or ["node001"])[0]
+    state = record.state or "COMPLETED"
+    step_state = "CANCELLED" if state == "TIMEOUT" else state
+    peak = [
+        {
+            "type": "mem",
+            "name": "",
+            "id": _TRES_IDS["mem"],
+            "count": int(record.max_rss_bytes),
+            "task": 0,
+            "node": first_node,
+        }
+    ]
+    cpus_on_node = min(record.alloc_cpus, _NODE_CPUS) if record.alloc_cpus else _NODE_CPUS
+    mem_on_node = record.req_mem_mb or cpus_on_node * (_NODE_MEM_GB * 1024 // _NODE_CPUS)
     return {
+        "time": {
+            "elapsed": end - start,
+            "start": uint_no_val(start),
+            "end": uint_no_val(end),
+            "suspended": 0,
+            "limit": uint_no_val(),
+            **cpu,
+        },
+        "exit_code": _exit_code(state, record.exit_code)
+        if state != "TIMEOUT"
+        else {
+            "status": ["SIGNALED"],
+            "return_code": uint_no_val(0),
+            "signal": {"id": uint_no_val(15), "name": "TERM"},
+        },
+        "nodes": {"count": 1, "range": first_node, "list": [first_node]},
+        "tasks": {"count": 1},
+        "kill_request_user": "",
+        "state": [step_state],
+        "statistics": {"CPU": {"actual_frequency": 0}, "energy": {"consumed": uint_no_val()}},
+        "step": {
+            "id": f"{record.job_id}.batch",
+            "name": "batch",
+            "stderr": record.standard_error,
+            "stdin": record.standard_input,
+            "stdout": record.standard_output,
+        },
+        "tres": {
+            "requested": {"max": peak, "min": peak, "average": [], "total": []},
+            "consumed": {"max": [], "min": [], "average": [], "total": []},
+            "allocated": tres_list_from_dict({"cpu": cpus_on_node, "mem": mem_on_node, "node": 1}),
+        },
+    }
+
+
+def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
+    """One slurmdb JOB per usage record — agrees with sacct output.
+
+    Records that mirror a real run (``start_time`` set: submitted or seeded
+    jobs) render what slurmdbd stores
+    (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB@26.05+): submit /
+    eligible / start / end, ``time/limit`` (minutes, UINT32_NO_VAL),
+    ``time/total|user|system`` CPU time, ``allocation_nodes``, the ``nodes``
+    hostlist, requested vs allocated TRES and a ``batch`` step carrying MaxRSS.
+    Legacy records (injected usage) keep the same math as SacctEmulator._row:
+    Elapsed = node_hours in seconds, End = record timestamp, per-hour TRES
+    rates from raw_tres, one node.
+    """
+    rate = SacctEmulator._rate
+    state = record.state or "COMPLETED"
+    exit_code = _exit_code(state, getattr(record, "exit_code", None))
+    gpus = rate(record, "GRES/gpu", _NODE_GPUS)
+    steps: list[dict[str, Any]] = []
+
+    if record.start_time is not None and record.end_time is not None:
+        start = int(record.start_time.timestamp())
+        end = int(record.end_time.timestamp())
+        submit = int((record.submit_time or record.start_time).timestamp())
+        eligible = int(
+            (record.eligible_time or record.submit_time or record.start_time).timestamp()
+        )
+        elapsed = max(end - start, 0)
+        nodes = record.node_count
+        node_list = record.node_list or "None assigned"
+        cpus = record.alloc_cpus
+        mem_total = record.req_mem_mb * max(nodes, 1)
+        requested = {
+            "cpu": record.alloc_cpus or _NODE_CPUS * max(nodes, 1),
+            "mem": mem_total,
+            "node": max(nodes, 1),
+            "billing": record.alloc_cpus or _NODE_CPUS * max(nodes, 1),
+        }
+        allocated = {"cpu": cpus, "mem": mem_total if nodes else 0, "node": nodes, "billing": cpus}
+        if partition_has_gpus(record.partition):
+            requested["gres/gpu"] = _NODE_GPUS * max(nodes, 1)
+            if nodes:
+                allocated["gres/gpu"] = _NODE_GPUS * nodes
+        total = record.cpu_time_seconds
+        system = total * 0.04
+        cpu = {
+            "system": _cpu_time(system),
+            "user": _cpu_time(total - system),
+            "total": _cpu_time(total),
+        }
+        limit = uint_no_val(record.time_limit, infinite=record.time_limit is None)
+        if nodes:
+            steps.append(_batch_step(record, start, end, cpu))
+        tres = {
+            "allocated": tres_list_from_dict({k: v for k, v in allocated.items() if v}),
+            "requested": tres_list_from_dict(requested),
+        }
+        required = {
+            "CPUs": requested["cpu"],
+            "memory_per_cpu": uint_no_val(),
+            "memory_per_node": uint_no_val(record.req_mem_mb),
+        }
+    else:
+        elapsed = int(record.node_hours * 3600)
+        end = int(record.timestamp.timestamp())
+        start = submit = eligible = end - elapsed
+        nodes = 1
+        node_list = "node001"
+        cpus = rate(record, "CPU", _NODE_CPUS)
+        mem_mb = rate(record, "Mem", _NODE_MEM_GB) * 1024
+        tres_values = {"cpu": cpus, "mem": mem_mb, "node": 1, "billing": cpus}
+        if gpus:
+            tres_values["gres/gpu"] = gpus
+        legacy = tres_list_from_dict(tres_values)
+        tres = {"allocated": legacy, "requested": legacy}
+        zero = {"seconds": 0, "microseconds": 0}
+        cpu = {"system": zero, "user": dict(zero), "total": dict(zero)}
+        limit = uint_no_val(infinite=True)
+        required = None
+
+    job: dict[str, Any] = {
         "account": record.account,
-        "allocation_nodes": 1,
+        "allocation_nodes": nodes,
         "array": {"job_id": 0},
         "cluster": record.cluster,
         "derived_exit_code": exit_code,
@@ -338,28 +480,32 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
         "job_id": record.job_id,
         "kill_request_user": "",
         "name": getattr(record, "job_name", "") or f"job_{record.job_id}",
-        "nodes": "node001",
+        "nodes": node_list,
         "partition": record.partition or "compute",
         "qos": "normal",
         "state": {"current": [state], "reason": "None"},
-        "steps": [],
+        "steps": steps,
+        "stdout": record.standard_output,
+        "stderr": record.standard_error,
+        "stdin": record.standard_input,
         "time": {
             "elapsed": elapsed,
-            "eligible": start,
+            "eligible": eligible,
             "start": start,
             "end": end,
-            "submission": start,
+            "submission": submit,
             "suspended": 0,
-            "limit": uint_no_val(infinite=True),
-            "system": {"seconds": 0, "microseconds": 0},
-            "user": {"seconds": 0, "microseconds": 0},
-            "total": {"seconds": 0, "microseconds": 0},
+            "limit": limit,
+            **cpu,
         },
-        "tres": {"allocated": tres, "requested": tres},
+        "tres": tres,
         "user": record.user,
         "wckey": {"wckey": "", "flags": []},
         "working_directory": getattr(record, "working_directory", "") or f"/home/{record.user}",
     }
+    if required is not None:
+        job["required"] = required
+    return job
 
 
 def ctld_job_to_dict(job: Job) -> dict[str, Any]:
@@ -374,19 +520,24 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
     def ts(value) -> dict[str, Any]:
         return uint_no_val(int(value.timestamp())) if value else uint_no_val()
 
-    node_count = getattr(job, "node_count", 1) or 1
-    total_cpus = _NODE_CPUS * node_count
+    request = job_request(job)
+    node_list = list(getattr(job, "node_list", []) or [])
+    node_count = len(node_list) or request.node_count
+    total_cpus = getattr(job, "alloc_cpus", 0) or request.total_cpus
+    if node_list:
+        nodes = compress_hostlist(node_list)
+    elif job.state == "PENDING" or job.start_time is None:
+        nodes = ""  # nothing allocated yet
+    else:
+        nodes = "node001"  # pre-allocation state files
     time_limit = getattr(job, "time_limit", None)
-    failed = job.state.startswith(_FAILED_STATES)
     # The script's own status when it ran (SLURM_EMULATOR_JOB_EXECUTE),
     # else 1/0 from the state (slurm://slurm/slurm.h#job_info_t.exit_code).
-    return_code = getattr(job, "exit_code", None)
-    if return_code is None:
-        return_code = 1 if failed else 0
-    exit_code = {
-        "status": ["ERROR"] if failed else ["SUCCESS"],
-        "return_code": uint_no_val(return_code),
-    }
+    exit_code = _exit_code(job.state, getattr(job, "exit_code", None))
+    # A running job's end_time is its expected end: start + time limit.
+    end = job.end_time
+    if end is None and job.state == "RUNNING" and job.start_time and time_limit:
+        end = job.start_time + timedelta(minutes=time_limit)
 
     return {
         "job_id": int(job.job_id) if str(job.job_id).isdigit() else 0,
@@ -401,7 +552,8 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         "group_name": job.group_name or job.user,
         "partition": job.partition or "compute",
         "job_state": [job.state],
-        "state_reason": "None",
+        # slurm://src/common/job_state_reason.c#job_state_reason_string
+        "state_reason": getattr(job, "state_reason", "None") or "None",
         "state_description": "",
         # JOB_INFO carries exit_code/derived_exit_code as PROCESS_EXIT_CODE.
         "exit_code": exit_code,
@@ -409,11 +561,18 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         "cluster": job.cluster,
         "qos": job.qos or "normal",
         "priority": uint_no_val(getattr(job, "priority", 1)),
-        "nodes": "node001",
+        "nodes": nodes,
         "node_count": uint_no_val(node_count),
         "cpus": uint_no_val(total_cpus),
+        "tasks": uint_no_val(job.tasks or None),
+        "cpus_per_task": uint_no_val(job.cpus_per_task or None),
+        "tasks_per_node": uint_no_val(job.tasks_per_node or None),
+        "memory_per_node": uint_no_val(request.mem_per_node),
+        "memory_per_cpu": uint_no_val(),
+        "minimum_cpus_per_node": uint_no_val(request.cpus_per_node),
+        "resv_name": getattr(job, "reservation", "") or "",
         "job_resources": {
-            "nodes": {"count": node_count, "list": "node001", "allocation": []},
+            "nodes": {"count": node_count, "list": nodes, "allocation": []},
             "cpus": total_cpus,
         },
         # None -> UNLIMITED (infinite), matching a job with no --time.
@@ -422,7 +581,7 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         # Real slurm reports an estimated start (and end) for pending jobs, so
         # fall back to submit_time rather than leaving these unset.
         "start_time": ts(job.start_time or job.submit_time),
-        "end_time": ts(job.end_time or job.start_time or job.submit_time),
+        "end_time": ts(end or job.start_time or job.submit_time),
         # TIMESTAMP_NO_VAL; unset means the job was never suspended.
         "suspend_time": uint_no_val(),
         "standard_input": job.standard_input or "/dev/null",
@@ -553,20 +712,39 @@ def _node_names(partition: str) -> list[str]:
     return [f"node{i:03d}" for i in range(first, last + 1)]
 
 
-def node_to_dict(name: str, now_ts: int) -> dict[str, Any]:
+def node_to_dict(name: str, now_ts: int, view: Optional[NodeView] = None) -> dict[str, Any]:
+    """NODE (slurm://src/plugins/data_parser/v0.0.45/parsers.c#NODE@26.05+).
+
+    ``view`` (``cluster_model.node_views``) supplies the live part: state
+    flags and reason, allocated CPUs/memory, ``cpu_load`` (load average x 100,
+    slurm://src/slurmd/slurmd/get_mach_stat.c#get_cpu_load), ``free_mem``
+    (MB, UINT64_NO_VAL; unset for a DOWN node that does not report) and
+    ``tres_used``. Without it the node is idle, as before.
+    """
     mem_mb = _NODE_MEM_GB * 1024
+    if view is None:
+        view = NodeView(state=["IDLE"], free_mem=mem_mb)
+    tres_used = ""
+    if view.alloc_cpus:
+        mem_used = view.alloc_memory
+        mem_str = f"{mem_used // 1024}G" if mem_used % 1024 == 0 else f"{mem_used}M"
+        tres_used = f"cpu={view.alloc_cpus},mem={mem_str}"
+        if view.gpus_used:
+            tres_used += f",gres/gpu={view.gpus_used}"
     return {
         "name": name,
         "hostname": name,
         "address": name,
-        "state": ["IDLE"],
+        "state": list(view.state),
         "architecture": "x86_64",
         "operating_system": "Linux",
         "cpus": _NODE_CPUS,
         "effective_cpus": _NODE_CPUS,
-        "alloc_cpus": 0,
-        "alloc_idle_cpus": _NODE_CPUS,
-        "alloc_memory": 0,
+        "alloc_cpus": view.alloc_cpus,
+        "alloc_idle_cpus": _NODE_CPUS - view.alloc_cpus,
+        "alloc_memory": view.alloc_memory,
+        "cpu_load": view.cpu_load,
+        "free_mem": uint_no_val(view.free_mem),
         "real_memory": mem_mb,
         "sockets": 2,
         "cores": _NODE_CPUS // 2,
@@ -576,15 +754,48 @@ def node_to_dict(name: str, now_ts: int) -> dict[str, Any]:
         "features": [],
         "active_features": [],
         "gres": f"gpu:{_NODE_GPUS}",
-        "gres_used": "gpu:0",
+        "gres_used": f"gpu:{view.gpus_used}",
         "boot_time": uint_no_val(now_ts),
         "last_busy": uint_no_val(now_ts),
         "slurmd_start_time": uint_no_val(now_ts),
         # PARSER_ARRAY(NODE) serializes weight as UINT32 (a plain int).
         "weight": 1,
         "tres": f"cpu={_NODE_CPUS},mem={mem_mb}M,billing={_NODE_CPUS},gres/gpu={_NODE_GPUS}",
-        "tres_used": "",
-        "reason": "",
+        "tres_used": tres_used,
+        "reason": view.reason,
+        "reservation": view.reservation,
+    }
+
+
+def reservation_to_dict(resv: Reservation) -> dict[str, Any]:
+    """RESERVATION_INFO (slurm://src/plugins/data_parser/v0.0.45/parsers.c#RESERVATION_INFO@26.05+).
+
+    ``start_time``/``end_time`` are TIMESTAMP_NO_VAL structs, ``flags`` the
+    RESERVATION_FLAGS names (``MAINT`` …), ``node_list`` a ranged hostlist.
+    """
+
+    def ts(value) -> dict[str, Any]:
+        return uint_no_val(int(value.timestamp())) if value else uint_no_val()
+
+    return {
+        "accounts": resv.accounts,
+        "burst_buffer": "",
+        "core_count": len(resv.nodes) * _NODE_CPUS,
+        "core_specializations": [],
+        "end_time": ts(resv.end_time),
+        "features": "",
+        "flags": list(resv.flags),
+        "groups": "",
+        "licenses": "",
+        "max_start_delay": 0,
+        "name": resv.name,
+        "node_count": len(resv.nodes),
+        "node_list": compress_hostlist(resv.nodes),
+        "partition": resv.partition,
+        "purge_completed": {"time": uint_no_val()},
+        "start_time": ts(resv.start_time),
+        "tres": f"cpu={len(resv.nodes) * _NODE_CPUS}",
+        "users": resv.users,
     }
 
 

@@ -1,10 +1,11 @@
 """/slurm/v0.0.45 endpoints (openapi/slurmctld plugin emulation).
 
-Read paths plus DELETE /job/{job_id} (the scancel equivalent).
-Nodes/partitions are served from the static topology in schemas.py —
-the same picture sinfo paints. Reservations and licenses are
-empty-list stubs. Job submission endpoints are intentionally not
-registered, so they 404 with the real plain-text rejection.
+Read paths plus POST /job/submit and DELETE /job/{job_id} (the scancel
+equivalent). Nodes/partitions are served from the static topology in
+schemas.py — the same picture sinfo paints — with each node's live state
+(allocations, DRAIN/DOWN overrides, background load, reservations) from
+``emulator/core/cluster_model.py``. Reservations come from
+``SLURM_EMULATOR_RESERVATIONS``; licenses are an empty-list stub.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from emulator.api.slurmrestd.auth import slurmrestd_auth
 from emulator.api.slurmrestd.envelope import (
     ESLURM_INVALID_JOB_ID,
+    ESLURM_RESERVATION_INVALID,
     ESLURM_USER_ID_UNKNOWN,
     SLURMCTLD_PLUGIN,
     found_nothing_warning,
@@ -31,10 +33,12 @@ from emulator.api.slurmrestd.schemas import (
     ctld_job_to_dict,
     node_to_dict,
     partition_to_dict,
+    reservation_to_dict,
     uint_no_val,
 )
 from emulator.api.slurmrestd.state import StateDep
 from emulator.core.accounting import admit_job
+from emulator.core.cluster_model import node_views, sync_reservations
 from emulator.core.database import Job, SlurmDatabase
 from emulator.core.scheduler import advance_job_states, job_clock_now
 from emulator.slurm_version import at_least
@@ -74,6 +78,31 @@ def _submit_int(value: object, default: Optional[int]) -> Optional[int]:
         except (TypeError, ValueError):
             return default
     return default
+
+
+def _submit_nodes(job_desc: dict[str, Any]) -> int:
+    """Minimum node count from ``nodes`` ("4", "2-4", "2-4:2") or ``minimum_nodes``.
+
+    JOB_DESC_MSG_NODES parses the ``nodes`` range into min/max
+    (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_DESC_MSG_NODES@26.05+);
+    the emulator allocates the minimum (see cluster_model deviations).
+    """
+    value = job_desc.get("nodes")
+    if isinstance(value, str) and value.strip():
+        head = value.split(":", 1)[0].split("-", 1)[0].strip()
+        if head.isdigit():
+            return max(int(head), 1)
+    count = _submit_int(value, None)
+    if count:
+        return max(count, 1)
+    minimum = _submit_int(job_desc.get("minimum_nodes"), None)
+    return max(minimum or 1, 1)
+
+
+def _submit_count(value: object) -> int:
+    """Optional positive count (tasks, cpus_per_task, memory_per_node …); 0 = unset."""
+    number = _submit_int(value, None)
+    return number if number and number > 0 else 0
 
 
 def _env_to_dict(value: object) -> dict[str, str]:
@@ -218,6 +247,23 @@ async def submit_job(
     identity = admission.identity
     account = admission.account
 
+    # An unknown reservation is refused at submit
+    # (slurm://src/common/slurm_errno.c#ESLURM_RESERVATION_INVALID).
+    reservation = str(job_desc.get("reservation") or "")
+    sync_reservations(db, job_clock_now(state.time_engine))
+    if reservation and reservation not in db.reservations:
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    "Requested reservation is invalid",
+                    ESLURM_RESERVATION_INVALID,
+                    "slurm_submit_batch_job()",
+                )
+            ],
+        )
+
     jid = db.allocate_job_id()
     job = Job(
         job_id=str(jid),
@@ -235,9 +281,17 @@ async def submit_job(
         standard_output=job_desc.get("standard_output") or "",
         standard_error=job_desc.get("standard_error") or "",
         standard_input=job_desc.get("standard_input") or "/dev/null",
-        node_count=_submit_int(job_desc.get("nodes"), 1) or 1,
+        # Resource request (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_DESC_MSG@26.05+):
+        # nodes / minimum_nodes, tasks, tasks_per_node, cpus_per_task,
+        # memory_per_node (MB) and time_limit (minutes), each plain or NO_VAL.
+        node_count=_submit_nodes(job_desc),
+        tasks=_submit_count(job_desc.get("tasks")),
+        tasks_per_node=_submit_count(job_desc.get("tasks_per_node")),
+        cpus_per_task=_submit_count(job_desc.get("cpus_per_task")),
+        memory_per_node=_submit_count(job_desc.get("memory_per_node")),
+        reservation=reservation,
         priority=_submit_int(job_desc.get("priority"), 1) or 1,
-        time_limit=_submit_int(job_desc.get("time_limit"), None),
+        time_limit=_submit_count(job_desc.get("time_limit")) or None,
         environment=_env_to_dict(job_desc.get("environment")),
         constraints=job_desc.get("constraints") or "",
         uid=identity.uid if identity else None,
@@ -337,8 +391,11 @@ async def cancel_job(
         )
     if job.state in ("RUNNING", "PENDING"):
         job.state = "CANCELLED"
-        job.end_time = state.time_engine.get_current_time()
-        state.commit()
+        # On the job clock, like start/submit, so the run length is right;
+        # the job's nodes are free again and it lands in accounting.
+        job.end_time = job_clock_now(state.time_engine)
+        advance_job_states(state.database, state.time_engine)
+    state.commit()
     status = [
         {
             "job_id": uint_no_val(int(job_id) if job_id.isdigit() else None),
@@ -355,13 +412,21 @@ async def cancel_job(
 # --- nodes / partitions ---
 
 
+def _node_views(state) -> dict:
+    """Bring jobs up to date, then derive each node's live state on the job clock."""
+    if advance_job_states(state.database, state.time_engine):
+        state.commit()
+    return node_views(state.database, job_clock_now(state.time_engine))
+
+
 @router.get("/nodes/")
 async def get_nodes(
     request: Request,
     state: StateDep,
 ):
     now = state.now_ts()
-    payload = [node_to_dict(name, now) for name in all_node_names()]
+    views = _node_views(state)
+    payload = [node_to_dict(name, now, views.get(name)) for name in all_node_names()]
     return _respond(request, state, {"nodes": payload, "last_update": uint_no_val(now)})
 
 
@@ -382,7 +447,10 @@ async def get_node(
     return _respond(
         request,
         state,
-        {"nodes": [node_to_dict(node_name, now)], "last_update": uint_no_val(now)},
+        {
+            "nodes": [node_to_dict(node_name, now, _node_views(state).get(node_name))],
+            "last_update": uint_no_val(now),
+        },
     )
 
 
@@ -473,29 +541,38 @@ async def get_shares(
     return _respond(request, state, {"shares": {"shares": shares}})
 
 
+def _reservations(state) -> list:
+    if sync_reservations(state.database, job_clock_now(state.time_engine)):
+        state.commit()
+    return sorted(state.database.reservations.values(), key=lambda r: (r.start_time, r.name))
+
+
 @router.get("/reservations/")
 async def get_reservations(
     request: Request,
     state: StateDep,
 ):
+    payload = [reservation_to_dict(r) for r in _reservations(state)]
     return _respond(
         request,
         state,
-        {"reservations": [], "last_update": uint_no_val(state.now_ts())},
+        {"reservations": payload, "last_update": uint_no_val(state.now_ts())},
     )
 
 
 @router.get("/reservation/{reservation_name}")
 async def get_reservation(
-    reservation_name: str,  # noqa: ARG001 - any name yields the empty stub
+    reservation_name: str,
     request: Request,
     state: StateDep,
 ):
+    matched = [reservation_to_dict(r) for r in _reservations(state) if r.name == reservation_name]
+    warnings = [] if matched else [found_nothing_warning("slurm_load_reservations()", request)]
     return _respond(
         request,
         state,
-        {"reservations": [], "last_update": uint_no_val(state.now_ts())},
-        warnings=[found_nothing_warning("slurm_load_reservations()", request)],
+        {"reservations": matched, "last_update": uint_no_val(state.now_ts())},
+        warnings=warnings,
     )
 
 

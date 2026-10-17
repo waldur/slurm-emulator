@@ -49,7 +49,36 @@ in my climate allocation".
 Partitions `debug` (30 min, 2 nodes), `batch` (2 days, 16 nodes, QoS
 `normal`/`long`), `gpu` (aarch64 + nvidia/cc90); an EESSI 2023.06 catalog
 excerpt (GROMACS, OpenFOAM, Python, PyTorch, WRF) with per-architecture
-builds. Jobs go PENDING → RUNNING after 5 s and COMPLETED after 40 s.
+builds. Jobs go PENDING → RUNNING after 5 s and COMPLETED after 40 s
+when nodes are free (a job needing more nodes than are free waits with reason
+`Resources`), or TIMEOUT at their time limit.
+
+The cluster is not idle, so the allocation's charts have something to show:
+
+- **History**: `up.sh` runs `seed_history.py` inside the slurm container
+  (`docker compose exec -T slurm python3 - < seed_history.py`; idempotent):
+  ~80 finished jobs over 21 days in `alloc_climate` (alice, bob) and
+  `alloc_genomics` (alice) — WRF, GROMACS, BWA, MultiQC; 1–8 nodes; time
+  limits 30 min–48 h; mostly COMPLETED with FAILED (exit 1/127/139, a cluster
+  of failures on two consecutive days), TIMEOUT and CANCELLED; queue waits of
+  minutes on `debug`, tens of minutes on `batch`, hours on `gpu`; synthetic CPU
+  time and MaxRSS. It also writes sample files for the file viewers:
+  `/home/alice/wrf-baltic/rsl.error.0000`, `/home/alice/md/energy.xvg`,
+  `/home/alice/md/protein.pdb`, `/home/alice/qc/multiqc_report.html`.
+- **Nodes** (`docker-compose.yml`): `node012`/`node013` drained, `node030`
+  down (`SLURM_EMULATOR_NODE_STATES`); other tenants keep ~40% of `batch` and
+  ~60% of `gpu` busy, rotating every 15 min (`SLURM_EMULATOR_BACKGROUND_LOAD`).
+- **Reservations** (`SLURM_EMULATOR_RESERVATIONS`): a MAINT window on all
+  nodes 3 days after the first start (jobs whose time limit would run into it
+  do not start), a course on `debug` after 5 days, a GPU benchmark after 9.
+- The accounting clock follows the wall clock (`SLURM_EMULATOR_TIME_FOLLOW_WALL=1`).
+
+A submitted job runs `SLURM_EMULATOR_RUN_SECONDS` from its environment when
+set (e.g. to watch a TIMEOUT), and `SLURM_EMULATOR_CPU_EFFICIENCY` /
+`SLURM_EMULATOR_MEM_FRACTION` (0–1) fix its synthetic efficiency.
+
+`up.sh` also applies `firecrest-patches/*.patch` to the FireCREST checkout
+before building it (each once; a patch that no longer applies stops it).
 
 ## Notes
 

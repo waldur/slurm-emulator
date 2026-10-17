@@ -8,6 +8,12 @@ from typing import Callable, Optional
 
 from dateutil.relativedelta import relativedelta
 
+FOLLOW_WALL_ENV = "SLURM_EMULATOR_TIME_FOLLOW_WALL"
+
+
+def follow_wall() -> bool:
+    return os.environ.get(FOLLOW_WALL_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
 
 class TimeEngine:
     """Handles time manipulation and period transitions."""
@@ -19,6 +25,8 @@ class TimeEngine:
             os.environ.get("SLURM_EMULATOR_TIME_FILE", "/tmp/slurm_emulator_time.json")
         )
         self._load_state()
+        if follow_wall():
+            self.current_time = datetime.now()
 
     def advance_time(self, days: int = 0, months: int = 0, quarters: int = 0) -> None:
         """Advance time by specified amount."""
@@ -45,7 +53,14 @@ class TimeEngine:
             self._trigger_time_callbacks()
 
     def get_current_time(self) -> datetime:
-        """Get current emulator time."""
+        """Get current emulator time.
+
+        With ``SLURM_EMULATOR_TIME_FOLLOW_WALL=1`` the simulated clock is the
+        wall clock (time travel disabled): for a live demo cluster whose
+        clients ask accounting for "the last N days" in real time.
+        """
+        if follow_wall():
+            return datetime.now()
         return self.current_time
 
     def get_current_quarter(self) -> str:
