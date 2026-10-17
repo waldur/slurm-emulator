@@ -30,7 +30,6 @@ from emulator.core.usage_simulator import standard_node_raw_tres
 
 DAYS = int(os.environ.get("SEED_DAYS", "21"))
 RNG = random.Random(int(os.environ.get("SEED_RANDOM", "2026")))
-MARKER_NAME = "wrf-baltic-3km"
 
 # name: (account, users, partitions, node choices, limits (min), used fraction,
 #        cpu efficiency range, memory fraction range, cpus per node or None = whole node,
@@ -68,10 +67,13 @@ WAITS = {"debug": (0.5, 8), "batch": (8, 75), "gpu": (60, 360)}
 FAILURE_EXIT_CODES = [1, 127, 139]
 
 
+def _marker(db: SlurmDatabase) -> Path:
+    """Next to the state file: real jobs with the same names must not count."""
+    return db.state_file.with_name(db.state_file.name + ".history-seeded")
+
+
 def _already_seeded(db: SlurmDatabase) -> bool:
-    return any(
-        r.job_name == MARKER_NAME and r.account == "alloc_climate" for r in db.usage_records
-    )
+    return _marker(db).exists()
 
 
 def _plan_jobs(now: datetime) -> list[dict]:
@@ -214,6 +216,25 @@ def build_records(db: SlurmDatabase, now: datetime) -> list[UsageRecord]:
 
 
 # --- sample output files ---
+
+
+def _wrf_namelist(start: datetime) -> str:
+    """The &time_control part of namelist.input: a 72 h run from *start*."""
+    end = start + timedelta(hours=72)
+    return (
+        " &time_control\n"
+        " run_days                            = 3,\n"
+        " run_hours                           = 0,\n"
+        " run_minutes                         = 0,\n"
+        f" start_year                          = {start:%Y},\n"
+        f" start_month                         = {start:%m},\n"
+        f" start_day                           = {start:%d},\n"
+        f" end_year                            = {end:%Y},\n"
+        f" end_month                           = {end:%m},\n"
+        f" end_day                             = {end:%d},\n"
+        " history_interval                    = 60,\n"
+        " /\n"
+    )
 
 
 def _wrf_rsl(start: datetime) -> str:
@@ -373,6 +394,7 @@ def write_files(now: datetime) -> list[Path]:
     forecast = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     files = {
         home / "wrf-baltic" / "rsl.error.0000": _wrf_rsl(forecast),
+        home / "wrf-baltic" / "namelist.input": _wrf_namelist(forecast),
         home / "md" / "energy.xvg": _energy_xvg(now),
         home / "md" / "protein.pdb": _protein_pdb(),
         home / "qc" / "multiqc_report.html": _multiqc_html(now),
@@ -412,6 +434,7 @@ def main() -> int:
     records = build_records(db, now)
     db.usage_records.extend(records)
     db.save_state()
+    _marker(db).write_text(f"{len(records)} jobs seeded {now:%Y-%m-%d %H:%M}\n")
     by_state: dict[str, int] = {}
     for r in records:
         by_state[r.state] = by_state.get(r.state, 0) + 1

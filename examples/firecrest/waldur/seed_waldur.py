@@ -12,23 +12,33 @@ Idempotent: re-running updates what exists. Creates
   - an HPC centre offering (Marketplace.Slurm) connected to FireCREST,
     with partitions, QoS and a small software catalog;
   - two allocations whose backend_id is the Slurm account up.sh seeded:
-    Climate (alice, bob) -> alloc_climate, Genomics (alice) -> alloc_genomics;
+    Climate (alice, bob) -> alloc_climate, Genomics (alice) -> alloc_genomics,
+    limited in CPU-hours and GPU-hours, with monthly usage since January
+    (per user too) so the usage charts and the run-out forecast have data;
   - offering users so the cluster username is the Keycloak login name.
 With AI_ASSISTANT_CREDS (lines "url: …", "token: …", "model: …") the AI
 assistant is enabled against that OpenAI-compatible endpoint.
 """
 
+import datetime
 import os
+import random
 from pathlib import Path
 
 import requests
 from constance import config
+from django.utils import timezone
 from waldur_auth_social.models import IdentityProvider
 from waldur_core.core.models import User
 from waldur_core.permissions.enums import RoleEnum
 from waldur_core.structure.models import Customer, Project
 from waldur_mastermind.marketplace import models as m
-from waldur_mastermind.marketplace.enums import SITE_AGENT_OFFERING, ResourceStates
+from waldur_mastermind.marketplace.enums import (
+    SITE_AGENT_OFFERING,
+    BillingTypes,
+    LimitPeriods,
+    ResourceStates,
+)
 
 KC_PORT = os.environ.get("KC_PORT", "8080")
 FIRECREST_PORT = os.environ.get("FIRECREST_PORT", "8000")
@@ -111,6 +121,20 @@ offering.plugin_options = {
 }
 offering.save(update_fields=["plugin_options"])
 plan, _ = m.Plan.objects.get_or_create(offering=offering, name="Default")
+# What the allocations are limited by. Usage-billed with a limit over the
+# allocation's life, as SLURM site-agent offerings report it.
+components = {}
+for kind, name, unit in (("cpu", "CPU", "CPU-h"), ("gpu", "GPU", "GPU-h")):
+    components[kind], _ = m.OfferingComponent.objects.update_or_create(
+        offering=offering,
+        type=kind,
+        defaults={
+            "name": name,
+            "measured_unit": unit,
+            "billing_type": BillingTypes.USAGE,
+            "limit_period": LimitPeriods.TOTAL,
+        },
+    )
 
 partitions = {
     "debug": {
@@ -193,7 +217,21 @@ for name, description, versions in software:
             )
 
 # --- Allocations and offering users ----------------------------------------------
-for project, account in ((climate, "alloc_climate"), (genomics, "alloc_genomics")):
+offering_users = {}
+for name, user in users.items():
+    offering_users[name], _ = m.OfferingUser.objects.update_or_create(
+        offering=offering, user=user, defaults={"username": name}
+    )
+
+# Monthly usage since January, as the site agent would have reported it:
+# Climate grows towards its limit (the forecast says it runs out early),
+# Genomics stays well inside.
+allocations = (
+    (climate, "alloc_climate", {"cpu": 450_000, "gpu": 6_000}, ("alice", "bob"), 1.0),
+    (genomics, "alloc_genomics", {"cpu": 200_000, "gpu": 2_000}, ("alice",), 0.35),
+)
+today = timezone.localdate()
+for project, account, limits, members, scale in allocations:
     resource, _ = m.Resource.objects.update_or_create(
         offering=offering,
         backend_id=account,
@@ -202,12 +240,41 @@ for project, account in ((climate, "alloc_climate"), (genomics, "alloc_genomics"
             "plan": plan,
             "name": f"{project.name} allocation",
             "state": ResourceStates.OK,
+            "limits": limits,
+            "end_date": datetime.date(today.year, 12, 31),
         },
     )
-for name, user in users.items():
-    m.OfferingUser.objects.update_or_create(
-        offering=offering, user=user, defaults={"username": name}
-    )
+    rng = random.Random(account)  # noqa: S311 -- demo data, not security
+    for month in range(1, today.month + 1):
+        period = datetime.date(today.year, month, 1)
+        # Linear growth with noise; the current month only up to today.
+        share = today.day / 31 if month == today.month else 1
+        for kind, base in (("cpu", 14_000 + month * 4_200), ("gpu", 180 + month * 45)):
+            amount = round(base * scale * share * rng.uniform(0.85, 1.15))
+            usage, _ = m.ComponentUsage.objects.update_or_create(
+                resource=resource,
+                component=components[kind],
+                billing_period=period,
+                defaults={
+                    "usage": amount,
+                    "date": timezone.make_aware(
+                        datetime.datetime.combine(
+                            min(today, period + datetime.timedelta(days=27)),
+                            datetime.time(12),
+                        )
+                    ),
+                },
+            )
+            weights = [rng.uniform(0.3, 1.0) for _ in members]
+            for member, weight in zip(members, weights):
+                m.ComponentUserUsage.objects.update_or_create(
+                    component_usage=usage,
+                    username=member,
+                    defaults={
+                        "user": offering_users[member],
+                        "usage": round(amount * weight / sum(weights)),
+                    },
+                )
 print("offering 'Emulator cluster' with allocations alloc_climate, alloc_genomics")
 
 # --- AI assistant -----------------------------------------------------------

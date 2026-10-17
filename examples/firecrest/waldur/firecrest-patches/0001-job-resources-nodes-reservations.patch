@@ -1,0 +1,250 @@
+FireCREST v2: expose what portals need to chart jobs and the cluster
+
+- Job submission takes the resource requests sbatch would read from #SBATCH
+  lines (nodes, minimum_nodes, tasks, tasks_per_node, cpus_per_task,
+  memory_per_node, time_limit). slurmrestd does not parse #SBATCH, so without
+  them every job runs with the partition defaults.
+- Jobs report time.submission, time.totalCpu (accounting), allocationCpus,
+  requestedMemory and maxRss (largest step peak RSS, accounting).
+- Nodes are read through SlurmNode, mapping free_mem, alloc_idle_cpus and the
+  drain/down reason.
+- Reservations report partition, nodeCount and flags (e.g. MAINT), and no
+  longer require a "Features" key.
+- Job listings accept a 30-day window ("30d") for history charts.
+
+diff --git a/src/lib/scheduler_clients/models.py b/src/lib/scheduler_clients/models.py
+index 9f3e337..da4b5fe 100644
+--- a/src/lib/scheduler_clients/models.py
++++ b/src/lib/scheduler_clients/models.py
+@@ -17,6 +17,7 @@ class JobsTimeWindow(str, Enum):
+     LAST_24_HOURS = "24h"
+     LAST_3_DAYS = "3d"
+     LAST_7_DAYS = "7d"
++    LAST_30_DAYS = "30d"
+ 
+ 
+ # Canonical (amount, unit) duration for each historical time window. `unit`
+@@ -33,6 +34,7 @@ TIME_WINDOW_DURATIONS: Dict[JobsTimeWindow, Tuple[int, str]] = {
+     JobsTimeWindow.LAST_24_HOURS: (24, "hours"),
+     JobsTimeWindow.LAST_3_DAYS: (3, "days"),
+     JobsTimeWindow.LAST_7_DAYS: (7, "days"),
++    JobsTimeWindow.LAST_30_DAYS: (30, "days"),
+ }
+ 
+ 
+@@ -75,6 +77,14 @@ class JobTime(CamelModel):
+     end: Optional[int] = Field(default=None, nullable=True)
+     suspended: Optional[int] = Field(default=None, nullable=True)
+     limit: Optional[int] = Field(default=None, nullable=True)
++    submission: Optional[int] = Field(
++        default=None, nullable=True, description="Submission time (epoch seconds)"
++    )
++    total_cpu: Optional[int] = Field(
++        default=None,
++        nullable=True,
++        description="CPU time consumed by all tasks, in seconds (accounting only)",
++    )
+ 
+ 
+ class JobTask(CamelModel):
+@@ -100,6 +110,18 @@ class JobModel(CamelModel):
+     user: Optional[str]
+     working_directory: str
+     priority: Optional[int] = Field(default=None, nullable=True)
++    allocation_cpus: Optional[int] = Field(
++        default=None, nullable=True, description="CPUs allocated to the job"
++    )
++    requested_memory: Optional[int] = Field(
++        default=None, nullable=True, description="Memory requested, in MiB"
++    )
++    max_rss: Optional[int] = Field(
++        default=None,
++        nullable=True,
++        description="Peak resident memory of the largest step, in bytes "
++        "(accounting only)",
++    )
+ 
+ 
+ class JobMetadataModel(CamelModel):
+@@ -151,6 +173,37 @@ class JobDescriptionModel(CamelModel):
+     constraints: Optional[str] = Field(
+         default=None, description="Job constraints", nullable=True
+     )
++    nodes: Optional[str] = Field(
++        default=None,
++        description="Node count or range, e.g. '4' or '2-4' (sbatch --nodes)",
++        nullable=True,
++    )
++    minimum_nodes: Optional[int] = Field(
++        default=None, description="Minimum node count", nullable=True
++    )
++    tasks: Optional[int] = Field(
++        default=None, description="Number of tasks (sbatch --ntasks)", nullable=True
++    )
++    tasks_per_node: Optional[int] = Field(
++        default=None,
++        description="Tasks per node (sbatch --ntasks-per-node)",
++        nullable=True,
++    )
++    cpus_per_task: Optional[int] = Field(
++        default=None,
++        description="CPUs per task (sbatch --cpus-per-task)",
++        nullable=True,
++    )
++    memory_per_node: Optional[int] = Field(
++        default=None,
++        description="Memory per node in MiB (sbatch --mem)",
++        nullable=True,
++    )
++    time_limit: Optional[int] = Field(
++        default=None,
++        description="Wall time limit in minutes (sbatch --time)",
++        nullable=True,
++    )
+     script: str = Field(default=None, description="Script for the job")
+     script_path: str = Field(
+         default=None, description="Path to the job in target system"
+@@ -178,6 +231,9 @@ class NodeModel(CamelModel):
+     alloc_memory: Optional[int] = Field(default=None, nullable=True)
+     alloc_cpus: Optional[int] = Field(default=None, nullable=True)
+     idle_cpus: Optional[int] = Field(default=None, nullable=True)
++    reason: Optional[str] = Field(
++        default=None, nullable=True, description="Why the node is drained or down"
++    )
+ 
+ 
+ class ReservationModel(CamelModel):
+@@ -187,6 +243,11 @@ class ReservationModel(CamelModel):
+     start_time: int
+     features: Optional[str] = Field(default=None, nullable=True)
+     state: Optional[str] = Field(default=None, nullable=True)
++    partition: Optional[str] = Field(default=None, nullable=True)
++    node_count: Optional[int] = Field(default=None, nullable=True)
++    flags: Optional[List[str]] = Field(
++        default=None, nullable=True, description="Reservation flags, e.g. MAINT"
++    )
+ 
+ 
+ class PartitionModel(CamelModel):
+diff --git a/src/lib/scheduler_clients/slurm/models.py b/src/lib/scheduler_clients/slurm/models.py
+index 9a129a9..8a6e68c 100644
+--- a/src/lib/scheduler_clients/slurm/models.py
++++ b/src/lib/scheduler_clients/slurm/models.py
+@@ -133,12 +133,37 @@ class JobStatusSlurm(JobStatus):
+ 
+ class JobTimeSlurm(JobTime):
+ 
+-    @field_validator("elapsed", "start", "end", "suspended", "limit", mode="before")
++    def __init__(self, **kwargs):
++        # Accounting reports CPU time as time.total {seconds, microseconds}
++        if "total_cpu" not in kwargs and isinstance(kwargs.get("total"), dict):
++            kwargs["total_cpu"] = kwargs["total"].get("seconds")
++        super().__init__(**kwargs)
++
++    @field_validator(
++        "elapsed", "start", "end", "suspended", "limit", "submission", mode="before"
++    )
+     @classmethod
+     def _parse_time(cls, v):
+         return slurm_int_to_int(v)
+ 
+ 
++def _tres_count(tres_list, tres_type: str) -> Optional[int]:
++    for tres in tres_list or []:
++        if tres.get("type") == tres_type and not tres.get("name"):
++            return tres.get("count")
++    return None
++
++
++def _max_rss(steps) -> Optional[int]:
++    """Largest step peak RSS (bytes): sacct's MaxRSS for the job."""
++    values = [
++        _tres_count(((step.get("tres") or {}).get("requested") or {}).get("max"), "mem")
++        for step in steps or []
++    ]
++    values = [v for v in values if v is not None]
++    return max(values) if values else None
++
++
+ class JobTaskSlurm(JobTask):
+ 
+     time: JobTimeSlurm
+@@ -218,8 +243,26 @@ class SlurmJob(JobModel):
+                     end=end,
+                     suspended=suspend_time,
+                     limit=limit,
++                    submission=slurm_int_to_int(kwargs.get("submit_time")),
+                 )
+ 
++        # Resources: accounting has TRES lists, the controller plain counts
++        tres = kwargs.get("tres") or {}
++        if "allocation_cpus" not in kwargs:
++            cpus = _tres_count(tres.get("allocated"), "cpu")
++            if cpus is None and "cpus" in kwargs:
++                cpus = slurm_int_to_int(kwargs["cpus"])
++            kwargs["allocation_cpus"] = cpus or None
++        if "requested_memory" not in kwargs:
++            memory = _tres_count(tres.get("requested"), "mem")
++            if memory is None and "memory_per_node" in kwargs:
++                per_node = slurm_int_to_int(kwargs["memory_per_node"])
++                if per_node:
++                    memory = per_node * max(kwargs.get("allocation_nodes") or 1, 1)
++            kwargs["requested_memory"] = memory or None
++        if "max_rss" not in kwargs and isinstance(kwargs.get("steps"), list):
++            kwargs["max_rss"] = _max_rss(kwargs["steps"])
++
+         # Custom status field definition
+         if "exit_code" in kwargs:
+             interruptSignal = None
+@@ -264,6 +307,16 @@ class SlurmNode(NodeModel):
+         if "state" in kwargs:
+             state = kwargs.get("state", [])
+             kwargs["state"] = [_map_slurm_state(s) for s in state]
++        # slurmrestd names: free_mem (MiB, NO_VAL struct), alloc_idle_cpus,
++        # cpu_load (load average x 100)
++        if "free_memory" not in kwargs and "free_mem" in kwargs:
++            kwargs["free_memory"] = slurm_int_to_int(kwargs["free_mem"])
++        if "idle_cpus" not in kwargs and "alloc_idle_cpus" in kwargs:
++            kwargs["idle_cpus"] = kwargs["alloc_idle_cpus"]
++        if isinstance(kwargs.get("cpu_load"), dict):
++            kwargs["cpu_load"] = slurm_int_to_int(kwargs["cpu_load"])
++        if isinstance(kwargs.get("partitions"), str):
++            kwargs["partitions"] = kwargs["partitions"].split(",")
+         super().__init__(**kwargs)
+ 
+ 
+@@ -305,11 +358,20 @@ class SlurmReservations(ReservationModel):
+     node_list: str = Field(validation_alias=AliasChoices("nodes", "Nodes", "nodeList"))
+     end_time: int = Field(validation_alias=AliasChoices("endTime", "EndTime"))
+     start_time: int = Field(validation_alias=AliasChoices("startTime", "StartTime"))
+-    features: Optional[str] = Field(validation_alias=AliasChoices("Features"))
++    features: Optional[str] = Field(
++        validation_alias=AliasChoices("features", "Features"),
++        default=None,
++        nullable=True,
++    )
+     state: Optional[str] = Field(
+         validation_alias=AliasChoices("state", "State"), default=None, nullable=True
+     )
+ 
++    @field_validator("node_count", mode="before")
++    @classmethod
++    def _parse_count(cls, v):
++        return slurm_int_to_int(v)
++
+     @field_validator("start_time", "end_time", mode="before")
+     @classmethod
+     def _parse_time(cls, v):
+diff --git a/src/lib/scheduler_clients/slurm/slurm_rest_client.py b/src/lib/scheduler_clients/slurm/slurm_rest_client.py
+index e03b84d..3d4eeae 100644
+--- a/src/lib/scheduler_clients/slurm/slurm_rest_client.py
++++ b/src/lib/scheduler_clients/slurm/slurm_rest_client.py
+@@ -329,7 +329,7 @@ class SlurmRestClient(SlurmBaseClient):
+             nodes_result = await response.json()
+             if len(nodes_result["nodes"]) == 0:
+                 return None
+-        return nodes_result["nodes"]
++        return [SlurmNode.model_validate(node) for node in nodes_result["nodes"]]
+ 
+     async def get_reservations(
+         self, username: str, jwt_token: str
