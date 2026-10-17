@@ -17,7 +17,8 @@ RUN apt-get update \
 
 COPY . .
 
-RUN pip install --no-cache-dir ".[ssh]" && chmod +x scripts/docker-entrypoint.sh
+# sonar: Kafka client for slurm-sonar-emulator (synthetic Sonar telemetry).
+RUN pip install --no-cache-dir ".[ssh,sonar]" && chmod +x scripts/docker-entrypoint.sh
 
 # 8080 — Waldur control API, 6820 — slurmrestd emulation,
 # 2222 — SSH filesystem plane (opt-in via SLURM_EMULATOR_ENABLE_SSH=1)
