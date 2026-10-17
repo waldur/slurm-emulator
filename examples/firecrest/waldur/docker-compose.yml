@@ -6,6 +6,15 @@
 #                                              │  slurmrestd REST ─► slurm (emulator :6820)
 #                                              │  SSH filesystem  ─► slurm (emulator :22)
 #
+# Per-job time series, the Norwegian HPC monitoring stack (NordicHPC Sonar ->
+# Kafka -> slurm-monitor):
+#
+#   sonar (slurm-sonar-emulator, reads slurm's state) ─► kafka ─► slurm-monitor-listen
+#                                                                       │
+#   Waldur ─► slurm-monitor-api (REST /api/v2, user's token) ◄── monitor-db (TimescaleDB)
+#
+# The emulator has no nodes, so `sonar` synthesises what Sonar would sample on
+# each node (emulator/telemetry/sonar.py), consistent with the accounting view.
 # Unlike ../ui, Keycloak's public hostname is localhost, so the browser and
 # Waldur reach it without a hosts entry. FireCREST fetches the signing keys
 # over the compose network and does not check the issuer, so tokens issued
@@ -25,6 +34,8 @@ secrets:
 volumes:
   slurm_state:
   slurm_home:
+  timescaledb_data:
+  sonar_state:
 
 services:
   slurm:
@@ -33,7 +44,7 @@ services:
       dockerfile: Dockerfile
     image: slurm-emulator:hpc-workspace-poc
     hostname: slurm
-    environment:
+    environment: &slurm-env
       SLURM_EMULATOR_ENABLE_SSH: "1"
       # Associations are enforced (the default), as on a real cluster: the
       # Waldur allocation's account must exist and hold the user, which
@@ -63,8 +74,8 @@ services:
       - slurm_state:/state
       - slurm_home:/home
     ports:
-      - "127.0.0.1:${SLURM_REST_PORT:-6820}:6820"
-      - "127.0.0.1:${SLURM_SSH_PORT:-2222}:22"
+      - "${BIND_ADDRESS:-127.0.0.1}:${SLURM_REST_PORT:-6820}:6820"
+      - "${BIND_ADDRESS:-127.0.0.1}:${SLURM_SSH_PORT:-2222}:22"
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen(u.Request('http://localhost:6820/slurm/v0.0.45/ping/', headers={'X-SLURM-USER-TOKEN': 'x'}), timeout=2)"]
       interval: 3s
@@ -75,13 +86,13 @@ services:
     image: quay.io/keycloak/keycloak:26.0.7
     env_file: ../ui/keycloak/keycloak.env
     environment:
-      KC_HOSTNAME: "http://localhost:${KC_PORT:-8080}/auth"
+      KC_HOSTNAME: "${KC_PUBLIC_URL:-http://localhost:${KC_PORT:-8080}/auth}"
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
     command: start-dev --http-relative-path /auth --import-realm --health-enabled=true
     volumes:
       - ../ui/keycloak/realm-kcrealm.json:/opt/keycloak/data/import/config.json:ro
     ports:
-      - "127.0.0.1:${KC_PORT:-8080}:8080"
+      - "${BIND_ADDRESS:-127.0.0.1}:${KC_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; echo -e 'GET /auth/health/ready HTTP/1.1\r\nHost: localhost:9000\r\nConnection: close\r\n\r\n' >&3; cat <&3 | grep -q '\"status\": \"UP\"' && exit 0 || exit 1"]
       interval: 2s
@@ -98,6 +109,7 @@ services:
         condition: service_healthy
     environment:
       WALDUR_CLIENT_SECRET: "${WALDUR_CLIENT_SECRET:-waldur-poc-secret}"
+      WALDUR_PUBLIC_URL: "${WALDUR_PUBLIC_URL:-}"
     entrypoint:
       - /bin/sh
       - -c
@@ -113,6 +125,12 @@ services:
         $$kc create clients -r kcrealm -s clientId=waldur -s enabled=true -s publicClient=false \
           -s secret=$$WALDUR_CLIENT_SECRET -s standardFlowEnabled=true -s directAccessGrantsEnabled=true \
           -s 'redirectUris=["*"]' -s 'webOrigins=["*"]' || echo "client waldur exists"
+        if [ -n "$$WALDUR_PUBLIC_URL" ]; then
+          id=$$($$kc get clients -r kcrealm -q clientId=waldur --fields id --format csv --noquotes)
+          $$kc update clients/$$id -r kcrealm \
+            -s "redirectUris=[\"*\",\"$$WALDUR_PUBLIC_URL/*\"]" \
+            -s "webOrigins=[\"*\",\"$$WALDUR_PUBLIC_URL\"]"
+        fi
 
   firecrest:
     build:
@@ -136,4 +154,134 @@ services:
       slurm:
         condition: service_healthy
     ports:
-      - "127.0.0.1:${FIRECREST_PORT:-8000}:5000"
+      - "${BIND_ADDRESS:-127.0.0.1}:${FIRECREST_PORT:-8000}:5000"
+
+  # --- monitoring: Sonar -> Kafka -> slurm-monitor ---
+
+  # Single-node KRaft broker, reachable only on the compose network.
+  kafka:
+    image: apache/kafka:3.9.1
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_NUM_PARTITIONS: "1"
+      # Two weeks: a fresh database re-ingests everything still in Kafka.
+      KAFKA_LOG_RETENTION_HOURS: "336"
+      KAFKA_MESSAGE_MAX_BYTES: "8388608"
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx384m"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  # One-shot: the four Sonar topics, before the listener subscribes (it only
+  # looks back in history on topics that already exist).
+  kafka-topics:
+    image: apache/kafka:3.9.1
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      SONAR_CLUSTER: "${SONAR_CLUSTER:-hpc-demo}"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        for kind in sample sysinfo job cluster; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
+            --topic "$$SONAR_CLUSTER.$$kind" --partitions 1 --replication-factor 1
+        done
+
+  # Not named "timescaledb": slurm-monitor builds its async URL with
+  # uri.replace("timescaledb:", "timescaledb+asyncpg:"), which would also
+  # rewrite a host of that name.
+  monitor-db:
+    image: timescale/timescaledb:2.22.1-pg17
+    environment:
+      POSTGRES_USER: slurmmonitor
+      POSTGRES_PASSWORD: slurmmonitor
+      POSTGRES_DB: slurmmonitor
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slurmmonitor -d slurmmonitor"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  # Kafka -> TimescaleDB. Creates the schema on start (idempotent). Looks back
+  # up to two weeks on its first run; later runs resume from the newest row.
+  slurm-monitor-listen:
+    build: ./slurm-monitor
+    image: slurm-monitor:hpc-workspace-poc
+    restart: unless-stopped
+    depends_on:
+      monitor-db:
+        condition: service_healthy
+      kafka-topics:
+        condition: service_completed_successfully
+    environment:
+      SLURM_MONITOR_DATABASE_URI: timescaledb://slurmmonitor:slurmmonitor@monitor-db:5432/slurmmonitor
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        slurm-monitor db --init &&
+        exec slurm-monitor listen --host kafka --port 9092 \
+          --cluster-name "${SONAR_CLUSTER:-hpc-demo}" --lookback 336 --log-output none
+
+  # REST API (/api/v2) over the same database, for Waldur. Bearer tokens are
+  # checked against Keycloak: the issuer is the public realm URL (what the
+  # users' tokens carry), the keys come over the compose network
+  # (patches/0001). Users see their own jobs; realm role "admin" sees all.
+  slurm-monitor-api:
+    image: slurm-monitor:hpc-workspace-poc
+    restart: unless-stopped
+    depends_on:
+      slurm-monitor-listen:
+        condition: service_started
+    environment:
+      SLURM_MONITOR_DATABASE_URI: timescaledb://slurmmonitor:slurmmonitor@monitor-db:5432/slurmmonitor
+      SLURM_MONITOR_OAUTH_REQUIRED: "true"
+      SLURM_MONITOR_OAUTH_URL: "${KC_PUBLIC_URL:-http://localhost:${KC_PORT:-8080}/auth}"
+      SLURM_MONITOR_OAUTH_REALM: kcrealm
+      SLURM_MONITOR_OAUTH_JWKS: http://keycloak:8080/auth/realms/kcrealm/protocol/openid-connect/certs
+    command: ["restapi", "--host", "0.0.0.0", "--port", "12000"]
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${SLURM_MONITOR_PORT:-12000}:12000"
+
+  # Synthetic Sonar: reads the emulator's state (read-only) and publishes
+  # samples, sysinfo, job and cluster messages. On its first run it backfills
+  # finished jobs of the last SONAR_BACKFILL_DAYS; published job ids live in
+  # the sonar_state volume (`--reset` publishes them again).
+  sonar:
+    image: slurm-emulator:hpc-workspace-poc
+    restart: unless-stopped
+    depends_on:
+      slurm:
+        condition: service_healthy
+      kafka-topics:
+        condition: service_completed_successfully
+    environment:
+      <<: *slurm-env
+      SONAR_CLUSTER: "${SONAR_CLUSTER:-hpc-demo}"
+      SONAR_KAFKA: kafka:9092
+      SONAR_BACKFILL_DAYS: "${SONAR_BACKFILL_DAYS:-14}"
+      SONAR_INTERVAL: "60"
+      SONAR_STATE_DIR: /var/lib/sonar-emulator
+    command: ["slurm-sonar-emulator"]
+    volumes:
+      - slurm_state:/state:ro
+      - sonar_state:/var/lib/sonar-emulator

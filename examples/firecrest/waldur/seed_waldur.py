@@ -46,7 +46,13 @@ from waldur_mastermind.marketplace.enums import (
 KC_PORT = os.environ.get("KC_PORT", "8080")
 FIRECREST_PORT = os.environ.get("FIRECREST_PORT", "8000")
 FIRECREST_URL = f"http://localhost:{FIRECREST_PORT}"
+# slurm-monitor (Sonar samples per job), see the monitoring services in compose.
+MONITOR_URL = f"http://localhost:{os.environ.get('SLURM_MONITOR_PORT', '12000')}/api/v2"
+MONITOR_CLUSTER = os.environ.get("SONAR_CLUSTER", "hpc-demo")
+# Mastermind talks to Keycloak on localhost; browsers may reach it elsewhere
+# (KC_PUBLIC_URL, e.g. behind a reverse proxy), and the issuer follows them.
 REALM = f"http://localhost:{KC_PORT}/auth/realms/kcrealm"
+PUBLIC_REALM = os.environ.get("KC_PUBLIC_URL", f"http://localhost:{KC_PORT}/auth").rstrip("/") + "/realms/kcrealm"
 CLIENT_SECRET = os.environ.get("WALDUR_CLIENT_SECRET", "waldur-poc-secret")
 
 # --- Identity provider ------------------------------------------------------
@@ -62,8 +68,8 @@ IdentityProvider.objects.update_or_create(
         "discovery_url": discovery_url,
         "userinfo_url": discovery["userinfo_endpoint"],
         "token_url": discovery["token_endpoint"],
-        "auth_url": discovery["authorization_endpoint"],
-        "logout_url": discovery.get("end_session_endpoint", ""),
+        "auth_url": f"{PUBLIC_REALM}/protocol/openid-connect/auth",
+        "logout_url": f"{PUBLIC_REALM}/protocol/openid-connect/logout",
         "issuer": discovery["issuer"],
         "jwks_url": discovery["jwks_uri"],
         "label": "HPC centre (Keycloak)",
@@ -73,6 +79,7 @@ IdentityProvider.objects.update_or_create(
     },
 )
 config.FIRECREST_ALLOWED_API_URLS = FIRECREST_URL
+config.SLURM_MONITOR_ALLOWED_API_URLS = MONITOR_URL
 if os.environ.get("HOMEPORT_URL"):
     # Where the OIDC login returns to (one-time code exchanged by homeport).
     config.HOMEPORT_URL = os.environ["HOMEPORT_URL"]
@@ -121,6 +128,9 @@ offering.plugin_options = {
     **(offering.plugin_options or {}),
     "firecrest_api_url": FIRECREST_URL,
     "firecrest_system_name": "emulator",
+    # Per-job performance (GPU, CPU, memory over the run) from slurm-monitor.
+    "slurm_monitor_api_url": MONITOR_URL,
+    "slurm_monitor_cluster_name": MONITOR_CLUSTER,
     # Opt in: the site agent turns published maintenance into Slurm
     # MAINT reservations and imports the cluster's own as drafts.
     "slurm_maintenance_sync_enabled": True,

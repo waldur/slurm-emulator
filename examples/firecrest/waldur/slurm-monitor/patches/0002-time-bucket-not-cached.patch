@@ -1,0 +1,24 @@
+slurm-monitor: honour resolution_in_s on every query
+
+time_bucket() is compiled with its width as a literal in the SQL text, but
+was marked inherit_cache = True. SQLAlchemy then caches the compiled
+statement by shape and reuses the first width for the life of the process:
+after one query at 257 s, a query for 60 s still returns 257 s buckets.
+Marking the function not cacheable makes each query use its own width.
+
+diff --git a/src/slurm_monitor/timescaledb/functions.py b/src/slurm_monitor/timescaledb/functions.py
+index eee2122..9cc19c2 100644
+--- a/src/slurm_monitor/timescaledb/functions.py
++++ b/src/slurm_monitor/timescaledb/functions.py
+@@ -18,7 +18,10 @@ class time_bucket(GenericFunction):
+     identifier = "time_bucket"
+ 
+     type = TIMESTAMP()
+-    inherit_cache = True
++    # The bucket width is written into the SQL text as a literal (see the
++    # compilers below), so a cached compilation would carry the first width
++    # into every later query of the same shape. Not cacheable.
++    inherit_cache = False
+ 
+ 
+ # For TimeScaledb
