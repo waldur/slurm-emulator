@@ -28,6 +28,7 @@ from pathlib import Path
 import requests
 from constance import config
 from django.utils import timezone
+from rest_framework.authtoken.models import Token
 from waldur_auth_social.models import IdentityProvider
 from waldur_core.core.models import User
 from waldur_core.permissions.enums import RoleEnum
@@ -36,7 +37,9 @@ from waldur_mastermind.marketplace import models as m
 from waldur_mastermind.marketplace.enums import (
     SITE_AGENT_OFFERING,
     BillingTypes,
+    ImpactLevel,
     LimitPeriods,
+    MaintenanceState,
     ResourceStates,
 )
 
@@ -118,6 +121,9 @@ offering.plugin_options = {
     **(offering.plugin_options or {}),
     "firecrest_api_url": FIRECREST_URL,
     "firecrest_system_name": "emulator",
+    # Opt in: the site agent turns published maintenance into Slurm
+    # MAINT reservations and imports the cluster's own as drafts.
+    "slurm_maintenance_sync_enabled": True,
 }
 offering.save(update_fields=["plugin_options"])
 plan, _ = m.Plan.objects.get_or_create(offering=offering, name="Default")
@@ -276,6 +282,67 @@ for project, account, limits, members, scale in allocations:
                     },
                 )
 print("offering 'Emulator cluster' with allocations alloc_climate, alloc_genomics")
+
+# --- Site agent identity and planned maintenance ------------------------------
+# The site agent acts as an offering manager with an API token, written to
+# SITE_AGENT_TOKEN_FILE (default: ./site-agent-token) for its config.
+agent_user, _ = User.objects.update_or_create(
+    username="site-agent",
+    # A service identity: its token must not expire like a person's session.
+    defaults={"email": "site-agent@example.org", "is_active": True, "token_lifetime": None},
+)
+agent_user.set_unusable_password()
+agent_user.save()
+offering.add_user_or_skip(agent_user, RoleEnum.OFFERING_MANAGER)
+agent_token, _ = Token.objects.get_or_create(user=agent_user)
+token_file = Path(os.environ.get("SITE_AGENT_TOKEN_FILE", "site-agent-token"))
+token_file.parent.mkdir(parents=True, exist_ok=True)
+token_file.write_text(agent_token.key)
+token_file.chmod(0o600)
+print(f"site agent token written to {token_file}")
+
+day = timezone.localdate()
+for name, offset, hours, impact, partitions, message in (
+    (
+        "Cooling system upgrade",
+        5,
+        12,
+        ImpactLevel.FULL_OUTAGE,
+        [],
+        "The machine room cooling is being replaced. The whole cluster is "
+        "unavailable; jobs that cannot finish before the window wait until it is over.",
+    ),
+    (
+        "GPU firmware update",
+        8,
+        4,
+        ImpactLevel.PARTIAL_OUTAGE,
+        ["gpu"],
+        "New GPU firmware and drivers on the gpu partition. Other partitions keep running.",
+    ),
+):
+    start = timezone.make_aware(
+        datetime.datetime.combine(day + datetime.timedelta(days=offset), datetime.time(6))
+    )
+    maintenance, _ = m.MaintenanceAnnouncement.objects.update_or_create(
+        service_provider=provider,
+        name=name,
+        defaults={
+            "message": message,
+            "scheduled_start": start,
+            "scheduled_end": start + datetime.timedelta(hours=hours),
+            "created_by": agent_user,
+        },
+    )
+    m.MaintenanceAnnouncementOffering.objects.update_or_create(
+        maintenance=maintenance,
+        offering=offering,
+        defaults={"impact_level": impact, "affected_partitions": partitions},
+    )
+    if maintenance.state == MaintenanceState.DRAFT:
+        maintenance.schedule()
+        maintenance.save()
+print("maintenance: cooling upgrade (full outage), GPU firmware (gpu partition)")
 
 # --- AI assistant -----------------------------------------------------------
 creds_path = os.environ.get("AI_ASSISTANT_CREDS")
