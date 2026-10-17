@@ -63,7 +63,7 @@ import random
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Optional
 
 from emulator.core.database import Job, Reservation, SlurmDatabase
 
@@ -386,8 +386,13 @@ def _env_fraction(environment: dict[str, str], key: str) -> Optional[float]:
         return None
 
 
+def _seeded(seed: str) -> random.Random:
+    """A generator seeded from ``seed``, so synthetic figures repeat across reads."""
+    return random.Random(seed)  # noqa: S311 - synthetic data, not security
+
+
 def synthetic_efficiency(
-    job_id: Any, environment: Optional[dict[str, str]] = None
+    job_id: object, environment: Optional[dict[str, str]] = None
 ) -> tuple[float, float]:
     """(CPU efficiency in [0.05, 0.99], memory fraction in [0, 1]) for a job.
 
@@ -396,7 +401,7 @@ def synthetic_efficiency(
     environment's ``SLURM_EMULATOR_CPU_EFFICIENCY`` / ``SLURM_EMULATOR_MEM_FRACTION``
     win when set.
     """
-    rng = random.Random(f"slurm-emulator-efficiency:{job_id}")
+    rng = _seeded(f"slurm-emulator-efficiency:{job_id}")
     pick = rng.random()
     if pick < 0.75:
         cpu = rng.uniform(0.60, 0.98)
@@ -415,14 +420,14 @@ def synthetic_efficiency(
     return min(max(cpu, 0.05), 0.99), min(max(mem, 0.0), 1.0)
 
 
-def synthetic_gpu_use(job_id: Any) -> tuple[float, float]:
+def synthetic_gpu_use(job_id: object) -> tuple[float, float]:
     """(GPU utilisation in [0.02, 0.98], GPU memory fraction in [0.05, 0.98]).
 
     Deterministic from the job id, like ``synthetic_efficiency``: most GPU
     jobs keep their GPUs busy, about a quarter leave them mostly idle
     (input-bound or waiting on the CPU).
     """
-    rng = random.Random(f"slurm-emulator-gpu:{job_id}")
+    rng = _seeded(f"slurm-emulator-gpu:{job_id}")
     util = rng.uniform(0.55, 0.98) if rng.random() < 0.75 else rng.uniform(0.02, 0.35)
     mem = rng.uniform(0.30, 0.98) if util > 0.35 else rng.uniform(0.05, 0.50)
     return util, mem
@@ -495,7 +500,7 @@ def occupancy(
             nodes = [n for n in partition_nodes(partition) if n not in overrides and n not in maint]
             want = round(fraction * len(nodes))
             order = list(nodes)
-            random.Random(f"slurm-emulator-background:{partition}:{window}").shuffle(order)
+            _seeded(f"slurm-emulator-background:{partition}:{window}").shuffle(order)
             taken = 0
             for node in order:
                 if taken >= want:
@@ -574,8 +579,8 @@ def allocate(job: Job, nodes: list[str]) -> None:
 # --- node view ---
 
 
-def _noise(*key: Any) -> float:
-    return random.Random("slurm-emulator-noise:" + ":".join(map(str, key))).random()
+def _noise(*key: object) -> float:
+    return _seeded("slurm-emulator-noise:" + ":".join(map(str, key))).random()
 
 
 @dataclass
@@ -640,7 +645,7 @@ def node_views(database: SlurmDatabase, at: datetime) -> dict[str, NodeView]:
             reason=reason,
             alloc_cpus=min(use.cpus, NODE_CPUS),
             alloc_memory=min(use.mem, NODE_MEM_MB),
-            cpu_load=0 if down else int(round(load * jitter * 100)),
+            cpu_load=0 if down else round(load * jitter * 100),
             free_mem=None if down else max(int(NODE_MEM_MB - used_mem), 0),
             reservation=resv_name,
             gpus_used=NODE_GPUS if use.cpus and _has_gpus(node) else 0,

@@ -121,7 +121,7 @@ def _queue_order(job: Job) -> tuple:
 def _finish(job: Job, run_duration: float) -> None:
     """End a RUNNING job at its planned end (COMPLETED / FAILED / TIMEOUT)."""
     seconds, timed_out = _planned(job, run_duration)
-    assert job.start_time is not None
+    assert job.start_time is not None  # noqa: S101 - only RUNNING jobs, which have one
     job.end_time = job.start_time + timedelta(seconds=seconds)
     job.state = "TIMEOUT" if timed_out else "COMPLETED"
     if job_execution.execution_enabled():
@@ -155,7 +155,7 @@ def advance_job_states(database: SlurmDatabase, time_engine: TimeEngine) -> bool
     cursor = database.sched_cursor
 
     def eligible(job: Job) -> datetime:
-        assert job.submit_time is not None
+        assert job.submit_time is not None  # noqa: S101 - pending() requires it
         at = job.submit_time + run_delay
         return max(at, cursor) if cursor is not None else at
 
@@ -169,7 +169,7 @@ def advance_job_states(database: SlurmDatabase, time_engine: TimeEngine) -> bool
         )
 
     def end_of(job: Job) -> datetime:
-        assert job.start_time is not None
+        assert job.start_time is not None  # noqa: S101 - running() requires it
         return job.start_time + timedelta(seconds=_planned(job, run_duration)[0])
 
     candidates = [end_of(j) for j in running()] + [eligible(j) for j in pending()]
