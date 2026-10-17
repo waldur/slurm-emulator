@@ -11,9 +11,13 @@ FireCREST v2: expose what portals need to chart jobs and the cluster
 - Reservations report partition, nodeCount and flags (e.g. MAINT), and no
   longer require a "Features" key.
 - Job listings accept a 30-day window ("30d") for history charts.
+- Jobs report allocationGpus (gres/gpu), gpuUtilization (gres/gpuutil
+  average of the busiest step, percent summed over a task's GPUs),
+  maxGpuMemory (gres/gpumem peak, bytes) and consumedEnergy (energy TRES,
+  joules) where the site's accounting records them.
 
 diff --git a/src/lib/scheduler_clients/models.py b/src/lib/scheduler_clients/models.py
-index 9f3e337..da4b5fe 100644
+index 9f3e337..acc878c 100644
 --- a/src/lib/scheduler_clients/models.py
 +++ b/src/lib/scheduler_clients/models.py
 @@ -17,6 +17,7 @@ class JobsTimeWindow(str, Enum):
@@ -47,7 +51,7 @@ index 9f3e337..da4b5fe 100644
  
  
  class JobTask(CamelModel):
-@@ -100,6 +110,18 @@ class JobModel(CamelModel):
+@@ -100,6 +110,39 @@ class JobModel(CamelModel):
      user: Optional[str]
      working_directory: str
      priority: Optional[int] = Field(default=None, nullable=True)
@@ -63,10 +67,31 @@ index 9f3e337..da4b5fe 100644
 +        description="Peak resident memory of the largest step, in bytes "
 +        "(accounting only)",
 +    )
++    allocation_gpus: Optional[int] = Field(
++        default=None, nullable=True, description="GPUs allocated to the job"
++    )
++    gpu_utilization: Optional[int] = Field(
++        default=None,
++        nullable=True,
++        description="Average GPU utilisation of the busiest step, percent "
++        "summed over a task's GPUs (accounting with gres/gpuutil only)",
++    )
++    max_gpu_memory: Optional[int] = Field(
++        default=None,
++        nullable=True,
++        description="Peak GPU memory of the largest step, in bytes, summed "
++        "over a task's GPUs (accounting with gres/gpumem only)",
++    )
++    consumed_energy: Optional[int] = Field(
++        default=None,
++        nullable=True,
++        description="Energy consumed by the job, in joules (accounting with "
++        "an acct_gather_energy plugin only)",
++    )
  
  
  class JobMetadataModel(CamelModel):
-@@ -151,6 +173,37 @@ class JobDescriptionModel(CamelModel):
+@@ -151,6 +194,37 @@ class JobDescriptionModel(CamelModel):
      constraints: Optional[str] = Field(
          default=None, description="Job constraints", nullable=True
      )
@@ -104,7 +129,7 @@ index 9f3e337..da4b5fe 100644
      script: str = Field(default=None, description="Script for the job")
      script_path: str = Field(
          default=None, description="Path to the job in target system"
-@@ -178,6 +231,9 @@ class NodeModel(CamelModel):
+@@ -178,6 +252,9 @@ class NodeModel(CamelModel):
      alloc_memory: Optional[int] = Field(default=None, nullable=True)
      alloc_cpus: Optional[int] = Field(default=None, nullable=True)
      idle_cpus: Optional[int] = Field(default=None, nullable=True)
@@ -114,7 +139,7 @@ index 9f3e337..da4b5fe 100644
  
  
  class ReservationModel(CamelModel):
-@@ -187,6 +243,11 @@ class ReservationModel(CamelModel):
+@@ -187,6 +264,11 @@ class ReservationModel(CamelModel):
      start_time: int
      features: Optional[str] = Field(default=None, nullable=True)
      state: Optional[str] = Field(default=None, nullable=True)
@@ -127,10 +152,10 @@ index 9f3e337..da4b5fe 100644
  
  class PartitionModel(CamelModel):
 diff --git a/src/lib/scheduler_clients/slurm/models.py b/src/lib/scheduler_clients/slurm/models.py
-index 9a129a9..8a6e68c 100644
+index 9a129a9..32ae66f 100644
 --- a/src/lib/scheduler_clients/slurm/models.py
 +++ b/src/lib/scheduler_clients/slurm/models.py
-@@ -133,12 +133,37 @@ class JobStatusSlurm(JobStatus):
+@@ -133,12 +133,51 @@ class JobStatusSlurm(JobStatus):
  
  class JobTimeSlurm(JobTime):
  
@@ -156,20 +181,34 @@ index 9a129a9..8a6e68c 100644
 +    return None
 +
 +
-+def _max_rss(steps) -> Optional[int]:
-+    """Largest step peak RSS (bytes): sacct's MaxRSS for the job."""
++def _named_tres_count(tres_list, tres_type: str, name: str) -> Optional[int]:
++    for tres in tres_list or []:
++        if tres.get("type") == tres_type and tres.get("name") == name:
++            return tres.get("count")
++    return None
++
++
++def _step_peak(steps, kind: str, tres_type: str, name: str = "") -> Optional[int]:
++    """Largest value of a step usage TRES (tres.requested.<kind>) over the steps."""
 +    values = [
-+        _tres_count(((step.get("tres") or {}).get("requested") or {}).get("max"), "mem")
++        _named_tres_count(
++            ((step.get("tres") or {}).get("requested") or {}).get(kind), tres_type, name
++        )
 +        for step in steps or []
 +    ]
 +    values = [v for v in values if v is not None]
 +    return max(values) if values else None
 +
 +
++def _max_rss(steps) -> Optional[int]:
++    """Largest step peak RSS (bytes): sacct's MaxRSS for the job."""
++    return _step_peak(steps, "max", "mem")
++
++
  class JobTaskSlurm(JobTask):
  
      time: JobTimeSlurm
-@@ -218,8 +243,26 @@ class SlurmJob(JobModel):
+@@ -218,8 +257,40 @@ class SlurmJob(JobModel):
                      end=end,
                      suspended=suspend_time,
                      limit=limit,
@@ -192,11 +231,25 @@ index 9a129a9..8a6e68c 100644
 +            kwargs["requested_memory"] = memory or None
 +        if "max_rss" not in kwargs and isinstance(kwargs.get("steps"), list):
 +            kwargs["max_rss"] = _max_rss(kwargs["steps"])
++        if "allocation_gpus" not in kwargs:
++            kwargs["allocation_gpus"] = (
++                _named_tres_count(tres.get("allocated"), "gres", "gpu") or None
++            )
++        if "consumed_energy" not in kwargs:
++            kwargs["consumed_energy"] = _tres_count(tres.get("allocated"), "energy") or None
++        if isinstance(kwargs.get("steps"), list):
++            # What the NVML gpu plugin samples (gres/gpuutil, gres/gpumem)
++            kwargs.setdefault(
++                "gpu_utilization", _step_peak(kwargs["steps"], "average", "gres", "gpuutil")
++            )
++            kwargs.setdefault(
++                "max_gpu_memory", _step_peak(kwargs["steps"], "max", "gres", "gpumem")
++            )
 +
          # Custom status field definition
          if "exit_code" in kwargs:
              interruptSignal = None
-@@ -264,6 +307,16 @@ class SlurmNode(NodeModel):
+@@ -264,6 +335,16 @@ class SlurmNode(NodeModel):
          if "state" in kwargs:
              state = kwargs.get("state", [])
              kwargs["state"] = [_map_slurm_state(s) for s in state]
@@ -213,7 +266,7 @@ index 9a129a9..8a6e68c 100644
          super().__init__(**kwargs)
  
  
-@@ -305,11 +358,20 @@ class SlurmReservations(ReservationModel):
+@@ -305,11 +386,20 @@ class SlurmReservations(ReservationModel):
      node_list: str = Field(validation_alias=AliasChoices("nodes", "Nodes", "nodeList"))
      end_time: int = Field(validation_alias=AliasChoices("endTime", "EndTime"))
      start_time: int = Field(validation_alias=AliasChoices("startTime", "StartTime"))

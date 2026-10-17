@@ -67,6 +67,36 @@ def test_seeds_history_once(seed, state_env):
     assert len(db.usage_records) == len(records)
 
 
+def test_gpu_jobs_report_nvml_usage(seed, state_env):
+    """GPU jobs' batch step carries gres/gpuutil (average) and gres/gpumem (max).
+
+    What the NVML plugin samples per task, summed over its GPUs
+    (slurm://src/plugins/gpu/nvml/gpu_nvml.c#gpu_p_usage_read).
+    """
+    assert seed.main() == 0
+    db = SlurmDatabase()
+    db.load_state()
+    ran = [r for r in db.usage_records if r.node_count]
+
+    def step_tres(record, kind):
+        step = schemas.dbd_job_to_dict(record)["steps"][0]
+        return {f"{t['type']}/{t['name']}": t["count"] for t in step["tres"]["requested"][kind]}
+
+    gpu = next(r for r in ran if r.partition == "gpu")
+    util = step_tres(gpu, "average")["gres/gpuutil"]
+    assert 0 < util <= 100 * schemas._NODE_GPUS
+    assert step_tres(gpu, "max")["gres/gpumem"] > 0
+    allocated = {
+        f"{t['type']}/{t['name']}".rstrip("/"): t["count"]
+        for t in schemas.dbd_job_to_dict(gpu)["tres"]["allocated"]
+    }
+    assert allocated["gres/gpu"] == schemas._NODE_GPUS * gpu.node_count
+    assert allocated["energy"] == gpu.raw_tres["energy"] > 0
+    cpu = next(r for r in ran if r.partition == "batch")
+    assert "gres/gpuutil" not in step_tres(cpu, "average")
+    assert "gres/gpumem" not in step_tres(cpu, "max")
+
+
 def test_writes_sample_files(seed, state_env):
     seed.main()
     home = state_env / "fs" / "home" / "alice"

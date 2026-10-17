@@ -51,6 +51,8 @@ Intentional deviations (test fixture, not a scheduler):
 * CPU load, free memory, CPU time and MaxRSS are synthetic: each job gets a
   deterministic CPU efficiency and memory fraction from its id
   (``synthetic_efficiency``), overridable per job through its environment.
+  GPU jobs likewise get a GPU utilisation and GPU memory fraction
+  (``synthetic_gpu_use``), what the NVML plugin would sample.
 """
 
 from __future__ import annotations
@@ -69,6 +71,7 @@ from emulator.core.database import Job, Reservation, SlurmDatabase
 NODE_CPUS = 64
 NODE_MEM_MB = 512 * 1024
 NODE_GPUS = 4
+GPU_MEM_MB = 96 * 1024
 DEF_MEM_PER_CPU_MB = NODE_MEM_MB // NODE_CPUS
 # Memory the OS itself holds on an idle node (for ``free_mem``).
 OS_MEM_MB = 3 * 1024
@@ -410,6 +413,19 @@ def synthetic_efficiency(
     if mem_override is not None:
         mem = mem_override
     return min(max(cpu, 0.05), 0.99), min(max(mem, 0.0), 1.0)
+
+
+def synthetic_gpu_use(job_id: Any) -> tuple[float, float]:
+    """(GPU utilisation in [0.02, 0.98], GPU memory fraction in [0.05, 0.98]).
+
+    Deterministic from the job id, like ``synthetic_efficiency``: most GPU
+    jobs keep their GPUs busy, about a quarter leave them mostly idle
+    (input-bound or waiting on the CPU).
+    """
+    rng = random.Random(f"slurm-emulator-gpu:{job_id}")
+    util = rng.uniform(0.55, 0.98) if rng.random() < 0.75 else rng.uniform(0.02, 0.35)
+    mem = rng.uniform(0.30, 0.98) if util > 0.35 else rng.uniform(0.05, 0.50)
+    return util, mem
 
 
 def job_efficiency(job: Job) -> tuple[float, float]:

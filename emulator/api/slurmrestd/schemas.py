@@ -24,11 +24,13 @@ from emulator.commands.sacct import (
     SacctEmulator,
 )
 from emulator.core.cluster_model import (
+    GPU_MEM_MB,
     NodeView,
     compress_hostlist,
     expand_hostlist,
     job_request,
     partition_has_gpus,
+    synthetic_gpu_use,
 )
 from emulator.core.database import (
     QOS,
@@ -44,7 +46,15 @@ from emulator.slurm_version import at_least
 
 # Canonical TRES ids as initialized by slurmdbd (emulator/core/tres.py);
 # dynamic ids are resolved against the database's TRES list when one is given.
-_TRES_IDS = {**STATIC_TRES_IDS, "gres/gpu": DYNAMIC_TRES_FIRST_ID}
+# gres/gpumem and gres/gpuutil exist where AccountingStorageTRES lists them
+# (slurm://src/interfaces/gpu.c#gpu_get_tres_pos); they are rendered only in
+# GPU jobs' step usage, not in the database's TRES list.
+_TRES_IDS = {
+    **STATIC_TRES_IDS,
+    "gres/gpu": DYNAMIC_TRES_FIRST_ID,
+    "gres/gpumem": DYNAMIC_TRES_FIRST_ID + 1,
+    "gres/gpuutil": DYNAMIC_TRES_FIRST_ID + 2,
+}
 
 
 def uint_no_val(number: Optional[int] = None, infinite: bool = False) -> dict[str, Any]:
@@ -333,6 +343,12 @@ def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) 
     (slurm://src/plugins/data_parser/v0.0.45/parsers.c#STEP_TRES_REQ_MAX@26.05+,
     slurm://src/sacct/print.c#PRINT_MAXRSS). A timed-out job's batch step is
     CANCELLED by the time-limit signal.
+
+    A GPU job's step also carries what the NVML plugin samples per task,
+    summed over the task's GPUs (slurm://src/plugins/gpu/nvml/gpu_nvml.c#gpu_p_usage_read):
+    ``gres/gpuutil`` (SM utilisation, percent) in ``tres/requested/average``
+    and ``gres/gpumem`` (bytes) in ``tres/requested/max``. The batch task runs
+    on the first node, so those are that node's GPUs.
     """
     first_node = (expand_hostlist(record.node_list) or ["node001"])[0]
     state = record.state or "COMPLETED"
@@ -347,6 +363,19 @@ def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) 
             "node": first_node,
         }
     ]
+    average: list[dict[str, Any]] = []
+    if partition_has_gpus(record.partition):
+        util, mem_fraction = synthetic_gpu_use(record.job_id)
+        average = [tres_entry("gres/gpuutil", round(util * 100 * _NODE_GPUS))]
+        peak.append(
+            {
+                **tres_entry(
+                    "gres/gpumem", int(mem_fraction * GPU_MEM_MB * _NODE_GPUS) * 1024 * 1024
+                ),
+                "task": 0,
+                "node": first_node,
+            }
+        )
     cpus_on_node = min(record.alloc_cpus, _NODE_CPUS) if record.alloc_cpus else _NODE_CPUS
     mem_on_node = record.req_mem_mb or cpus_on_node * (_NODE_MEM_GB * 1024 // _NODE_CPUS)
     return {
@@ -378,7 +407,7 @@ def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) 
             "stdout": record.standard_output,
         },
         "tres": {
-            "requested": {"max": peak, "min": peak, "average": [], "total": []},
+            "requested": {"max": peak, "min": peak, "average": average, "total": []},
             "consumed": {"max": [], "min": [], "average": [], "total": []},
             "allocated": tres_list_from_dict({"cpu": cpus_on_node, "mem": mem_on_node, "node": 1}),
         },
@@ -427,6 +456,11 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
             requested["gres/gpu"] = _NODE_GPUS * max(nodes, 1)
             if nodes:
                 allocated["gres/gpu"] = _NODE_GPUS * nodes
+        # Consumed energy (joules) sits in the job's allocated TRES, where
+        # sacct's ConsumedEnergyRaw reads it
+        # (slurm://src/sacct/print.c#PRINT_CONSUMED_ENERGY_RAW).
+        if nodes and record.raw_tres.get("energy"):
+            allocated["energy"] = record.raw_tres["energy"]
         total = record.cpu_time_seconds
         system = total * 0.04
         cpu = {
