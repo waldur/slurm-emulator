@@ -339,7 +339,12 @@ def _scontrol(emu, args: list[str]) -> tuple[str, str, int]:
             f"   WorkDir={wd}\n"
         )
         return out, "", 0
-    return "", "scontrol: unsupported subcommand\n", 1
+    # Reservations (create/update/delete/show) go through the same
+    # emulator as the CLI dispatcher (emulator/commands/scontrol.py).
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        out = emu.scontrol.handle_command(args)
+    return out, err.getvalue(), emu.scontrol.exit_code
 
 
 # --- Shell (filesystem) dispatch ---

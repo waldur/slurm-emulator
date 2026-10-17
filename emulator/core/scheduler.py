@@ -100,6 +100,19 @@ def _planned(job: Job, run_duration: float) -> tuple[float, bool]:
     return run, False
 
 
+def expected_end(job: Job) -> Optional[datetime]:
+    """When a RUNNING job's allocation ends, as slurmctld sees it.
+
+    slurmctld sets a running job's ``end_time`` to start + time limit
+    (slurm://src/slurmctld/job_mgr.c#_job_timed_out); a job without a
+    limit is taken at its emulated run length, as the scheduler does.
+    """
+    if job.start_time is None:
+        return None
+    seconds = _limit_seconds(job) or _planned(job, _run_duration())[0]
+    return job.start_time + timedelta(seconds=seconds)
+
+
 def _queue_order(job: Job) -> tuple:
     jid = int(job.job_id) if str(job.job_id).isdigit() else 0
     return (job.submit_time.timestamp() if job.submit_time else 0.0, jid)

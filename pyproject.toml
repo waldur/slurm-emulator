@@ -64,6 +64,7 @@ sshare = "emulator.commands.dispatcher:sshare_main"
 sreport = "emulator.commands.dispatcher:sreport_main"
 sinfo = "emulator.commands.dispatcher:sinfo_main"
 scancel = "emulator.commands.dispatcher:scancel_main"
+scontrol = "emulator.commands.dispatcher:scontrol_main"
 
 [project.urls]
 Homepage = "https://waldur.com"

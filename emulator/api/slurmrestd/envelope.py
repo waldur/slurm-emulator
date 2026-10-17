@@ -14,6 +14,7 @@ from typing import Any, Optional
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from emulator.core import reservations
 from emulator.core.accounting import ESLURM_INVALID_ACCOUNT, ESLURM_USER_ID_UNKNOWN
 from emulator.slurm_version import current
 
@@ -70,6 +71,9 @@ _STRERROR = {
     ESLURM_REST_UNKNOWN_URL_METHOD: "Unknown HTTP method requested on known URL endpoint",
     ESLURM_REST_AUTH_FAIL: "Authentication failure",
     ESLURM_REST_BAD_REQUEST: "Request failed to be processed",
+    # Reservation write errnos (ESLURM_NODES_BUSY, ESLURM_RESERVATION_* …),
+    # raised by emulator/core/reservations.py.
+    **reservations.STRERROR,
 }
 
 # http_status_from_error() subset (slurm://src/common/http.c#http_status_from_error@25.11+,

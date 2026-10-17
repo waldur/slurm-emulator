@@ -295,7 +295,13 @@ uv run slurmrestd-emulator
 - `/slurm/v0.0.45/...` — controller read paths: `jobs` (+ `DELETE
   /job/{job_id}` as the `scancel` equivalent), `nodes`, `partitions`
   (static topology matching `sinfo`), `shares`, `ping`, `diag`, `conf`;
-  `reservations`/`licenses` are empty stubs.
+  `reservations` (from `SLURM_EMULATOR_RESERVATIONS`, plus from 25.05
+  `POST /reservation`, `POST /reservations/` and `DELETE
+  /reservation/{name}` with slurmctld's checks — see
+  `emulator/core/reservations.py`); `licenses` is an empty stub.
+  `scontrol create|update|delete|show reservation` works through the
+  CLI dispatcher and the SSH plane on the same state; reservations made
+  that way survive the env-var sync.
 - `/openapi.json`, `/openapi`, `/openapi/v3` — generated self-description.
 
 Responses use the real envelope (`meta`/`errors`/`warnings`, payload

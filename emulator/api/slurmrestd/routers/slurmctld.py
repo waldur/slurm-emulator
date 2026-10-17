@@ -5,11 +5,21 @@ equivalent). Nodes/partitions are served from the static topology in
 schemas.py — the same picture sinfo paints — with each node's live state
 (allocations, DRAIN/DOWN overrides, background load, reservations) from
 ``emulator/core/cluster_model.py``. Reservations come from
-``SLURM_EMULATOR_RESERVATIONS``; licenses are an empty-list stub.
+``SLURM_EMULATOR_RESERVATIONS`` and, from 25.05, from ``POST /reservation``,
+``POST /reservations/`` and ``DELETE /reservation/{name}``
+(``emulator/core/reservations.py`` holds the slurmctld side); licenses are an
+empty-list stub.
+
+Intentional deviation: ``POST /reservation(s)`` ignores ``core_count``,
+``tres``, ``licenses``, ``burst_buffer``, ``features`` and
+``max_start_delay`` instead of reserving cores or licenses
+(slurm://src/slurmctld/reservation.c#create_resv supports them).
 """
 
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Request
@@ -19,8 +29,12 @@ from emulator.api.slurmrestd.auth import slurmrestd_auth
 from emulator.api.slurmrestd.envelope import (
     ESLURM_INVALID_JOB_ID,
     ESLURM_RESERVATION_INVALID,
+    ESLURM_REST_INVALID_QUERY,
+    ESLURM_REST_UNKNOWN_URL,
+    ESLURM_REST_UNKNOWN_URL_METHOD,
     ESLURM_USER_ID_UNKNOWN,
     SLURMCTLD_PLUGIN,
+    SlurmrestdRejectError,
     found_nothing_warning,
     make_response,
     slurm_error,
@@ -37,9 +51,24 @@ from emulator.api.slurmrestd.schemas import (
     uint_no_val,
 )
 from emulator.api.slurmrestd.state import StateDep
+from emulator.commands.slurm_time import parse_time_spec
 from emulator.core.accounting import admit_job
-from emulator.core.cluster_model import node_views, sync_reservations
+from emulator.core.cluster_model import expand_hostlist, node_views, sync_reservations
 from emulator.core.database import Job, SlurmDatabase
+from emulator.core.reservations import (
+    DURATION_INFINITE,
+    ESLURM_NODES_BUSY,
+    ReservationDesc,
+    ReservationDescError,
+    ReservationError,
+    create_reservation,
+    delete_reservation,
+    order_flags,
+    update_reservation,
+    validate_create_desc,
+)
+from emulator.core.reservations import FLAG_NAMES as RESV_FLAG_NAMES
+from emulator.core.reservations import find as find_reservation
 from emulator.core.scheduler import advance_job_states, job_clock_now
 from emulator.slurm_version import at_least
 
@@ -574,6 +603,375 @@ async def get_reservation(
         {"reservations": matched, "last_update": uint_no_val(state.now_ts())},
         warnings=warnings,
     )
+
+
+# --- reservation writes (25.05+) ---
+
+
+class _DescParseError(ValueError):
+    """A RESERVATION_DESC_MSG field the data_parser would refuse."""
+
+
+def _desc_int(value: object) -> Optional[int]:
+    """UINT32_NO_VAL: plain number, numeric string or ``{set, infinite, number}``."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise _DescParseError(value)
+    if isinstance(value, dict):
+        if value.get("infinite"):
+            return DURATION_INFINITE
+        if not value.get("set", True):
+            return None
+        value = value.get("number")
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value)
+    raise _DescParseError(value)
+
+
+def _desc_time(value: object, now: datetime) -> Optional[datetime]:
+    """TIMESTAMP_NO_VAL: UNIX time, ``{set, number}`` or a parse_time() string.
+
+    slurm://src/plugins/data_parser/v0.0.45/parsers.c#_parse_timestamp@26.05+
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip().lstrip("-").isdigit():
+        try:
+            return parse_time_spec(value, now)
+        except ValueError as exc:
+            raise _DescParseError(value) from exc
+    number = _desc_int(value)
+    if number is None or number == DURATION_INFINITE:
+        return None
+    return datetime.fromtimestamp(number)  # noqa: DTZ006 - naive local, like the job clock
+
+
+def _desc_csv(value: object) -> Optional[str]:
+    """CSV_STRING / HOSTLIST_STRING: a comma string or a list of strings."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return ",".join(value)
+    raise _DescParseError(value)
+
+
+def _desc_str(value: object) -> Optional[str]:
+    if value is None or isinstance(value, str):
+        return value
+    raise _DescParseError(value)
+
+
+def _desc_flags(value: object) -> Optional[list[str]]:
+    """RESERVATION_FLAGS names (slurm://src/plugins/data_parser/v0.0.45/parsers.c#RESERVATION_FLAGS@26.05+)."""
+    if value is None:
+        return None
+    items = value.split(",") if isinstance(value, str) else value
+    if not isinstance(items, list):
+        raise _DescParseError(value)
+    flags = []
+    for item in items:
+        name = str(item).strip().upper()
+        if name not in RESV_FLAG_NAMES:
+            raise _DescParseError(item)
+        flags.append(name)
+    return flags or None
+
+
+def _parse_resv_desc(raw: object, now: datetime) -> ReservationDesc:
+    """RESERVATION_DESC_MSG (slurm://src/plugins/data_parser/v0.0.45/parsers.c#RESERVATION_DESC_MSG@26.05+).
+
+    Core/TRES/license/burst-buffer/feature fields are accepted and ignored
+    (whole-node reservations only, see emulator/core/reservations.py).
+    """
+    if not isinstance(raw, dict):
+        raise _DescParseError(raw)
+    purge = raw.get("purge_completed")
+    if purge is not None and not isinstance(purge, dict):
+        raise _DescParseError(purge)
+    return ReservationDesc(
+        name=_desc_str(raw.get("name")) or None,
+        start_time=_desc_time(raw.get("start_time"), now),
+        end_time=_desc_time(raw.get("end_time"), now),
+        duration=_desc_int(raw.get("duration")),
+        node_list=_desc_csv(raw.get("node_list")) or None,
+        node_cnt=_desc_int(raw.get("node_count")),
+        partition=_desc_str(raw.get("partition")),
+        flags=_desc_flags(raw.get("flags")),
+        users=_desc_csv(raw.get("users")) or None,
+        accounts=_desc_csv(raw.get("accounts")) or None,
+        groups=_desc_csv(raw.get("groups")) or None,
+        comment=_desc_str(raw.get("comment")),
+    )
+
+
+def _parse_resv_list(raw: object) -> Optional[list]:
+    """RESERVATION_MOD_REQ: ``{"reservations": [...]}``; ``None`` when the key is missing."""
+    if not isinstance(raw, dict):
+        raise _DescParseError(raw)
+    items = raw.get("reservations")
+    if items is not None and not isinstance(items, list):
+        raise _DescParseError(items)
+    return items
+
+
+def _ts_no_val(value: Optional[datetime]) -> dict[str, Any]:
+    return uint_no_val(int(value.timestamp())) if value else uint_no_val()
+
+
+def _desc_to_dict(desc: ReservationDesc) -> dict[str, Any]:
+    """Dump of the request as OPENAPI_RESERVATION_MOD_RESP echoes it.
+
+    The handler dumps its own (parsed) resv_desc_msg_t, not the stored
+    record (slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_mod_reservation@25.05+):
+    CSV_STRING / HOSTLIST_STRING as lists, NO_VAL numbers and timestamps as
+    ``{set, infinite, number}``, unset flags as ``[]``.
+    """
+
+    def csv(value: Optional[str]) -> list[str]:
+        return [v for v in (value or "").split(",") if v]
+
+    def no_val(value: Optional[int]) -> dict[str, Any]:
+        if value == DURATION_INFINITE:
+            return uint_no_val(infinite=True)
+        return uint_no_val(value)
+
+    node_list = desc.node_list or ""
+    hosts = ["ALL"] if node_list.upper() == "ALL" else expand_hostlist(node_list)
+    return {
+        "accounts": csv(desc.accounts),
+        "burst_buffer": "",
+        "comment": desc.comment or "",
+        "core_count": uint_no_val(),
+        "duration": no_val(desc.duration),
+        "end_time": _ts_no_val(desc.end_time),
+        "features": "",
+        "flags": order_flags(list(desc.flags or [])),
+        "groups": csv(desc.groups),
+        "licenses": [],
+        "max_start_delay": uint_no_val(),
+        "name": desc.name or "",
+        "node_count": no_val(desc.node_cnt),
+        "node_list": hosts,
+        "partition": desc.partition or "",
+        "purge_completed": {"time": uint_no_val()},
+        "start_time": _ts_no_val(desc.start_time),
+        "tres": [],
+        "users": csv(desc.users),
+    }
+
+
+def _mod_one(db: SlurmDatabase, desc: ReservationDesc, now: datetime) -> Optional[dict[str, Any]]:
+    """Create or update one reservation; the error entry on failure.
+
+    Exists -> update, else validate + create
+    (slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_create_or_update_each_resv@25.05+).
+    """
+    name = desc.name or ""
+    if find_reservation(db, desc.name) is not None:
+        try:
+            update_reservation(db, desc, now)
+        except ReservationError as exc:
+            return slurm_error(
+                f"Error updating reservation {name}", exc.errno, "slurm_update_reservation"
+            )
+        return None
+    try:
+        validate_create_desc(desc)
+    except ReservationDescError as exc:
+        return slurm_error(str(exc), ESLURM_RESERVATION_INVALID, "validate_resv_create_desc")
+    try:
+        create_reservation(db, desc, now)
+    except ReservationError as exc:
+        # slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_create_resv@25.05+
+        if exc.errno == ESLURM_NODES_BUSY and not desc.node_list:
+            text = (
+                f"Error creating reservation {name}. Note, unless nodes are directly "
+                "requested a reservation must exist in a single partition. If no "
+                "partition is requested the default partition is assumed."
+            )
+        else:
+            text = f"Error creating reservation  {name}"
+        return slurm_error(text, exc.errno, "slurm_create_reservation")
+    return None
+
+
+async def _raw_body(request: Request) -> object:
+    body = await request.body()
+    if not body.strip():
+        return None
+    try:
+        return json.loads(body)
+    except ValueError:
+        return _BAD_BODY
+
+
+_BAD_BODY = object()
+
+
+def _resv_write_state(state) -> datetime:
+    """Bring jobs and env reservations up to date; return the job-clock now."""
+    db = state.database
+    if advance_job_states(db, state.time_engine):
+        state.commit()
+    now = job_clock_now(state.time_engine)
+    sync_reservations(db, now)
+    return now
+
+
+@router.post("/reservation")
+async def post_reservation(request: Request, state: StateDep):
+    """Create or update one reservation (25.05+).
+
+    slurm://src/slurmrestd/plugins/openapi/slurmctld/api.c#"create or update a reservation"@25.05+,
+    slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_mod_reservation@25.05+.
+    Earlier releases have no such path.
+    """
+    if not at_least("25.05"):
+        raise SlurmrestdRejectError(ESLURM_REST_UNKNOWN_URL)
+    raw = await _raw_body(request)
+    if raw is None:
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    "unexpected empty query for reservation creation",
+                    ESLURM_REST_INVALID_QUERY,
+                    "_parse_resv_desc",
+                )
+            ],
+        )
+    now = _resv_write_state(state)
+    try:
+        desc = _parse_resv_desc(raw, now)  # a non-JSON body is not a dict either
+    except _DescParseError:
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    "Rejecting request. Failure parsing parameters",
+                    ESLURM_REST_INVALID_QUERY,
+                    "_parse_resv_desc",
+                )
+            ],
+        )
+    if not desc.name:
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    "Reservation must be given.", ESLURM_RESERVATION_INVALID, "_mod_reservation"
+                )
+            ],
+        )
+    error = _mod_one(state.database, desc, now)
+    if error is not None:
+        return _respond(request, state, errors=[error])
+    state.commit()
+    return _respond(request, state, {"reservations": [_desc_to_dict(desc)]})
+
+
+@router.post("/reservations/")
+async def post_reservations(request: Request, state: StateDep):
+    """Create or update several reservations (25.05+).
+
+    slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_mod_reservations@25.05+:
+    every description needs a name before anything is applied; then each is
+    created or updated in turn, the successful ones stay, and any error
+    drops the echo from the response.
+    """
+    if not at_least("25.05"):
+        raise SlurmrestdRejectError(ESLURM_REST_UNKNOWN_URL_METHOD)
+    raw = await _raw_body(request)
+    empty = "No reservation descriptions specified in reservations array"
+    if raw is None:
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    "unexpected empty query for reservation creation",
+                    ESLURM_REST_INVALID_QUERY,
+                    "_parse_resv_desc_list",
+                )
+            ],
+        )
+    now = _resv_write_state(state)
+    try:
+        items = _parse_resv_list(raw)
+        descs = [_parse_resv_desc(item, now) for item in items or []]
+    except _DescParseError:
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    "Rejecting request. Failure parsing parameters",
+                    ESLURM_REST_INVALID_QUERY,
+                    "_parse_resv_desc_list",
+                )
+            ],
+        )
+    if items is None:
+        return _respond(
+            request,
+            state,
+            errors=[slurm_error(empty, ESLURM_REST_INVALID_QUERY, "_parse_resv_desc_list")],
+        )
+    warnings = [] if descs else [{"description": empty, "source": "_parse_resv_desc_list"}]
+    if any(not d.name for d in descs):
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    "Reservation must be given", ESLURM_RESERVATION_INVALID, "_check_resv_name"
+                )
+            ],
+        )
+    errors = [e for e in (_mod_one(state.database, d, now) for d in descs) if e is not None]
+    if len(errors) < len(descs):
+        state.commit()
+    if errors:
+        return _respond(request, state, errors=errors, warnings=warnings)
+    return _respond(
+        request, state, {"reservations": [_desc_to_dict(d) for d in descs]}, warnings=warnings
+    )
+
+
+@router.delete("/reservation/{reservation_name}")
+async def delete_reservation_route(reservation_name: str, request: Request, state: StateDep):
+    """Delete a reservation (25.05+).
+
+    slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_delete_resv@25.05+;
+    the response is the bare OPENAPI_RESP envelope.
+    """
+    if not at_least("25.05"):
+        raise SlurmrestdRejectError(ESLURM_REST_UNKNOWN_URL_METHOD)
+    _resv_write_state(state)
+    try:
+        delete_reservation(state.database, reservation_name)
+    except ReservationError as exc:
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    f"Error deleting reservation {reservation_name}",
+                    exc.errno,
+                    "slurm_delete_reservation",
+                )
+            ],
+        )
+    state.commit()
+    return _respond(request, state)
 
 
 @router.get("/licenses/")

@@ -8,6 +8,7 @@ from emulator import __version__
 from emulator.api.slurmrestd.schemas import PARTITION_RANGES
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacctmgr import SacctmgrEmulator
+from emulator.commands.scontrol import ScontrolEmulator
 from emulator.commands.sreport import SreportEmulator
 from emulator.commands.sshare import SshareEmulator
 from emulator.core import nss
@@ -30,6 +31,7 @@ class SlurmEmulator:
         self.sacct = SacctEmulator(self.database, self.time_engine)
         self.sshare = SshareEmulator(self.database, self.time_engine)
         self.sreport = SreportEmulator(self.database, self.time_engine)
+        self.scontrol = ScontrolEmulator(self.database, self.time_engine)
 
         # Load existing state
         self.database.load_state()
@@ -107,6 +109,8 @@ class SlurmEmulator:
                 return self.sshare.handle_command(args)
             if command_name == "sreport":
                 return self.sreport.handle_command(args)
+            if command_name == "scontrol":
+                return self.scontrol.handle_command(args)
             if command_name == "sinfo":
                 return self._handle_sinfo(args)
             if command_name == "scancel":
@@ -372,6 +376,19 @@ def scancel_main():
         sys.exit(1)
 
 
+def scontrol_main():
+    """Entry point for scontrol (reservations; see emulator/commands/scontrol.py)."""
+    emulator = get_emulator()
+    try:
+        output = emulator.execute_command("scontrol", sys.argv[1:])
+    except Exception as e:
+        print(f"scontrol: error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if output:
+        print(output, end="")
+    sys.exit(emulator.scontrol.exit_code)
+
+
 if __name__ == "__main__":
     # Determine which command was called based on argv[0]
     command_name = Path(sys.argv[0]).name
@@ -388,6 +405,10 @@ if __name__ == "__main__":
         sinfo_main()
     elif command_name == "scancel":
         scancel_main()
+    elif command_name == "scontrol" or sys.argv[1:2] == ["scontrol"]:
+        if command_name != "scontrol":
+            sys.argv = sys.argv[1:]
+        scontrol_main()
     else:
         emulator = get_emulator()
         args = sys.argv[1:]

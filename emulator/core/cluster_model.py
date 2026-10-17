@@ -258,7 +258,9 @@ def parse_reservation_spec(entry: str, anchor: datetime) -> Optional[Reservation
     if len(fields) < 4 or not fields[0]:
         return None
     name, where, offset, duration = fields[:4]
-    flags = [f.strip().upper() for f in fields[4].split(",") if f.strip()] if len(fields) > 4 else []
+    flags = (
+        [f.strip().upper() for f in fields[4].split(",") if f.strip()] if len(fields) > 4 else []
+    )
     users = accounts = ""
     for extra in fields[5:]:
         key, _, value = extra.partition("=")
@@ -298,9 +300,16 @@ def sync_reservations(database: SlurmDatabase, now: datetime) -> bool:
     Offsets resolve against ``reservation_anchor`` -- set the first time any
     reservation is configured -- so absolute times persist in the state file
     and do not drift on every request. Returns True if anything changed.
+
+    Only reservations of origin ``env`` are touched: ones created through
+    slurmrestd or scontrol (``emulator/core/reservations.py``) stay until
+    deleted, and an env entry whose name such a reservation already holds
+    is skipped, as slurmctld refuses a duplicate name
+    (slurm://src/slurmctld/reservation.c#create_resv).
     """
     entries = [e.strip() for e in os.environ.get(RESERVATIONS_ENV, "").split(";") if e.strip()]
-    if not entries and not database.reservations:
+    owned = {name for name, r in database.reservations.items() if r.origin == "env"}
+    if not entries and not owned:
         return False
     changed = False
     if entries and database.reservation_anchor is None:
@@ -311,13 +320,13 @@ def sync_reservations(database: SlurmDatabase, now: datetime) -> bool:
         name = entry.split(":", 1)[0].strip()
         if name:
             wanted[name] = entry
-    for name in list(database.reservations):
+    for name in owned:
         if name not in wanted:
             del database.reservations[name]
             changed = True
     for name, entry in wanted.items():
         existing = database.reservations.get(name)
-        if existing is not None and existing.spec == entry:
+        if existing is not None and (existing.origin != "env" or existing.spec == entry):
             continue
         anchor = database.reservation_anchor or now
         resv = parse_reservation_spec(entry, anchor)
@@ -374,7 +383,9 @@ def _env_fraction(environment: dict[str, str], key: str) -> Optional[float]:
         return None
 
 
-def synthetic_efficiency(job_id: Any, environment: Optional[dict[str, str]] = None) -> tuple[float, float]:
+def synthetic_efficiency(
+    job_id: Any, environment: Optional[dict[str, str]] = None
+) -> tuple[float, float]:
     """(CPU efficiency in [0.05, 0.99], memory fraction in [0, 1]) for a job.
 
     Deterministic from the job id: most jobs use 60-98% of their CPUs, about

@@ -137,3 +137,37 @@ def test_node_and_reservation_shapes_in_every_dialect(client, target, auth_heade
     )
     assert "watts" not in resv
     assert set(resv["start_time"]) == {"set", "infinite", "number"}
+
+
+def test_reservation_writes_exist_from_25_05(client, target, auth_headers):
+    """``POST /reservation``, ``POST /reservations/`` and ``DELETE /reservation/{name}``
+    arrived with 25.05 (slurm://src/slurmrestd/plugins/openapi/slurmctld/api.c#"create or update a reservation"@25.05+);
+    24.11 only serves the GETs
+    (slurm://src/slurmrestd/plugins/openapi/slurmctld/api.c#"get reservation info"@24.11),
+    so the bare path is an unknown URL and the others an unknown method."""
+    base = f"/slurm/{target.api_version}"
+    desc = {
+        "name": "m",
+        "start_time": "now",
+        "duration": 60,
+        "node_list": "node001",
+        "flags": ["MAINT"],
+        "users": "root",
+    }
+    created = client.post(f"{base}/reservation", headers=auth_headers, json=desc)
+    bulk = client.post(
+        f"{base}/reservations/",
+        headers=auth_headers,
+        json={"reservations": [{**desc, "name": "n", "node_list": "node002"}]},
+    )
+    deleted = client.delete(f"{base}/reservation/m", headers=auth_headers)
+    if slurm_version.at_least("25.05"):
+        assert created.status_code == 200 and created.json()["reservations"][0]["name"] == "m"
+        assert bulk.status_code == 200 and bulk.json()["errors"] == []
+        assert deleted.status_code == 200 and deleted.json()["errors"] == []
+    else:
+        assert created.status_code == 404
+        assert bulk.status_code == 405 and deleted.status_code == 405
+        assert (
+            client.get(f"{base}/reservations/", headers=auth_headers).json()["reservations"] == []
+        )

@@ -306,6 +306,16 @@ class Reservation:
     slurm://slurm/slurm.h#reserve_info_t.users, slurm://slurm/slurm.h#reserve_info_t.accounts.
     ``spec`` is the configuration entry it was resolved from, so a changed
     entry is re-resolved and an unchanged one keeps its absolute times.
+
+    ``origin`` says who owns the record: ``env`` = resolved from
+    ``SLURM_EMULATOR_RESERVATIONS`` (the env-var sync adds, updates and
+    removes only these), ``api`` = created through slurmrestd or
+    ``scontrol create reservation`` (slurm://src/slurmctld/reservation.c#create_resv)
+    and kept until deleted. State files from before the field existed only
+    hold env-var reservations, hence the default.
+    ``duration`` (minutes, slurm://slurm/slurm.h#resv_desc_msg_t.duration) is
+    kept when the reservation was given one, so moving its start moves its
+    end (slurm://src/slurmctld/reservation.c#update_resv).
     """
 
     name: str
@@ -317,6 +327,10 @@ class Reservation:
     users: str = ""
     accounts: str = ""
     spec: str = ""
+    origin: str = "env"
+    groups: str = ""
+    comment: str = ""
+    duration: Optional[int] = None
 
 
 CLUSTER_NAME_ENV_VAR = "SLURM_EMULATOR_CLUSTER_NAME"
