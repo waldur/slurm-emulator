@@ -102,6 +102,12 @@ for name in ("alice", "bob"):
     user.save()
     users[name] = user
 
+def grant(scope, user, role):
+    """Give a role once: add_user grants again on every run, it does not check."""
+    if not scope.has_user(user, role):
+        scope.add_user_or_skip(user, role)
+
+
 org, _ = Customer.objects.get_or_create(name="Research Institute")
 centre, _ = Customer.objects.get_or_create(name="HPC Centre")
 provider, _ = m.ServiceProvider.objects.get_or_create(customer=centre)
@@ -109,7 +115,7 @@ climate, _ = Project.objects.get_or_create(customer=org, name="Climate")
 genomics, _ = Project.objects.get_or_create(customer=org, name="Genomics")
 for project, members in ((climate, ("alice", "bob")), (genomics, ("alice",))):
     for name in members:
-        project.add_user_or_skip(users[name], RoleEnum.PROJECT_MEMBER)
+        grant(project, users[name], RoleEnum.PROJECT_MEMBER)
 
 # --- Offering ----------------------------------------------------------------
 category, _ = m.Category.objects.get_or_create(title="HPC")
@@ -303,7 +309,7 @@ agent_user, _ = User.objects.update_or_create(
 )
 agent_user.set_unusable_password()
 agent_user.save()
-offering.add_user_or_skip(agent_user, RoleEnum.OFFERING_MANAGER)
+grant(offering, agent_user, RoleEnum.OFFERING_MANAGER)
 agent_token, _ = Token.objects.get_or_create(user=agent_user)
 token_file = Path(os.environ.get("SITE_AGENT_TOKEN_FILE", "site-agent-token"))
 token_file.parent.mkdir(parents=True, exist_ok=True)
