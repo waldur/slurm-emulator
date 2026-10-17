@@ -10,33 +10,16 @@ FireCREST v2: expose what portals need to chart jobs and the cluster
   drain/down reason.
 - Reservations report partition, nodeCount and flags (e.g. MAINT), and no
   longer require a "Features" key.
-- Job listings accept a 30-day window ("30d") for history charts.
 - Jobs report allocationGpus (gres/gpu), gpuUtilization (gres/gpuutil
   average of the busiest step, percent summed over a task's GPUs),
   maxGpuMemory (gres/gpumem peak, bytes) and consumedEnergy (energy TRES,
   joules) where the site's accounting records them.
 
 diff --git a/src/lib/scheduler_clients/models.py b/src/lib/scheduler_clients/models.py
-index 9f3e337..acc878c 100644
+index 9f3e337..a10a1a2 100644
 --- a/src/lib/scheduler_clients/models.py
 +++ b/src/lib/scheduler_clients/models.py
-@@ -17,6 +17,7 @@ class JobsTimeWindow(str, Enum):
-     LAST_24_HOURS = "24h"
-     LAST_3_DAYS = "3d"
-     LAST_7_DAYS = "7d"
-+    LAST_30_DAYS = "30d"
- 
- 
- # Canonical (amount, unit) duration for each historical time window. `unit`
-@@ -33,6 +34,7 @@ TIME_WINDOW_DURATIONS: Dict[JobsTimeWindow, Tuple[int, str]] = {
-     JobsTimeWindow.LAST_24_HOURS: (24, "hours"),
-     JobsTimeWindow.LAST_3_DAYS: (3, "days"),
-     JobsTimeWindow.LAST_7_DAYS: (7, "days"),
-+    JobsTimeWindow.LAST_30_DAYS: (30, "days"),
- }
- 
- 
-@@ -75,6 +77,14 @@ class JobTime(CamelModel):
+@@ -75,6 +75,14 @@ class JobTime(CamelModel):
      end: Optional[int] = Field(default=None, nullable=True)
      suspended: Optional[int] = Field(default=None, nullable=True)
      limit: Optional[int] = Field(default=None, nullable=True)
@@ -51,7 +34,7 @@ index 9f3e337..acc878c 100644
  
  
  class JobTask(CamelModel):
-@@ -100,6 +110,39 @@ class JobModel(CamelModel):
+@@ -100,6 +108,39 @@ class JobModel(CamelModel):
      user: Optional[str]
      working_directory: str
      priority: Optional[int] = Field(default=None, nullable=True)
@@ -91,7 +74,7 @@ index 9f3e337..acc878c 100644
  
  
  class JobMetadataModel(CamelModel):
-@@ -151,6 +194,37 @@ class JobDescriptionModel(CamelModel):
+@@ -151,6 +192,37 @@ class JobDescriptionModel(CamelModel):
      constraints: Optional[str] = Field(
          default=None, description="Job constraints", nullable=True
      )
@@ -129,7 +112,7 @@ index 9f3e337..acc878c 100644
      script: str = Field(default=None, description="Script for the job")
      script_path: str = Field(
          default=None, description="Path to the job in target system"
-@@ -178,6 +252,9 @@ class NodeModel(CamelModel):
+@@ -178,6 +250,9 @@ class NodeModel(CamelModel):
      alloc_memory: Optional[int] = Field(default=None, nullable=True)
      alloc_cpus: Optional[int] = Field(default=None, nullable=True)
      idle_cpus: Optional[int] = Field(default=None, nullable=True)
@@ -139,7 +122,7 @@ index 9f3e337..acc878c 100644
  
  
  class ReservationModel(CamelModel):
-@@ -187,6 +264,11 @@ class ReservationModel(CamelModel):
+@@ -187,6 +262,11 @@ class ReservationModel(CamelModel):
      start_time: int
      features: Optional[str] = Field(default=None, nullable=True)
      state: Optional[str] = Field(default=None, nullable=True)
