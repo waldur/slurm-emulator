@@ -1,5 +1,6 @@
 """Command dispatcher for SLURM emulator."""
 
+import os
 import sys
 from pathlib import Path
 from typing import ClassVar, Optional
@@ -8,6 +9,8 @@ from emulator import __version__
 from emulator.api.slurmrestd.schemas import PARTITION_RANGES
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacctmgr import SacctmgrEmulator
+from emulator.commands.scancel import ScancelEmulator
+from emulator.commands.scontrol import ScontrolEmulator
 from emulator.commands.sreport import SreportEmulator
 from emulator.commands.sshare import SshareEmulator
 from emulator.core import nss
@@ -30,6 +33,10 @@ class SlurmEmulator:
         self.sacct = SacctEmulator(self.database, self.time_engine)
         self.sshare = SshareEmulator(self.database, self.time_engine)
         self.sreport = SreportEmulator(self.database, self.time_engine)
+        self.scontrol = ScontrolEmulator(self.database, self.time_engine)
+        self.scancel = ScancelEmulator(self.database, self.time_engine)
+        # The Unix user running the command (the SSH login on the SSH plane).
+        self.caller = os.environ.get("USER") or "root"
 
         # Load existing state
         self.database.load_state()
@@ -107,6 +114,8 @@ class SlurmEmulator:
                 return self.sshare.handle_command(args)
             if command_name == "sreport":
                 return self.sreport.handle_command(args)
+            if command_name == "scontrol":
+                return self.scontrol.handle_command(args)
             if command_name == "sinfo":
                 return self._handle_sinfo(args)
             if command_name == "scancel":
@@ -134,32 +143,9 @@ class SlurmEmulator:
         return "\n".join(lines)
 
     def _handle_scancel(self, args: list[str]) -> str:
-        """Handle scancel command."""
-        # Parse arguments
-        account = None
-        user = None
-        force = False
-
-        for arg in args:
-            if arg.startswith("-A="):
-                account = arg.split("=", 1)[1]
-            elif arg.startswith("-u="):
-                user = arg.split("=", 1)[1]
-            elif arg == "-f":
-                force = True
-
-        if account:
-            jobs_cancelled = 0
-            jobs = self.database.list_jobs(account=account, user=user)
-            for job in jobs:
-                if job.state in ["RUNNING", "PENDING"]:
-                    job.state = "CANCELLED"
-                    jobs_cancelled += 1
-
-            if jobs_cancelled > 0:
-                return f"scancel: Cancelled {jobs_cancelled} job(s)"
-            return "scancel: No jobs found to cancel"
-        return "scancel: No account specified"
+        """Scancel (emulator/commands/scancel.py), as the calling user."""
+        self.scancel.caller = self.caller
+        return self.scancel.handle_command(args)
 
     def _handle_id(self, args: list[str]) -> str:
         """Handle the coreutils ``id`` command.
@@ -366,10 +352,25 @@ def scancel_main():
 
     try:
         output = emulator.execute_command("scancel", args)
-        print(output)
     except Exception as e:
         print(f"scancel: error: {e}", file=sys.stderr)
         sys.exit(1)
+    if output:
+        print(output)
+    sys.exit(emulator.scancel.exit_code)
+
+
+def scontrol_main():
+    """Entry point for scontrol (reservations; see emulator/commands/scontrol.py)."""
+    emulator = get_emulator()
+    try:
+        output = emulator.execute_command("scontrol", sys.argv[1:])
+    except Exception as e:
+        print(f"scontrol: error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if output:
+        print(output, end="")
+    sys.exit(emulator.scontrol.exit_code)
 
 
 if __name__ == "__main__":
@@ -388,6 +389,10 @@ if __name__ == "__main__":
         sinfo_main()
     elif command_name == "scancel":
         scancel_main()
+    elif command_name == "scontrol" or sys.argv[1:2] == ["scontrol"]:
+        if command_name != "scontrol":
+            sys.argv = sys.argv[1:]
+        scontrol_main()
     else:
         emulator = get_emulator()
         args = sys.argv[1:]

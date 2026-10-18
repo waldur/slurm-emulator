@@ -7,6 +7,7 @@ GET handlers never write state; POST/DELETE handlers call
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Optional, Union
 
@@ -14,9 +15,13 @@ from fastapi import APIRouter, Depends, Request
 
 from emulator.api.slurmrestd.auth import slurmrestd_auth
 from emulator.api.slurmrestd.envelope import (
+    ESLURM_DATA_CONV_FAILED,
+    ESLURM_NO_REMOVE_DEFAULT_QOS,
+    ESLURM_REST_FAIL_PARSING,
     ESLURM_REST_INVALID_QUERY,
     SLURMDBD_PLUGIN,
     SlurmdbRequestError,
+    SlurmrestdRejectError,
     found_nothing_warning,
     make_response,
     slurm_error,
@@ -35,6 +40,7 @@ from emulator.api.slurmrestd.schemas import (
 from emulator.api.slurmrestd.state import RequestState, StateDep
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacct import _Config as SacctConfig
+from emulator.commands.slurm_time import ParseTimeError, parse_time_spec
 from emulator.core.database import QOS, Association, DefaultAssociationError, fold_account
 from emulator.core.scheduler import advance_job_states
 from emulator.slurm_version import at_least
@@ -45,15 +51,22 @@ router = APIRouter(
 )
 
 
-def _respond(request, state, payload=None, errors=None, warnings=None):
-    return make_response(request, SLURMDBD_PLUGIN, state.cluster, payload, errors, warnings)
+def _respond(request, state, payload=None, errors=None, warnings=None, rc=None):
+    return make_response(request, SLURMDBD_PLUGIN, state.cluster, payload, errors, warnings, rc)
 
 
 async def _json_body(request: Request) -> dict[str, Any]:
-    try:
-        body = await request.json()
-    except Exception:
+    """The request body, ``{}`` when empty.
+
+    Invalid JSON is refused as ``Failure during parsing`` before any handler runs.
+    """
+    data = await request.body()
+    if not data.strip():
         return {}
+    try:
+        body = json.loads(data)
+    except ValueError:
+        raise SlurmrestdRejectError(ESLURM_REST_FAIL_PARSING) from None
     return body if isinstance(body, dict) else {}
 
 
@@ -753,6 +766,7 @@ def _upsert_association(state: RequestState, entry: dict[str, Any]) -> bool:
             + "\nThis request would make it so some associations would not have access to"
             " their default qos.",
             state.cluster,
+            ESLURM_NO_REMOVE_DEFAULT_QOS,
         )
     return True
 
@@ -1006,11 +1020,11 @@ async def delete_qos(
 # --- jobs (accounting view, one job per usage record) ---
 
 
-def _parse_query_time(value: str, sacct: SacctEmulator):
-    if value.isdigit():
+def _parse_query_time(value: str, now: datetime) -> datetime:
+    if value.strip().lstrip("-").isdigit():
         # Naive local time, consistent with the emulator's naive clock.
         return datetime.fromtimestamp(int(value))  # noqa: DTZ006
-    return sacct._parse_time_inner(value)
+    return parse_time_spec(value, now)
 
 
 @router.get("/jobs/")
@@ -1033,16 +1047,41 @@ async def get_jobs(
         cfg.users = users.split(",")
     if cluster:
         cfg.clusters = cluster.split(",")
-    try:
-        if start_time:
-            cfg.start_time = _parse_query_time(start_time, sacct)
-        if end_time:
-            cfg.end_time = _parse_query_time(end_time, sacct)
-    except (ValueError, IndexError):
-        return _bad_request(request, state, "Invalid time specification")
+    # JOB_CONDITION parses start_time/end_time as TIMESTAMP: parse_time(str, 0)
+    # (slurm://src/plugins/data_parser/v0.0.45/parsers.c#_parse_timestamp@26.05+).
+    # A failure is the parser's ESLURM_DATA_CONV_FAILED, then the handler's
+    # rejection, whose 9000 the handler returns and so sets the status
+    # (slurm://src/slurmrestd/plugins/openapi/slurmdbd/jobs.c#op_handler_jobs).
+    for field, value in (("start_time", start_time), ("end_time", end_time)):
+        if not value:
+            continue
+        try:
+            parsed = _parse_query_time(value, state.time_engine.get_current_time())
+        except ParseTimeError:
+            return _respond(
+                request,
+                state,
+                errors=[
+                    slurm_error(
+                        f"Parsing of {value} for timestamp failed",
+                        ESLURM_DATA_CONV_FAILED,
+                        f"#/{field}",
+                    ),
+                    slurm_error(
+                        "Rejecting request. Failure parsing query parameters",
+                        ESLURM_REST_INVALID_QUERY,
+                        "op_handler_jobs",
+                    ),
+                ],
+                rc=ESLURM_REST_INVALID_QUERY,
+            )
+        if field == "start_time":
+            cfg.start_time = parsed
+        else:
+            cfg.end_time = parsed
 
     records = sacct._get_filtered_records(cfg)
-    payload = [dbd_job_to_dict(r) for r in records]
+    payload = [dbd_job_to_dict(r, sacct._active_jobs.get(str(r.job_id))) for r in records]
     warnings = []
     if not payload:
         warnings.append(found_nothing_warning("slurmdb_jobs_get()", request))
@@ -1060,6 +1099,16 @@ async def get_job(
     state.database.ensure_job_ids()
     matched = [r for r in state.database.usage_records if str(r.job_id) == job_id]
     payload = [dbd_job_to_dict(r) for r in matched]
+    if not payload:
+        # slurmdbd holds the job from submission on.
+        sacct = SacctEmulator(state.database, state.time_engine)
+        cfg = SacctConfig()
+        cfg.jobs = [job_id]
+        cfg.clusters = [state.database.current_cluster]
+        payload = [
+            dbd_job_to_dict(r, sacct._active_jobs.get(str(r.job_id)))
+            for r in sacct._active_job_records(cfg, set())
+        ]
     warnings = []
     if not payload:
         warnings.append(found_nothing_warning("slurmdb_jobs_get()", request))

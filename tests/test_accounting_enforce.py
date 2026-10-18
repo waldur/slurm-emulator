@@ -10,6 +10,7 @@ parsed by slurm://src/common/read_config.c#_validate_accounting_storage_enforce.
 
 import pytest
 
+from emulator.api.slurmrestd.envelope import http_status_for
 from emulator.api.slurmrestd.envelope import ESLURM_INVALID_ACCOUNT
 from emulator.api.ssh import server
 from emulator.commands.dispatcher import SlurmEmulator
@@ -165,8 +166,9 @@ class TestRestSubmit:
     ):
         _seed(state_env)
         resp = _submit(restd, auth_headers, user, **fields)
-        # slurmctld-range errno → 422 (slurm://src/common/http.c#http_status_from_error@25.11+)
-        assert resp.status_code == 422
+        # A slurmctld errno: 422 from 26.05, 500 before
+        # (slurm://src/common/http.c#http_status_from_error@25.11+).
+        assert resp.status_code == http_status_for(ESLURM_INVALID_ACCOUNT)
         err = resp.json()["errors"][0]
         assert err["error_number"] == ESLURM_INVALID_ACCOUNT
         assert err["error"] == "Invalid account or account/partition combination specified"
@@ -184,7 +186,7 @@ class TestRestSubmit:
             params={"user": "alice", "account": "proj1"},
             headers=auth_headers,
         )
-        assert refused.status_code == 422
+        assert refused.status_code == http_status_for(refused.json()["errors"][0]["error_number"])
         assert _submit(restd, auth_headers, "alice", account="proj1").status_code == 200
         for acct in ("proj2", "proj1"):
             resp = restd.delete(
@@ -193,8 +195,9 @@ class TestRestSubmit:
                 headers=auth_headers,
             )
             assert resp.status_code == 200
-        assert _submit(restd, auth_headers, "alice", account="proj1").status_code == 422
-        assert _submit(restd, auth_headers, "alice").status_code == 422
+        refused_status = http_status_for(ESLURM_INVALID_ACCOUNT)
+        assert _submit(restd, auth_headers, "alice", account="proj1").status_code == refused_status
+        assert _submit(restd, auth_headers, "alice").status_code == refused_status
 
     def test_permissive_keeps_legacy_fallback(self, restd, auth_headers, state_env, permissive):
         _seed(state_env)
@@ -357,7 +360,7 @@ class TestDefaultAssociationInvariant:
             params={"user": "alice", "account": "proj-a"},
             headers=auth_headers,
         )
-        assert resp.status_code == 422
+        assert resp.status_code == http_status_for(7009)
         err = resp.json()["errors"][0]
         assert err["error_number"] == 7009
         assert err["description"] == "You can not remove the default account of a user"

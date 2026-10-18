@@ -18,6 +18,7 @@ from datetime import datetime
 
 import pytest
 
+from emulator.api.slurmrestd.envelope import http_status_for
 from emulator.api.slurmrestd.envelope import ESLURM_USER_ID_UNKNOWN
 from emulator.api.ssh import server
 from emulator.commands.dispatcher import SlurmEmulator
@@ -148,9 +149,9 @@ class TestRestSubmit:
 
     def test_unresolvable_user_is_rejected(self, restd, auth_headers, nss_on):
         resp = _submit(restd, auth_headers, "ghost")
-        # ESLURM_USER_ID_UNKNOWN sits in the slurmctld range → 422
-        # (slurm://src/common/http.c#http_status_from_error@25.11+).
-        assert resp.status_code == 422
+        # ESLURM_USER_ID_UNKNOWN sits in the slurmctld range: 422 from 26.05
+        # (slurm://src/common/http.c#http_status_from_error@25.11+), 500 before.
+        assert resp.status_code == http_status_for(ESLURM_USER_ID_UNKNOWN)
         err = resp.json()["errors"][0]
         assert err["description"] == "Unable to resolve user: ghost"
         assert err["error_number"] == ESLURM_USER_ID_UNKNOWN
@@ -186,7 +187,7 @@ class TestSshPlane:
         job = emu.database.get_job(jid)
         assert (job.uid, job.gid, job.group_name) == (9001, 9001, "hpc_9001")
         show, _, _ = server._scontrol(emu, ["show", "job", jid])
-        assert "   UserId=hpc_9001(9001) GroupId=hpc_9001(9001)\n" in show
+        assert "   UserId=hpc_9001(9001) GroupId=hpc_9001(9001) MCS_label=N/A\n" in show
 
     def test_sbatch_rejects_unknown_user(self, emu, nss_on):
         out, err, code = server._sbatch(emu, "ghost", ["job.sh"])
@@ -198,7 +199,7 @@ class TestSshPlane:
         out, _, _ = server._sbatch(emu, "alice", ["job.sh"])
         jid = out.split()[-1]
         show, _, _ = server._scontrol(emu, ["show", "job", jid])
-        assert "   UserId=alice(1000) GroupId=alice(1000)\n" in show
+        assert "   UserId=alice(1000) GroupId=alice(1000) MCS_label=N/A\n" in show
 
     def test_bare_id_over_ssh_means_the_login_user(self, state_env, nss_on):
         out, err, code = server._run_slurm("hpc_9001", ["id"])

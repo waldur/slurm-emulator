@@ -187,6 +187,46 @@ class UsageRecord:
     uid: Optional[int] = None
     gid: Optional[int] = None
     group_name: str = ""
+    # Name, working directory and script exit status of the job a record
+    # mirrors (submitted jobs only); "" / None keep the legacy job_<id>,
+    # /home/<user> and state-derived 0/1 renderings.
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.jobname,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.work_dir,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.exitcode
+    job_name: str = ""
+    working_directory: str = ""
+    exit_code: Optional[int] = None
+    requid: Optional[int] = None
+    # Output paths as submitted (patterns unexpanded), what sacct's
+    # StdIn/StdOut/StdErr print for a job (slurm://src/sacct/print.c#print_fields).
+    standard_input: str = ""
+    standard_output: str = ""
+    standard_error: str = ""
+    # What slurmdbd keeps per job beyond the TRES totals, for records that
+    # mirror a real run (submitted or seeded jobs). Unset (None / 0 / "")
+    # keeps the legacy single-node rendering derived from ``node_hours``.
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.submit,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.eligible,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.start,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.end,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.timelimit (minutes),
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.alloc_nodes,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.nodes,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.req_mem (MB per node),
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.tot_cpu_sec; MaxRSS is the
+    # batch step's slurm://slurm/slurmdb.h#slurmdb_stats_t.tres_usage_in_max mem (bytes).
+    submit_time: Optional[datetime] = None
+    eligible_time: Optional[datetime] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    time_limit: Optional[int] = None
+    node_count: int = 0
+    node_list: str = ""
+    alloc_cpus: int = 0
+    req_mem_mb: int = 0
+    cpu_time_seconds: float = 0.0
+    max_rss_bytes: int = 0
+    tasks: int = 0
 
     def __post_init__(self) -> None:
         """Fold the account name like Account/Association do.
@@ -236,6 +276,73 @@ class Job:
     uid: Optional[int] = None
     gid: Optional[int] = None
     group_name: str = ""
+    # Exit status of the batch script once it ran (SLURM_EMULATOR_JOB_EXECUTE);
+    # ``None`` = not run, rendered from the state alone.
+    # slurm://slurm/slurm.h#job_info_t.exit_code
+    exit_code: Optional[int] = None
+    # Resource request from the job_desc
+    # (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_DESC_MSG@26.05+):
+    # ``tasks``/``cpus_per_task``/``memory_per_node`` (MB); 0 = not given.
+    tasks: int = 0
+    cpus_per_task: int = 0
+    tasks_per_node: int = 0
+    # ``shared: ["none"]`` (sbatch --exclusive): the job gets whole nodes
+    # (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_SHARED@26.05+).
+    exclusive: bool = False
+    memory_per_node: int = 0
+    reservation: str = ""
+    # Allocation made when the job started: concrete node names and CPUs
+    # (slurm://slurm/slurm.h#job_info_t.nodes, slurm://slurm/slurm.h#job_info_t.num_cpus).
+    node_list: list[str] = field(default_factory=list)
+    alloc_cpus: int = 0
+    # uid of whoever cancelled the job (slurm://slurm/slurmdb.h#slurmdb_job_rec_t.requid);
+    # sacct prints "CANCELLED by <uid>".
+    requid: Optional[int] = None
+    # Why a pending job waits, or how a finished one failed
+    # (slurm://slurm/slurm.h#job_info_t.state_reason), and the free-text
+    # detail slurmctld adds to some reasons (slurm://slurm/slurm.h#job_info_t.state_desc).
+    state_reason: str = "None"
+    state_description: str = ""
+
+
+@dataclass
+class Reservation:
+    """An advanced reservation (subset of reserve_info_t).
+
+    slurm://slurm/slurm.h#reserve_info_t.name, slurm://slurm/slurm.h#reserve_info_t.node_list,
+    slurm://slurm/slurm.h#reserve_info_t.partition, slurm://slurm/slurm.h#reserve_info_t.start_time,
+    slurm://slurm/slurm.h#reserve_info_t.end_time, slurm://slurm/slurm.h#reserve_info_t.flags,
+    slurm://slurm/slurm.h#reserve_info_t.users, slurm://slurm/slurm.h#reserve_info_t.accounts.
+    ``spec`` is the configuration entry it was resolved from, so a changed
+    entry is re-resolved and an unchanged one keeps its absolute times.
+
+    ``origin`` says who owns the record: ``env`` = resolved from
+    ``SLURM_EMULATOR_RESERVATIONS`` (the env-var sync adds, updates and
+    removes only these), ``api`` = created through slurmrestd or
+    ``scontrol create reservation`` (slurm://src/slurmctld/reservation.c#create_resv)
+    and kept until deleted. State files from before the field existed only
+    hold env-var reservations, hence the default.
+    ``duration`` (minutes, slurm://slurm/slurm.h#resv_desc_msg_t.duration) is
+    kept when the reservation was given one, so moving its start moves its
+    end (slurm://src/slurmctld/reservation.c#update_resv).
+    """
+
+    name: str
+    nodes: list[str] = field(default_factory=list)
+    partition: str = ""
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    flags: list[str] = field(default_factory=list)
+    users: str = ""
+    accounts: str = ""
+    spec: str = ""
+    origin: str = "env"
+    # slurm://src/slurmctld/slurmctld.h#slurmctld_resv_t.resv_id -- the controller's suffix
+    # counter at creation (0 for env-configured ones).
+    resv_id: int = 0
+    groups: str = ""
+    comment: str = ""
+    duration: Optional[int] = None
 
 
 CLUSTER_NAME_ENV_VAR = "SLURM_EMULATOR_CLUSTER_NAME"
@@ -273,10 +380,34 @@ class SlurmDatabase:
         self.usage_records: list[UsageRecord] = []
         self.jobs: dict[str, Job] = {}
         self.qos_list: dict[str, QOS] = {}
+        self.reservations: dict[str, Reservation] = {}
+        # When configured reservations were first resolved: their start
+        # offsets count from here, so they do not drift across restarts.
+        self.reservation_anchor: Optional[datetime] = None
+        # How far the lazy scheduler has simulated (emulator/core/scheduler.py).
+        self.sched_cursor: Optional[datetime] = None
+        # slurmctld's reservation id / name-suffix counter
+        # (slurm://src/slurmctld/reservation.c#top_suffix).
+        self.resv_top_suffix = 0
         # Static TRES in id order (slurm://src/common/slurmdb_defs.h#TRES_ENERGY:
-        # cpu=1, mem=2, energy=3, node=4, billing=5) then dynamic ones (>= 1001);
-        # ids are derived in emulator/core/tres.py.
-        self.tres_types = ["CPU", "Mem", "energy", "node", "billing", "GRES/gpu"]
+        # cpu=1, mem=2, energy=3, node=4, billing=5, fs/disk=6, vmem=7,
+        # pages=8 -- slurmdbd creates all of them) then the dynamic ones of
+        # AccountingStorageTRES (>= 1001): the GPUs and what the NVML plugin
+        # samples (slurm://src/interfaces/gpu.c#gpu_get_tres_pos). Ids are
+        # derived in emulator/core/tres.py.
+        self.tres_types = [
+            "CPU",
+            "Mem",
+            "energy",
+            "node",
+            "billing",
+            "fs/disk",
+            "vmem",
+            "pages",
+            "GRES/gpu",
+            "GRES/gpumem",
+            "GRES/gpuutil",
+        ]
         self.state_file = Path(
             os.environ.get("SLURM_EMULATOR_STATE_FILE", "/tmp/slurm_emulator_db.json")
         )
@@ -862,6 +993,13 @@ class SlurmDatabase:
             "usage_records": [self._serialize_usage_record(r) for r in self.usage_records],
             "jobs": {jid: _serialize_job(job) for jid, job in self.jobs.items()},
             "qos": {name: asdict(qos) for name, qos in self.qos_list.items()},
+            "reservations": {
+                name: _serialize_dates(asdict(resv), ("start_time", "end_time"))
+                for name, resv in self.reservations.items()
+            },
+            "reservation_anchor": _iso(self.reservation_anchor),
+            "sched_cursor": _iso(self.sched_cursor),
+            "resv_top_suffix": self.resv_top_suffix,
         }
 
         try:
@@ -997,6 +1135,19 @@ class SlurmDatabase:
                 for name, data in state.get("qos", {}).items():
                     self.qos_list[name] = QOS(**data)
 
+                # Reservations and scheduler cursor (absent in older files)
+                self.reservations = {}
+                for name, data in state.get("reservations", {}).items():
+                    self.reservations[name] = Reservation(
+                        **_parse_dates(data, ("start_time", "end_time"))
+                    )
+                self.reservation_anchor = _from_iso(state.get("reservation_anchor"))
+                self.sched_cursor = _from_iso(state.get("sched_cursor"))
+                self.resv_top_suffix = max(
+                    [int(state.get("resv_top_suffix", 0))]
+                    + [r.resv_id for r in self.reservations.values()]
+                )
+
                 # Pre-0.10 state files have no root user / root user association.
                 for cluster in self.clusters:
                     self._seed_root(cluster)
@@ -1007,14 +1158,40 @@ class SlurmDatabase:
 
     def _serialize_usage_record(self, record: UsageRecord) -> dict[str, Any]:
         """Serialize usage record for JSON storage."""
-        data = asdict(record)
+        data = _serialize_dates(asdict(record), _RECORD_DATES)
         data["timestamp"] = record.timestamp.isoformat()
         return data
 
     def _deserialize_usage_record(self, data: dict[str, Any]) -> UsageRecord:
         """Deserialize usage record from JSON storage."""
+        data = _parse_dates(data, _RECORD_DATES)
         data["timestamp"] = datetime.fromisoformat(data["timestamp"])
         data.setdefault("job_id", None)
         data.setdefault("state", "COMPLETED")
         data.setdefault("partition", "compute")
         return UsageRecord(**data)
+
+
+_RECORD_DATES = ("submit_time", "eligible_time", "start_time", "end_time")
+
+
+def _iso(value: Optional[datetime]) -> Optional[str]:
+    return value.isoformat() if value is not None else None
+
+
+def _from_iso(value: Optional[str]) -> Optional[datetime]:
+    return datetime.fromisoformat(value) if value else None
+
+
+def _serialize_dates(data: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    for key in keys:
+        if isinstance(data.get(key), datetime):
+            data[key] = data[key].isoformat()
+    return data
+
+
+def _parse_dates(data: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    for key in keys:
+        if isinstance(data.get(key), str):
+            data[key] = datetime.fromisoformat(data[key]) if data[key] else None
+    return data

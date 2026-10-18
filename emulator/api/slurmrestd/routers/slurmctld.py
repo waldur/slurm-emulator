@@ -1,28 +1,47 @@
 """/slurm/v0.0.45 endpoints (openapi/slurmctld plugin emulation).
 
-Read paths plus DELETE /job/{job_id} (the scancel equivalent).
-Nodes/partitions are served from the static topology in schemas.py —
-the same picture sinfo paints. Reservations and licenses are
-empty-list stubs. Job submission endpoints are intentionally not
-registered, so they 404 with the real plain-text rejection.
+Read paths plus POST /job/submit and DELETE /job/{job_id} (the scancel
+equivalent). Nodes/partitions are served from the static topology in
+schemas.py — the same picture sinfo paints — with each node's live state
+(allocations, DRAIN/DOWN overrides, background load, reservations) from
+``emulator/core/cluster_model.py``. Reservations come from
+``SLURM_EMULATOR_RESERVATIONS`` and, from 25.05, from ``POST /reservation``,
+``POST /reservations/`` and ``DELETE /reservation/{name}``
+(``emulator/core/reservations.py`` holds the slurmctld side); licenses are an
+empty-list stub.
+
+Intentional deviation: ``POST /reservation(s)`` ignores ``core_count``,
+``tres``, ``licenses``, ``burst_buffer``, ``features`` and
+``max_start_delay`` instead of reserving cores or licenses
+(slurm://src/slurmctld/reservation.c#create_resv supports them).
 """
 
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Request
 from starlette.concurrency import run_in_threadpool
 
+from emulator.api.slurmrestd import resv_parser
 from emulator.api.slurmrestd.auth import slurmrestd_auth
 from emulator.api.slurmrestd.envelope import (
     ESLURM_INVALID_JOB_ID,
+    ESLURM_RESERVATION_INVALID,
+    ESLURM_REST_FAIL_PARSING,
+    ESLURM_REST_INVALID_QUERY,
+    ESLURM_REST_UNKNOWN_URL,
+    ESLURM_REST_UNKNOWN_URL_METHOD,
     ESLURM_USER_ID_UNKNOWN,
     SLURMCTLD_PLUGIN,
+    SlurmrestdRejectError,
     found_nothing_warning,
     make_response,
     slurm_error,
     slurm_release,
+    strerror,
     validate_version,
 )
 from emulator.api.slurmrestd.schemas import (
@@ -31,11 +50,34 @@ from emulator.api.slurmrestd.schemas import (
     ctld_job_to_dict,
     node_to_dict,
     partition_to_dict,
+    reservation_to_dict,
     uint_no_val,
 )
 from emulator.api.slurmrestd.state import StateDep
 from emulator.core.accounting import admit_job
+from emulator.core.cluster_model import (
+    expand_hostlist,
+    job_may_access,
+    node_views,
+    request_fits,
+    sync_reservations,
+)
 from emulator.core.database import Job, SlurmDatabase
+from emulator.core.nss import lookup as nss_lookup
+from emulator.core.reservations import (
+    DURATION_INFINITE,
+    ESLURM_NODES_BUSY,
+    ESLURM_RESERVATION_ACCESS,
+    ReservationDesc,
+    ReservationDescError,
+    ReservationError,
+    create_reservation,
+    delete_reservation,
+    order_flags,
+    update_reservation,
+    validate_create_desc,
+)
+from emulator.core.reservations import find as find_reservation
 from emulator.core.scheduler import advance_job_states, job_clock_now
 from emulator.slurm_version import at_least
 
@@ -45,20 +87,29 @@ router = APIRouter(
 )
 
 
-def _respond(request, state, payload=None, errors=None, warnings=None):
-    return make_response(request, SLURMCTLD_PLUGIN, state.cluster, payload, errors, warnings)
+def _respond(request, state, payload=None, errors=None, warnings=None, rc=None):
+    return make_response(request, SLURMCTLD_PLUGIN, state.cluster, payload, errors, warnings, rc)
 
 
 def _float_no_val(number: float) -> dict[str, Any]:
     return {"set": True, "infinite": False, "number": number}
 
 
-async def _json_body(request: Request) -> dict[str, Any]:
-    try:
-        body = await request.json()
-    except Exception:
+async def _json_body(request: Request, keep_type: bool = False) -> object:
+    """The request body, ``{}`` when empty.
+
+    Invalid JSON is refused before any handler runs, as plain-text ``Failure
+    during parsing`` (HTTP 400, seen on slurmrestd 26.05;
+    slurm://src/slurmrestd/operations.c#_operations_router_reject).
+    """
+    data = await request.body()
+    if not data.strip():
         return {}
-    return body if isinstance(body, dict) else {}
+    try:
+        body = json.loads(data)
+    except ValueError:
+        raise SlurmrestdRejectError(ESLURM_REST_FAIL_PARSING) from None
+    return body if keep_type or isinstance(body, dict) else {}
 
 
 def _submit_int(value: object, default: Optional[int]) -> Optional[int]:
@@ -74,6 +125,37 @@ def _submit_int(value: object, default: Optional[int]) -> Optional[int]:
         except (TypeError, ValueError):
             return default
     return default
+
+
+def _submit_nodes(job_desc: dict[str, Any]) -> int:
+    """Minimum node count from ``nodes`` ("4", "2-4", "2-4:2") or ``minimum_nodes``.
+
+    JOB_DESC_MSG_NODES parses the ``nodes`` range into min/max
+    (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_DESC_MSG_NODES@26.05+);
+    the emulator allocates the minimum (see cluster_model deviations).
+    """
+    value = job_desc.get("nodes")
+    if isinstance(value, str) and value.strip():
+        head = value.split(":", 1)[0].split("-", 1)[0].strip()
+        if head.isdigit():
+            return max(int(head), 1)
+    count = _submit_int(value, None)
+    if count:
+        return max(count, 1)
+    minimum = _submit_int(job_desc.get("minimum_nodes"), None)
+    return max(minimum or 1, 1)
+
+
+def _submit_count(value: object) -> int:
+    """Optional positive count (tasks, cpus_per_task, memory_per_node …); 0 = unset."""
+    number = _submit_int(value, None)
+    return number if number and number > 0 else 0
+
+
+def _submit_exclusive(value: object) -> bool:
+    """``shared`` (JOB_SHARED flags): ``none`` / ``topo`` take whole nodes."""
+    flags = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+    return any(str(f).lower() in ("none", "topo") for f in flags)
 
 
 def _env_to_dict(value: object) -> dict[str, str]:
@@ -185,7 +267,8 @@ async def submit_job(
     (slurm://src/plugins/data_parser/v0.0.45/parsers.c#OPENAPI_JOB_SUBMIT_RESPONSE@26.05+): top-level ``job_id`` / ``step_id`` /
     ``job_submit_user_msg``.
     """
-    body = await _json_body(request)
+    raw_body = await _json_body(request)
+    body: dict[str, Any] = raw_body if isinstance(raw_body, dict) else {}
     job_desc = body.get("job")
     if isinstance(job_desc, list):
         job_desc = job_desc[0] if job_desc else {}
@@ -218,6 +301,33 @@ async def submit_job(
     identity = admission.identity
     account = admission.account
 
+    # An unknown reservation, or one the job may not use, is refused at submit
+    # (slurm://src/slurmctld/reservation.c#validate_job_resv,
+    # slurm://src/slurmctld/reservation.c#_valid_job_access_resv).
+    reservation = str(job_desc.get("reservation") or "")
+    sync_reservations(db, job_clock_now(state.time_engine))
+    if reservation:
+        resv = db.reservations.get(reservation)
+        probe = Job(
+            job_id="0",
+            account=account,
+            user=user,
+            state="PENDING",
+            uid=identity.uid if identity else None,
+            group_name=identity.group if identity else "",
+        )
+        errno = (
+            ESLURM_RESERVATION_INVALID
+            if resv is None
+            else (None if job_may_access(db, resv, probe) else ESLURM_RESERVATION_ACCESS)
+        )
+        if errno is not None:
+            return _respond(
+                request,
+                state,
+                errors=[slurm_error(strerror(errno), errno, "slurm_submit_batch_job()")],
+            )
+
     jid = db.allocate_job_id()
     job = Job(
         job_id=str(jid),
@@ -232,18 +342,37 @@ async def submit_job(
         working_directory=job_desc.get("current_working_directory")
         or (identity.home if identity and identity.home else f"/home/{user}"),
         script=script,
-        standard_output=job_desc.get("standard_output") or "",
+        # From 25.11 slurmctld stores the default path when none is given
+        # (slurm://src/slurmctld/job_mgr.c#DEFAULT_BATCH_STDOUT_PATH@25.11+).
+        standard_output=job_desc.get("standard_output")
+        or ("slurm-%j.out" if at_least("25.11") else ""),
         standard_error=job_desc.get("standard_error") or "",
         standard_input=job_desc.get("standard_input") or "/dev/null",
-        node_count=_submit_int(job_desc.get("nodes"), 1) or 1,
+        # Resource request (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_DESC_MSG@26.05+):
+        # nodes / minimum_nodes, tasks, tasks_per_node, cpus_per_task,
+        # memory_per_node (MB) and time_limit (minutes), each plain or NO_VAL.
+        node_count=_submit_nodes(job_desc),
+        tasks=_submit_count(job_desc.get("tasks")),
+        tasks_per_node=_submit_count(job_desc.get("tasks_per_node")),
+        cpus_per_task=_submit_count(job_desc.get("cpus_per_task")),
+        memory_per_node=_submit_count(job_desc.get("memory_per_node")),
+        reservation=reservation,
+        exclusive=_submit_exclusive(job_desc.get("shared")),
         priority=_submit_int(job_desc.get("priority"), 1) or 1,
-        time_limit=_submit_int(job_desc.get("time_limit"), None),
+        time_limit=_submit_count(job_desc.get("time_limit")) or None,
         environment=_env_to_dict(job_desc.get("environment")),
         constraints=job_desc.get("constraints") or "",
         uid=identity.uid if identity else None,
         gid=identity.gid if identity else None,
         group_name=identity.group if identity else "",
     )
+    if not request_fits(job):
+        errno = ESLURM_REQUESTED_NODE_CONFIG_UNAVAILABLE
+        return _respond(
+            request,
+            state,
+            errors=[slurm_error(strerror(errno), errno, "slurm_submit_batch_job()")],
+        )
     db.add_job(job)
     state.commit()
 
@@ -317,42 +446,101 @@ async def get_job(
     )
 
 
+# slurm://slurm/slurm_errno.h#ESLURM_ACCESS_DENIED, slurm://slurm/slurm_errno.h#ESLURM_ALREADY_DONE
+ESLURM_ACCESS_DENIED = 2002
+# slurm://slurm/slurm_errno.h#ESLURM_REQUESTED_NODE_CONFIG_UNAVAILABLE
+ESLURM_REQUESTED_NODE_CONFIG_UNAVAILABLE = 2014
+ESLURM_ALREADY_DONE = 2021
+_SIGNAL_ERRORS = {
+    ESLURM_ACCESS_DENIED: "Access/permission denied",
+    ESLURM_INVALID_JOB_ID: "Invalid job id specified",
+    ESLURM_ALREADY_DONE: "Job/step already completing or completed",
+}
+_SIGNALS = {"HUP": 1, "INT": 2, "QUIT": 3, "KILL": 9, "USR1": 10, "USR2": 12, "TERM": 15}
+
+
+def _requested_signal(value: Optional[str]) -> int:
+    """The ``signal`` query: a number or a name with or without ``SIG``; default SIGKILL."""
+    if not value:
+        return 9
+    text = value.strip().upper().removeprefix("SIG")
+    if text.isdigit():
+        return int(text) or 9
+    return _SIGNALS.get(text, 9)
+
+
+def _uid_of(user: str) -> int:
+    if user == "root":
+        return 0
+    identity = nss_lookup(user)
+    return identity.uid if identity is not None else 1000
+
+
 @router.delete("/job/{job_id}")
 async def cancel_job(
     job_id: str,
     request: Request,
     state: StateDep,
-    signal: Optional[str] = None,  # noqa: ARG001 - accepted, not modeled
+    signal: Optional[str] = None,
+    flags: Optional[str] = None,
 ):
-    job = state.database.get_job(job_id)
-    if job is None:
-        return _respond(
-            request,
-            state,
-            errors=[
-                slurm_error(
-                    f"Failure cancelling job {job_id}", ESLURM_INVALID_JOB_ID, request.url.path
-                )
-            ],
-        )
-    if job.state in ("RUNNING", "PENDING"):
-        job.state = "CANCELLED"
-        job.end_time = state.time_engine.get_current_time()
+    """slurm_kill_jobs() for one job (slurm://src/slurmrestd/plugins/openapi/slurmctld/jobs.c#_handle_job_delete).
+
+    The job is first brought up to date. slurmctld answers per job only on
+    failure -- not the owner (``ESLURM_ACCESS_DENIED``), unknown
+    (``ESLURM_INVALID_JOB_ID``), already ended (``ESLURM_ALREADY_DONE``) --
+    or for every job with ``flags=VERBOSE``
+    (slurm://src/slurmctld/job_mgr.c#_add_signal_job_resp); the HTTP status
+    stays 200. Only SIGKILL, the default, cancels the job; other signals go
+    to its processes, which the emulator does not run.
+    """
+    db = state.database
+    if advance_job_states(db, state.time_engine):
         state.commit()
-    status = [
-        {
-            "job_id": uint_no_val(int(job_id) if job_id.isdigit() else None),
-            "step_id": job_id,
-            "error": "No error",
-            "error_code": 0,
-            "error_message": "",
-            "federation": {"sibling": ""},
-        }
-    ]
+    requester = str(getattr(request.state, "slurm_user", "root") or "root")
+    job = db.get_job(job_id)
+    verbose = "VERBOSE" in (flags or "").upper()
+    errno = 0
+    if job is None:
+        errno = ESLURM_INVALID_JOB_ID
+    elif requester not in ("root", job.user):
+        errno = ESLURM_ACCESS_DENIED
+    elif job.state not in ("RUNNING", "PENDING"):
+        errno = ESLURM_ALREADY_DONE
+    elif _requested_signal(signal) == 9:
+        job.state = "CANCELLED"
+        job.state_reason, job.state_description = "None", ""
+        job.requid = _uid_of(requester)
+        # On the job clock, like start/submit, so the run length is right;
+        # the job's nodes are free again and it lands in accounting.
+        job.end_time = job_clock_now(state.time_engine)
+        advance_job_states(db, state.time_engine)
+        state.commit()
+    status = []
+    if errno or verbose:
+        status.append(
+            {
+                "error": {
+                    "string": _SIGNAL_ERRORS.get(errno, "No error"),
+                    "code": errno,
+                    "message": _SIGNAL_ERRORS.get(errno, ""),
+                },
+                "step_id": job_id,
+                "job_id": uint_no_val(int(job.job_id) if job is not None else None),
+                "federation": {"sibling": ""},
+            }
+        )
     return _respond(request, state, {"status": status})
 
 
 # --- nodes / partitions ---
+
+
+def _node_views(state) -> dict:
+    """Bring jobs up to date, then derive each node's live state on the job clock."""
+    if advance_job_states(state.database, state.time_engine):
+        state.commit()
+    return node_views(state.database, job_clock_now(state.time_engine))
 
 
 @router.get("/nodes/")
@@ -361,7 +549,8 @@ async def get_nodes(
     state: StateDep,
 ):
     now = state.now_ts()
-    payload = [node_to_dict(name, now) for name in all_node_names()]
+    views = _node_views(state)
+    payload = [node_to_dict(name, now, views.get(name)) for name in all_node_names()]
     return _respond(request, state, {"nodes": payload, "last_update": uint_no_val(now)})
 
 
@@ -382,7 +571,10 @@ async def get_node(
     return _respond(
         request,
         state,
-        {"nodes": [node_to_dict(node_name, now)], "last_update": uint_no_val(now)},
+        {
+            "nodes": [node_to_dict(node_name, now, _node_views(state).get(node_name))],
+            "last_update": uint_no_val(now),
+        },
     )
 
 
@@ -473,30 +665,309 @@ async def get_shares(
     return _respond(request, state, {"shares": {"shares": shares}})
 
 
+def _reservations(state) -> list:
+    if sync_reservations(state.database, job_clock_now(state.time_engine)):
+        state.commit()
+    return sorted(state.database.reservations.values(), key=lambda r: (r.start_time, r.name))
+
+
 @router.get("/reservations/")
 async def get_reservations(
     request: Request,
     state: StateDep,
 ):
+    payload = [reservation_to_dict(r) for r in _reservations(state)]
     return _respond(
         request,
         state,
-        {"reservations": [], "last_update": uint_no_val(state.now_ts())},
+        {"reservations": payload, "last_update": uint_no_val(state.now_ts())},
     )
 
 
 @router.get("/reservation/{reservation_name}")
 async def get_reservation(
-    reservation_name: str,  # noqa: ARG001 - any name yields the empty stub
+    reservation_name: str,
     request: Request,
     state: StateDep,
 ):
+    """slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#"Unable to find reservation".
+
+    The name matches case-insensitively. With no reservation in the system
+    the handler reports "Unable to query reservations" without an error
+    number (HTTP 200); an unknown name is ``ESLURM_REST_INVALID_QUERY``.
+    Neither dumps a ``reservations`` list.
+    """
+    records = _reservations(state)
+    if not records:
+        return _respond(
+            request,
+            state,
+            errors=[
+                {
+                    "description": "Unable to query reservations",
+                    "error_number": 0,
+                    "error": strerror(0),
+                    "source": "slurm_load_reservations()",
+                }
+            ],
+        )
+    found = next((r for r in records if r.name.lower() == reservation_name.lower()), None)
+    if found is None:
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    f"Unable to find reservation {reservation_name}",
+                    ESLURM_REST_INVALID_QUERY,
+                    # __func__ of the handler that reports it.
+                    "_get_single_reservation" if at_least("25.05") else "op_handler_reservation",
+                )
+            ],
+        )
     return _respond(
         request,
         state,
-        {"reservations": [], "last_update": uint_no_val(state.now_ts())},
-        warnings=[found_nothing_warning("slurm_load_reservations()", request)],
+        {"reservations": [reservation_to_dict(found)], "last_update": uint_no_val(state.now_ts())},
     )
+
+
+# --- reservation writes (25.05+) ---
+
+
+def _ts_no_val(value: Optional[datetime]) -> dict[str, Any]:
+    # An unset time is NO_VAL in a 64-bit time_t, so it echoes as a set number
+    # (seen on slurmrestd 26.05; slurm://src/api/init_msg.c#slurm_init_resv_desc_msg).
+    return uint_no_val(int(value.timestamp()) if value else resv_parser.NO_VAL)
+
+
+def _desc_to_dict(desc: ReservationDesc) -> dict[str, Any]:
+    """Dump of the request as OPENAPI_RESERVATION_MOD_RESP echoes it.
+
+    The handler dumps its own (parsed) resv_desc_msg_t, not the stored
+    record (slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_mod_reservation@25.05+):
+    CSV_STRING / HOSTLIST_STRING as lists, NO_VAL numbers and timestamps as
+    ``{set, infinite, number}``, unset flags as ``[]``.
+    """
+
+    def csv(value: Optional[str]) -> list[str]:
+        return [v for v in (value or "").split(",") if v]
+
+    def no_val(value: Optional[int]) -> dict[str, Any]:
+        if value == DURATION_INFINITE:
+            return uint_no_val(infinite=True)
+        return uint_no_val(value)
+
+    node_list = desc.node_list or ""
+    hosts = ["ALL"] if node_list.upper() == "ALL" else expand_hostlist(node_list)
+    return {
+        "accounts": csv(desc.accounts),
+        "burst_buffer": "",
+        "comment": desc.comment or "",
+        "core_count": uint_no_val(),
+        "duration": no_val(desc.duration),
+        "end_time": _ts_no_val(desc.end_time),
+        "features": "",
+        "flags": order_flags(list(desc.flags or [])),
+        "groups": csv(desc.groups),
+        "licenses": [],
+        "max_start_delay": uint_no_val(),
+        "name": desc.name or "",
+        "node_count": no_val(desc.node_cnt),
+        "node_list": hosts,
+        "partition": desc.partition or "",
+        "purge_completed": {"time": uint_no_val()},
+        "start_time": _ts_no_val(desc.start_time),
+        "tres": [],
+        "users": csv(desc.users),
+    }
+
+
+def _mod_one(db: SlurmDatabase, desc: ReservationDesc, now: datetime) -> Optional[dict[str, Any]]:
+    """Create or update one reservation; the error entry on failure.
+
+    Exists -> update, else validate + create
+    (slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_create_or_update_each_resv@25.05+).
+    """
+    name = desc.name or ""
+    if find_reservation(db, desc.name) is not None:
+        try:
+            update_reservation(db, desc, now)
+        except ReservationError as exc:
+            return slurm_error(
+                f"Error updating reservation {name}", exc.errno, "slurm_update_reservation"
+            )
+        return None
+    try:
+        validate_create_desc(desc)
+    except ReservationDescError as exc:
+        return slurm_error(str(exc), ESLURM_RESERVATION_INVALID, "validate_resv_create_desc")
+    try:
+        create_reservation(db, desc, now)
+    except ReservationError as exc:
+        # slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_create_resv@25.05+
+        if exc.errno == ESLURM_NODES_BUSY and not desc.node_list:
+            text = (
+                f"Error creating reservation {name}. Note, unless nodes are directly "
+                "requested a reservation must exist in a single partition. If no "
+                "partition is requested the default partition is assumed."
+            )
+        else:
+            text = f"Error creating reservation  {name}"
+        return slurm_error(text, exc.errno, "slurm_create_reservation")
+    return None
+
+
+def _parse_failure(
+    request, state, parsed: resv_parser.Parsed, fatal: resv_parser.Fatal, source: str
+):
+    """The parser's own error (if any), then the handler's rejection; status from 9000."""
+    errors = [*parsed.errors, *([fatal.entry] if fatal.entry else [])]
+    errors.append(
+        slurm_error(
+            "Rejecting request. Failure parsing parameters", ESLURM_REST_INVALID_QUERY, source
+        )
+    )
+    return _respond(
+        request, state, errors=errors, warnings=parsed.warnings, rc=ESLURM_REST_INVALID_QUERY
+    )
+
+
+def _resv_write_state(state) -> datetime:
+    """Bring jobs and env reservations up to date; return the job-clock now."""
+    db = state.database
+    if advance_job_states(db, state.time_engine):
+        state.commit()
+    now = job_clock_now(state.time_engine)
+    sync_reservations(db, now)
+    return now
+
+
+@router.post("/reservation")
+async def post_reservation(request: Request, state: StateDep):
+    """Create or update one reservation (25.05+).
+
+    slurm://src/slurmrestd/plugins/openapi/slurmctld/api.c#"create or update a reservation"@25.05+,
+    slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_mod_reservation@25.05+.
+    An empty body parses as ``{}`` and so lacks a name. A request that
+    parsed with only non-fatal errors (unknown flags) is carried out, but
+    those errors keep the echo out and set the status
+    (``rc = rc ? rc : ctxt->rc`` in _create_or_update_each_resv).
+    """
+    if not at_least("25.05"):
+        raise SlurmrestdRejectError(ESLURM_REST_UNKNOWN_URL)
+    raw = await _json_body(request, keep_type=True)
+    now = _resv_write_state(state)
+    parsed = resv_parser.Parsed()
+    try:
+        desc = resv_parser.DescParser(now, parsed).desc(raw)
+    except resv_parser.Fatal as fatal:
+        return _parse_failure(request, state, parsed, fatal, "_parse_resv_desc")
+    if not desc.name:
+        error = slurm_error(
+            "Reservation must be given.", ESLURM_RESERVATION_INVALID, "_mod_reservation"
+        )
+        return _respond(
+            request,
+            state,
+            errors=[*parsed.errors, error],
+            warnings=parsed.warnings,
+            rc=ESLURM_RESERVATION_INVALID,
+        )
+    refused = _mod_one(state.database, desc, now)
+    if refused is None:
+        state.commit()
+    errors = [*parsed.errors, *([refused] if refused else [])]
+    if errors:
+        rc = refused["error_number"] if refused else errors[0]["error_number"]
+        return _respond(request, state, errors=errors, warnings=parsed.warnings, rc=rc)
+    return _respond(
+        request, state, {"reservations": [_desc_to_dict(desc)]}, warnings=parsed.warnings
+    )
+
+
+@router.post("/reservations/")
+async def post_reservations(request: Request, state: StateDep):
+    """Create or update several reservations (25.05+).
+
+    slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_mod_reservations@25.05+:
+    every description needs a name before anything is applied; then each is
+    created or updated in turn, the successful ones stay, and any error --
+    a refused entry or an unknown flag -- drops the echo from the response.
+    """
+    if not at_least("25.05"):
+        raise SlurmrestdRejectError(ESLURM_REST_UNKNOWN_URL_METHOD)
+    raw = await _json_body(request, keep_type=True)
+    empty = "No reservation descriptions specified in reservations array"
+    now = _resv_write_state(state)
+    parsed = resv_parser.Parsed()
+    try:
+        descs = resv_parser.DescParser(now, parsed).mod_req(raw)
+    except resv_parser.Fatal as fatal:
+        return _parse_failure(request, state, parsed, fatal, "_parse_resv_desc_list")
+    if descs is None:
+        return _respond(
+            request,
+            state,
+            errors=[
+                *parsed.errors,
+                slurm_error(empty, ESLURM_REST_INVALID_QUERY, "_parse_resv_desc_list"),
+            ],
+            warnings=parsed.warnings,
+            rc=ESLURM_REST_INVALID_QUERY,
+        )
+    warnings = [*parsed.warnings]
+    if not descs:
+        warnings.append({"description": empty, "source": "_parse_resv_desc_list"})
+    if any(not d.name for d in descs):
+        return _respond(
+            request,
+            state,
+            errors=[
+                *parsed.errors,
+                slurm_error(
+                    "Reservation must be given", ESLURM_RESERVATION_INVALID, "_check_resv_name"
+                ),
+            ],
+            warnings=warnings,
+        )
+    results = [_mod_one(state.database, d, now) for d in descs]
+    if any(r is None for r in results):
+        state.commit()
+    errors = [*parsed.errors, *(r for r in results if r is not None)]
+    if errors:
+        return _respond(request, state, errors=errors, warnings=warnings)
+    return _respond(
+        request, state, {"reservations": [_desc_to_dict(d) for d in descs]}, warnings=warnings
+    )
+
+
+@router.delete("/reservation/{reservation_name}")
+async def delete_reservation_route(reservation_name: str, request: Request, state: StateDep):
+    """Delete a reservation (25.05+).
+
+    slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_delete_resv@25.05+;
+    the response is the bare OPENAPI_RESP envelope.
+    """
+    if not at_least("25.05"):
+        raise SlurmrestdRejectError(ESLURM_REST_UNKNOWN_URL_METHOD)
+    _resv_write_state(state)
+    try:
+        delete_reservation(state.database, reservation_name)
+    except ReservationError as exc:
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    f"Error deleting reservation {reservation_name}",
+                    exc.errno,
+                    "slurm_delete_reservation",
+                )
+            ],
+        )
+    state.commit()
+    return _respond(request, state)
 
 
 @router.get("/licenses/")

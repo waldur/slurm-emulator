@@ -1,0 +1,932 @@
+{
+ "source": "slurmrestd 26.05 (26.05.6-0pre1, a993e089c2) built from SchedMD/slurm, run with slurmctld, no slurmdbd; rest_auth/local as root. Requests are sent in order on one cluster with nodes node[001-004]. Warnings about accounting storage being disabled (no slurmdbd) are removed.",
+ "cases": [
+  {
+   "name": "empty body",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": null,
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Reservation must be given.",
+      "error_number": 2053,
+      "error": "Requested reservation is invalid",
+      "source": "_mod_reservation"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "not json",
+   "path": "/slurm/v0.0.45/reservation",
+   "raw": "{not json",
+   "expect": {
+    "status": 400,
+    "text": "Failure during parsing"
+   }
+  },
+  {
+   "name": "flags not a list",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "p2",
+    "start_time": "now+600",
+    "duration": 60,
+    "node_list": "node001",
+    "users": "root",
+    "flags": {
+     "a": 1
+    }
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Expected a List but found a dictionary",
+      "error_number": 9206,
+      "error": "Data parser expects flags to be a list",
+      "source": "#/flags/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "bad start_time string",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "p3",
+    "start_time": "bogus",
+    "duration": 60,
+    "node_list": "node001",
+    "users": "root"
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Parsing of bogus for timestamp failed",
+      "error_number": 9202,
+      "error": "Unable to convert Data type",
+      "source": "#/start_time/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc"
+     }
+    ],
+    "warnings": [
+     {
+      "description": "Expected OpenAPI type=array (Slurm type=list) but got OpenAPI type=string (Slurm type=string): \"node001\"",
+      "source": "#/node_list/"
+     }
+    ],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "duration not a number",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "p4",
+    "start_time": "now+600",
+    "duration": "abc",
+    "node_list": "node001",
+    "users": "root"
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Expected integer but got \"abc\"",
+      "error_number": 9202,
+      "error": "Unable to convert Data type",
+      "source": "#/duration/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "node_list a dict",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "p5",
+    "start_time": "now+600",
+    "duration": 60,
+    "node_list": {
+     "x": 1
+    },
+    "users": "root"
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "string expected but got {\"x\":1}",
+      "error_number": 9216,
+      "error": "Request to parse invalid data",
+      "source": "#/node_list/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc"
+     }
+    ],
+    "warnings": [
+     {
+      "description": "Expected OpenAPI type=array (Slurm type=list) but got OpenAPI type=object (Slurm type=dictionary): {\"x\":1}",
+      "source": "#/node_list/"
+     }
+    ],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "bulk: reservations not a list",
+   "path": "/slurm/v0.0.45/reservations/",
+   "body": {
+    "reservations": "x"
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Rejecting string when dictionary expected",
+      "error_number": 9209,
+      "error": "Data parser expected a dictionary or object",
+      "source": "#/reservations[0]/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc_list"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "valid, lists as arrays",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "ok1",
+    "start_time": "now+600",
+    "duration": 60,
+    "node_list": [
+     "node001"
+    ],
+    "users": [
+     "root"
+    ],
+    "flags": [
+     "MAINT",
+     "IGNORE_JOBS"
+    ]
+   },
+   "expect": {
+    "status": 200,
+    "errors": [],
+    "warnings": [],
+    "payload_keys": [
+     "reservations"
+    ]
+   }
+  },
+  {
+   "name": "valid, lists as strings",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "ok2",
+    "start_time": "now+600",
+    "duration": 60,
+    "node_list": "node002",
+    "users": "root",
+    "flags": [
+     "IGNORE_JOBS"
+    ]
+   },
+   "expect": {
+    "status": 200,
+    "errors": [],
+    "warnings": [
+     {
+      "description": "Expected OpenAPI type=array (Slurm type=list) but got OpenAPI type=string (Slurm type=string): \"node002\"",
+      "source": "#/node_list/"
+     },
+     {
+      "description": "Expected OpenAPI type=array (Slurm type=list) but got OpenAPI type=string (Slurm type=string): \"root\"",
+      "source": "#/users/"
+     }
+    ],
+    "payload_keys": [
+     "reservations"
+    ]
+   }
+  },
+  {
+   "name": "unknown flag (controller up)",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "uf1",
+    "start_time": "now+600",
+    "duration": 60,
+    "node_list": [
+     "node003"
+    ],
+    "users": [
+     "root"
+    ],
+    "flags": [
+     "IGNORE_JOBS",
+     "BOGUS"
+    ]
+   },
+   "expect": {
+    "status": 500,
+    "errors": [
+     {
+      "description": "Unknown flag \"BOGUS\"",
+      "error_number": 9207,
+      "error": "Data parser unable to parse invalid flag",
+      "source": "#/flags[1]/"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "flags as a string",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "fs1",
+    "start_time": "now+600",
+    "duration": 60,
+    "node_list": [
+     "node004"
+    ],
+    "users": [
+     "root"
+    ],
+    "flags": "IGNORE_JOBS"
+   },
+   "expect": {
+    "status": 200,
+    "errors": [],
+    "warnings": [],
+    "payload_keys": [
+     "reservations"
+    ]
+   }
+  },
+  {
+   "name": "empty dict",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {},
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Reservation must be given.",
+      "error_number": 2053,
+      "error": "Requested reservation is invalid",
+      "source": "_mod_reservation"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "bulk empty dict",
+   "path": "/slurm/v0.0.45/reservations/",
+   "body": {},
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "No reservation descriptions specified in reservations array",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc_list"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "bulk empty list",
+   "path": "/slurm/v0.0.45/reservations/",
+   "body": {
+    "reservations": []
+   },
+   "expect": {
+    "status": 200,
+    "errors": [],
+    "warnings": [
+     {
+      "description": "No reservation descriptions specified in reservations array",
+      "source": "_parse_resv_desc_list"
+     }
+    ],
+    "payload_keys": [
+     "reservations"
+    ]
+   }
+  },
+  {
+   "name": "bulk unknown flag (controller up)",
+   "path": "/slurm/v0.0.45/reservations/",
+   "body": {
+    "reservations": [
+     {
+      "name": "bu1",
+      "start_time": "now+7200",
+      "duration": 60,
+      "node_list": [
+       "node001"
+      ],
+      "users": [
+       "root"
+      ],
+      "flags": [
+       "IGNORE_JOBS"
+      ]
+     },
+     {
+      "name": "bu2",
+      "start_time": "now+7200",
+      "duration": 60,
+      "node_list": [
+       "node002"
+      ],
+      "users": [
+       "root"
+      ],
+      "flags": [
+       "IGNORE_JOBS",
+       "BOGUS"
+      ]
+     }
+    ]
+   },
+   "expect": {
+    "status": 500,
+    "errors": [
+     {
+      "description": "Unknown flag \"BOGUS\"",
+      "error_number": 9207,
+      "error": "Data parser unable to parse invalid flag",
+      "source": "#/reservations[1]/flags[1]/"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "bad start_time (controller up)",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "bs1",
+    "start_time": "bogus",
+    "duration": 60,
+    "node_list": [
+     "node001"
+    ],
+    "users": [
+     "root"
+    ]
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Parsing of bogus for timestamp failed",
+      "error_number": 9202,
+      "error": "Unable to convert Data type",
+      "source": "#/start_time/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "name as dict",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": {
+     "a": 1
+    },
+    "start_time": "now+600",
+    "duration": 60,
+    "node_list": [
+     "node001"
+    ],
+    "users": [
+     "root"
+    ]
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc"
+     }
+    ],
+    "warnings": [
+     {
+      "description": "Expected OpenAPI type=string (Slurm type=string) but got OpenAPI type=object (Slurm type=dictionary): {\"a\":1}",
+      "source": "#/name/"
+     }
+    ],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "users list with dict",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "e3",
+    "start_time": "now+600",
+    "duration": 60,
+    "node_list": [
+     "node001"
+    ],
+    "users": [
+     {
+      "a": 1
+     }
+    ]
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "unable to convert csv entry dictionary to string",
+      "error_number": 9202,
+      "error": "Unable to convert Data type",
+      "source": "#/users/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "node_list bad hostlist",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "e5",
+    "start_time": "now+600",
+    "duration": 60,
+    "node_list": "node[1-",
+    "users": [
+     "root"
+    ]
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Invalid hostlist string: node[1-",
+      "error_number": 9216,
+      "error": "Request to parse invalid data",
+      "source": "#/node_list/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc"
+     }
+    ],
+    "warnings": [
+     {
+      "description": "Expected OpenAPI type=array (Slurm type=list) but got OpenAPI type=string (Slurm type=string): \"node[1-\"",
+      "source": "#/node_list/"
+     }
+    ],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "node_list list with int",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "e6",
+    "start_time": "now+600",
+    "duration": 60,
+    "node_list": [
+     5
+    ],
+    "users": [
+     "root"
+    ]
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Error creating reservation  e6",
+      "error_number": 2018,
+      "error": "Invalid node name specified",
+      "source": "slurm_create_reservation"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "duration list",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "e7",
+    "start_time": "now+600",
+    "duration": [
+     1
+    ],
+    "node_list": [
+     "node001"
+    ],
+    "users": [
+     "root"
+    ]
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Expected integer but got [1]",
+      "error_number": 9202,
+      "error": "Unable to convert Data type",
+      "source": "#/duration/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "duration numeric string",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "e8",
+    "start_time": "now+10800",
+    "duration": "60",
+    "node_list": [
+     "node003"
+    ],
+    "users": [
+     "root"
+    ]
+   },
+   "expect": {
+    "status": 200,
+    "errors": [],
+    "warnings": [],
+    "payload_keys": [
+     "reservations"
+    ]
+   }
+  },
+  {
+   "name": "start_time bool",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "e9",
+    "start_time": true,
+    "duration": 60,
+    "node_list": [
+     "node001"
+    ],
+    "users": [
+     "root"
+    ]
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Expected integer but got true",
+      "error_number": 9202,
+      "error": "Unable to convert Data type",
+      "source": "#/start_time/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "body is a list",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": [
+    1,
+    2
+   ],
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Rejecting list when dictionary expected",
+      "error_number": 9209,
+      "error": "Data parser expected a dictionary or object",
+      "source": "#/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "flags with a number",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "e11",
+    "start_time": "now+12000",
+    "duration": 60,
+    "node_list": [
+     "node004"
+    ],
+    "users": [
+     "root"
+    ],
+    "flags": [
+     "IGNORE_JOBS",
+     7
+    ]
+   },
+   "expect": {
+    "status": 500,
+    "errors": [
+     {
+      "description": "Unknown flag \"7\"",
+      "error_number": 9207,
+      "error": "Data parser unable to parse invalid flag",
+      "source": "#/flags[1]/"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "flags as int",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "e12",
+    "start_time": "now+600",
+    "duration": 60,
+    "node_list": [
+     "node001"
+    ],
+    "users": [
+     "root"
+    ],
+    "flags": 7
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Expected a List but found a 64 bit integer",
+      "error_number": 9206,
+      "error": "Data parser expects flags to be a list",
+      "source": "#/flags/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "bulk reservations as dict",
+   "path": "/slurm/v0.0.45/reservations/",
+   "body": {
+    "reservations": {
+     "a": {
+      "name": "x"
+     }
+    }
+   },
+   "expect": {
+    "status": 422,
+    "errors": [
+     {
+      "description": "Expected List but found a dictionary",
+      "error_number": 9208,
+      "error": "Data parser expected a list",
+      "source": "#/reservations/"
+     },
+     {
+      "description": "Rejecting request. Failure parsing parameters",
+      "error_number": 9000,
+      "error": "Query empty or not RFC7320 compliant",
+      "source": "_parse_resv_desc_list"
+     }
+    ],
+    "warnings": [],
+    "payload_keys": []
+   }
+  },
+  {
+   "name": "bulk item unknown field",
+   "path": "/slurm/v0.0.45/reservations/",
+   "body": {
+    "reservations": [
+     {
+      "name": "e14",
+      "start_time": "now+15000",
+      "duration": 60,
+      "node_list": [
+       "node001"
+      ],
+      "users": [
+       "root"
+      ],
+      "zzz": "q"
+     }
+    ]
+   },
+   "expect": {
+    "status": 200,
+    "errors": [],
+    "warnings": [
+     {
+      "description": "Ignoring unknown field \"zzz\" of type string in DATA_PARSER_RESERVATION_DESC_MSG",
+      "source": "#/reservations[0]/zzz/"
+     }
+    ],
+    "payload_keys": [
+     "reservations"
+    ]
+   }
+  },
+  {
+   "name": "unknown flag lower-case known",
+   "path": "/slurm/v0.0.45/reservation",
+   "body": {
+    "name": "e15",
+    "start_time": "now+16000",
+    "duration": 60,
+    "node_list": [
+     "node002"
+    ],
+    "users": [
+     "root"
+    ],
+    "flags": [
+     "ignore_jobs"
+    ]
+   },
+   "expect": {
+    "status": 200,
+    "errors": [],
+    "warnings": [],
+    "payload_keys": [
+     "reservations"
+    ]
+   }
+  }
+ ],
+ "echo": {
+  "request": {
+   "name": "echo1",
+   "start_time": 1800000000,
+   "duration": 90,
+   "node_list": "node00[1-2]",
+   "users": "root",
+   "flags": [
+    "MAINT",
+    "IGNORE_JOBS"
+   ],
+   "comment": "hi"
+  },
+  "response": {
+   "accounts": [],
+   "burst_buffer": "",
+   "comment": "hi",
+   "core_count": {
+    "infinite": false,
+    "number": 0,
+    "set": false
+   },
+   "duration": {
+    "infinite": false,
+    "number": 90,
+    "set": true
+   },
+   "end_time": {
+    "infinite": false,
+    "number": 4294967294,
+    "set": true
+   },
+   "features": "",
+   "flags": [
+    "MAINT",
+    "IGNORE_JOBS"
+   ],
+   "groups": [],
+   "licenses": [],
+   "max_start_delay": {
+    "infinite": false,
+    "number": 0,
+    "set": false
+   },
+   "name": "echo1",
+   "node_count": {
+    "infinite": false,
+    "number": 0,
+    "set": false
+   },
+   "node_list": [
+    "node001",
+    "node002"
+   ],
+   "partition": "",
+   "purge_completed": {
+    "time": {
+     "infinite": false,
+     "number": 0,
+     "set": false
+    }
+   },
+   "start_time": {
+    "infinite": false,
+    "number": 1800000000,
+    "set": true
+   },
+   "tres": [],
+   "users": [
+    "root"
+   ]
+  }
+ }
+}
