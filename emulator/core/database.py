@@ -291,9 +291,11 @@ class Job:
     # (slurm://slurm/slurm.h#job_info_t.nodes, slurm://slurm/slurm.h#job_info_t.num_cpus).
     node_list: list[str] = field(default_factory=list)
     alloc_cpus: int = 0
-    # Why a pending job waits (slurm://slurm/slurm.h#job_info_t.state_reason);
-    # "None" once it runs.
+    # Why a pending job waits, or how a finished one failed
+    # (slurm://slurm/slurm.h#job_info_t.state_reason), and the free-text
+    # detail slurmctld adds to some reasons (slurm://slurm/slurm.h#job_info_t.state_desc).
     state_reason: str = "None"
+    state_description: str = ""
 
 
 @dataclass

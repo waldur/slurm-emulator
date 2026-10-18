@@ -41,7 +41,7 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional
 
-from emulator.core import cluster_model, job_execution
+from emulator.core import cluster_model, exit_status, job_execution
 from emulator.core.database import Job, SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
 from emulator.core.usage_simulator import standard_node_raw_tres
@@ -126,14 +126,26 @@ def _finish(job: Job, run_duration: float) -> None:
     job.state = "TIMEOUT" if timed_out else "COMPLETED"
     if job_execution.execution_enabled():
         # The script runs once, at the end of the emulated run. A failing
-        # script ends the job FAILED with its exit code
-        # (slurm://src/slurmctld/job_mgr.c#job_complete); a timed-out job
-        # stays TIMEOUT whatever the script returned.
+        # script -- non-zero exit or killed by a signal -- ends the job
+        # FAILED with its status (slurm://src/slurmctld/job_mgr.c#_job_complete);
+        # a timed-out job stays TIMEOUT whatever the script returned.
         code = job_execution.execute_once(job)
         if not timed_out:
             job.exit_code = code
             if code != 0:
                 job.state = "FAILED"
+    if timed_out:
+        # The batch script is sent SIGTERM at the limit
+        # (slurm://src/slurmctld/job_mgr.c#_job_timed_out).
+        job.exit_code = -exit_status.TIME_LIMIT_SIGNAL
+    job.state_reason, job.state_description = exit_status.failure_reason(job.state, job.exit_code)
+
+
+def _set_reason(job: Job, reason: str, description: str) -> bool:
+    if (job.state_reason, job.state_description) == (reason, description):
+        return False
+    job.state_reason, job.state_description = reason, description
+    return True
 
 
 def advance_job_states(database: SlurmDatabase, time_engine: TimeEngine) -> bool:
@@ -163,8 +175,14 @@ def advance_job_states(database: SlurmDatabase, time_engine: TimeEngine) -> bool
         return [j for j in database.jobs.values() if j.state == "RUNNING" and j.start_time]
 
     def pending() -> list[Job]:
+        # A held job (priority 0) is not considered
+        # (slurm://src/slurmctld/job_scheduler.c#_job_runnable_test1).
         return sorted(
-            (j for j in database.jobs.values() if j.state == "PENDING" and j.submit_time),
+            (
+                j
+                for j in database.jobs.values()
+                if j.state == "PENDING" and j.submit_time and j.priority != 0
+            ),
             key=_queue_order,
         )
 
@@ -177,6 +195,9 @@ def advance_job_states(database: SlurmDatabase, time_engine: TimeEngine) -> bool
     for _ in range(_MAX_EVENTS):
         if t is None or t > job_now:
             break
+        # Reservations that ended by now are gone before this pass.
+        if cluster_model.purge_ended_reservations(database, t):
+            changed = True
         # Ends and starts at the same instant feed each other (a zero-length
         # run, freed nodes taken at once), so repeat until nothing moves.
         progressed = True
@@ -188,24 +209,47 @@ def advance_job_states(database: SlurmDatabase, time_engine: TimeEngine) -> bool
                     progressed = changed = True
             blocked = False
             usage = None
+            # Once a job cannot start for want of resources, the rest of the
+            # pass skips its partition (or its reservation) and those jobs
+            # wait with reason Priority; nodes of a failed partition are not
+            # handed to other partitions either
+            # (slurm://src/slurmctld/job_scheduler.c#_schedule).
+            failed_parts: set[str] = set()
+            failed_resvs: set[str] = set()
+            unavailable: set[str] = set()
             for job in pending():
                 if eligible(job) > t:
+                    continue
+                skipped = (
+                    job.reservation in failed_resvs
+                    if job.reservation
+                    else job.partition in failed_parts
+                )
+                if skipped:
+                    blocked = True
+                    if job.reservation or job.state_reason in ("None", "Resources"):
+                        changed = _set_reason(job, "Priority", "") or changed
                     continue
                 duration = _limit_seconds(job) or _planned(job, run_duration)[0]
                 if usage is None:
                     usage = cluster_model.occupancy(database, t, overrides)
-                nodes, reason = cluster_model.try_allocate(
-                    database, job, t, duration, usage, overrides
+                placement = cluster_model.try_allocate(
+                    database, job, t, duration, usage, overrides, unavailable
                 )
-                if nodes is None:
+                if placement.nodes is None:
                     blocked = True
-                    if job.state_reason != reason:
-                        job.state_reason = reason
-                        changed = True
+                    changed = _set_reason(job, placement.reason, placement.description) or changed
+                    if placement.reason == "Resources":
+                        if job.reservation:
+                            failed_resvs.add(job.reservation)
+                        else:
+                            failed_parts.add(job.partition)
+                            unavailable.update(cluster_model.partition_nodes(job.partition))
                     continue
-                cluster_model.allocate(job, nodes)
+                cluster_model.allocate(job, placement.nodes)
                 job.state = "RUNNING"
                 job.state_reason = "None"
+                job.state_description = ""
                 job.start_time = t
                 usage = None  # occupancy changed
                 progressed = changed = True
@@ -219,6 +263,8 @@ def advance_job_states(database: SlurmDatabase, time_engine: TimeEngine) -> bool
                 future += [b for b in (resv.start_time, resv.end_time) if b and b > t]
         t = min(future) if future else None
 
+    if cluster_model.purge_ended_reservations(database, job_now):
+        changed = True
     if pending() and (cursor is None or (job_now - cursor).total_seconds() >= 1):
         database.sched_cursor = job_now
         changed = True
@@ -283,7 +329,9 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
             group_name=getattr(job, "group_name", ""),
             job_name=job.name or "",
             working_directory=job.working_directory or "",
-            exit_code=getattr(job, "exit_code", None),
+            # Accounting logs a timed-out job when the limit fires, before
+            # the script is signalled (slurm://src/slurmctld/job_mgr.c#_job_timed_out).
+            exit_code=0 if job.state == "TIMEOUT" else job.exit_code,
             standard_input=job.standard_input or "",
             standard_output=job.standard_output or "",
             standard_error=job.standard_error or "",

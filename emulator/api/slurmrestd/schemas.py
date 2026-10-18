@@ -17,12 +17,12 @@ from datetime import timedelta
 from typing import Any, Optional
 
 from emulator.commands.sacct import (
-    _FAILED_STATES,
     _NODE_CPUS,
     _NODE_GPUS,
     _NODE_MEM_GB,
     SacctEmulator,
 )
+from emulator.core import exit_status
 from emulator.core.cluster_model import (
     GPU_MEM_MB,
     NodeView,
@@ -326,13 +326,8 @@ def _cpu_time(seconds: float) -> dict[str, int]:
 
 
 def _exit_code(state: str, return_code: Optional[int]) -> dict[str, Any]:
-    failed = state.startswith(_FAILED_STATES)
-    if return_code is None:
-        return_code = 1 if failed else 0
-    return {
-        "status": ["ERROR"] if failed else ["SUCCESS"],
-        "return_code": uint_no_val(return_code),
-    }
+    """PROCESS_EXIT_CODE of a job or step (``emulator/core/exit_status.py``)."""
+    return exit_status.verbose(state, return_code)
 
 
 def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) -> dict[str, Any]:
@@ -387,13 +382,11 @@ def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) 
             "limit": uint_no_val(),
             **cpu,
         },
-        "exit_code": _exit_code(state, record.exit_code)
-        if state != "TIMEOUT"
-        else {
-            "status": ["SIGNALED"],
-            "return_code": uint_no_val(0),
-            "signal": {"id": uint_no_val(15), "name": "TERM"},
-        },
+        # The time-limit SIGTERM ends a timed-out job's batch step.
+        "exit_code": _exit_code(
+            state,
+            -exit_status.TIME_LIMIT_SIGNAL if state == "TIMEOUT" else record.exit_code,
+        ),
         "nodes": {"count": 1, "range": first_node, "list": [first_node]},
         "tasks": {"count": 1},
         "kill_request_user": "",
@@ -587,8 +580,8 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         "partition": job.partition or "compute",
         "job_state": [job.state],
         # slurm://src/common/job_state_reason.c#job_state_reason_string
-        "state_reason": getattr(job, "state_reason", "None") or "None",
-        "state_description": "",
+        "state_reason": job.state_reason or "None",
+        "state_description": job.state_description,
         # JOB_INFO carries exit_code/derived_exit_code as PROCESS_EXIT_CODE.
         "exit_code": exit_code,
         "derived_exit_code": exit_code,

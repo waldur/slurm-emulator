@@ -15,16 +15,33 @@ What it models after real Slurm:
   (slurm://src/plugins/select/cons_tres/job_test.c#job_test@25.05+). Memory
   without ``memory_per_node`` follows a ``DefMemPerCPU`` of node memory / CPUs
   (slurm://src/common/read_config.c#"DefMemPerCPU").
-* **Pending reasons**: not enough free nodes -> ``Resources``; blocked only
-  by a MAINT reservation -> ``ReqNodeNotAvail, Reserved for maintenance``;
-  a requested reservation not active yet -> ``Reservation``
-  (slurm://src/common/job_state_reason.c#job_state_reason_string,
-  slurm://src/slurmctld/reservation.c#"ReqNodeNotAvail, Reserved for maintenance").
+* **Pending reasons** (``state_reason`` plus ``state_description``,
+  slurm://src/common/job_state_reason.c#job_state_reason_string): not enough
+  free nodes -> ``Resources``; a reservation the job does not request that
+  covers every node (``ALL_NODES``), is the job's partition (``PART_NODES``)
+  or is MAINT over the whole partition -> ``ReqNodeNotAvail`` described as
+  "ReqNodeNotAvail, Reserved for maintenance"
+  (slurm://src/slurmctld/reservation.c#job_test_resv returns
+  ``ESLURM_RESERVATION_MAINT``,
+  slurm://src/slurmctld/node_scheduler.c#"ReqNodeNotAvail, Reserved for maintenance");
+  a requested reservation not active yet, or not open to the job ->
+  ``Reservation``; every node of the job's reservation taken by an
+  overlapping one -> ``ReqNodeNotAvail`` "Reserved for maintenance" /
+  "Reserved for other reservations".
 * **Reservations** block their nodes for every job that does not request
   them whenever ``[start, start + duration)`` of the job overlaps the
   reservation, where the duration is the job's time limit
   (slurm://src/slurmctld/reservation.c#job_test_resv,
-  slurm://src/slurmctld/reservation.c#_get_job_duration). Nodes inside an
+  slurm://src/slurmctld/reservation.c#_get_job_duration). A job inside a
+  reservation runs on its nodes (any node with ``ANY_NODES``, any node and
+  any time with ``FLEX``) minus those of other overlapping reservations,
+  unless its own is MAINT or (towards non-MAINT ones) OVERLAP. Only users
+  and accounts the reservation names may use it
+  (slurm://src/slurmctld/reservation.c#_valid_job_access_resv). A reservation
+  is purged once it has ended and no job runs in it; pending jobs that asked
+  for it are held with ``ReservationDeleted``
+  (slurm://src/slurmctld/reservation.c#job_resv_check,
+  slurm://src/slurmctld/reservation.c#_foreach_clear_job_resv). Nodes inside an
   active reservation carry the ``RESERVED`` state flag, and ``MAINTENANCE``
   for a MAINT one (slurm://src/plugins/data_parser/v0.0.45/parsers.c#NODE_STATES@26.05+).
 * **Node view**: base state IDLE / MIXED / ALLOCATED from allocated CPUs, plus
@@ -86,7 +103,10 @@ MEM_FRACTION_ENV = "SLURM_EMULATOR_MEM_FRACTION"
 BACKGROUND_WINDOW_SECONDS = 900
 LOAD_WINDOW_SECONDS = 300
 
-MAINT_REASON = "ReqNodeNotAvail, Reserved for maintenance"
+# WAIT_NODE_NOT_AVAIL and the descriptions slurmctld gives it.
+NODE_NOT_AVAIL = "ReqNodeNotAvail"
+MAINT_DESC = "ReqNodeNotAvail, Reserved for maintenance"
+OTHER_RESV_DESC = "ReqNodeNotAvail, Reserved for other reservations"
 
 
 # --- hostlists ---
@@ -333,6 +353,9 @@ def sync_reservations(database: SlurmDatabase, now: datetime) -> bool:
             continue
         anchor = database.reservation_anchor or now
         resv = parse_reservation_spec(entry, anchor)
+        # An entry that has already ended was purged; it does not come back.
+        if resv is not None and resv.end_time is not None and resv.end_time <= now:
+            continue
         if resv is not None:
             database.reservations[name] = resv
             changed = True
@@ -345,6 +368,101 @@ def reservation_active(resv: Reservation, at: datetime) -> bool:
 
 def _job_may_use(resv: Reservation, job: Job) -> bool:
     return job.reservation == resv.name
+
+
+def _access_list(csv: str) -> tuple[set[str], bool]:
+    """(names, negated) of a Users= / Accounts= list; ``-`` on the first marks a deny list."""
+    items = [i.strip() for i in csv.split(",") if i.strip()]
+    negated = bool(items) and items[0].startswith("-")
+    return {i.lstrip("-") for i in items}, negated
+
+
+def _account_chain(database: SlurmDatabase, account: str) -> list[str]:
+    """The account and its parents: the job association's lineage."""
+    chain: list[str] = []
+    name: Optional[str] = account.lower()
+    while name and name not in chain:
+        chain.append(name)
+        record = database.get_account(name)
+        name = record.parent.lower() if record and record.parent else None
+    return chain
+
+
+def job_may_access(database: SlurmDatabase, resv: Reservation, job: Job) -> bool:
+    """Whether ``job`` may run in ``resv``.
+
+    slurm://src/slurmctld/reservation.c#_valid_job_access_resv: root always
+    may and nobody may use a TIME_FLOAT reservation. Otherwise the
+    reservation's Users= / Accounts= become allow or deny lists of
+    associations (slurm://src/slurmctld/reservation.c#_set_assoc_list): users
+    and accounts both allowed = only those user/account pairs; else each list
+    on its own, an account also covering its sub-accounts. The job's
+    association or a parent must not be denied and, when anything is
+    allowed, must be allowed (slurm://src/slurmctld/reservation.c#_check_assoc_access@26.05+).
+    A Groups= reservation is open to the members of the group.
+    """
+    if "TIME_FLOAT" in resv.flags:
+        return False
+    if job.user == "root" or job.uid == 0:
+        return True
+    users, users_not = _access_list(resv.users)
+    if not users and resv.groups:
+        groups, _ = _access_list(resv.groups)
+        return (job.group_name or job.user) in groups
+    accounts = {a.lower() for a in _access_list(resv.accounts)[0]}
+    accounts_not = _access_list(resv.accounts)[1]
+    chain = _account_chain(database, job.account or "")
+    if users and accounts and not users_not and not accounts_not:
+        return job.user in users and (job.account or "").lower() in accounts
+    any_allowed = allowed = denied = False
+    if users:
+        if users_not:
+            denied = denied or job.user in users
+        else:
+            any_allowed = True
+            allowed = allowed or job.user in users
+    if accounts:
+        hit = bool(accounts.intersection(chain))
+        if accounts_not:
+            denied = denied or hit
+        else:
+            any_allowed = True
+            allowed = allowed or hit
+    return not denied and (not any_allowed or allowed)
+
+
+def purge_ended_reservations(database: SlurmDatabase, now: datetime) -> bool:
+    """Drop reservations that have ended with no job running in them.
+
+    slurm://src/slurmctld/reservation.c#job_resv_check; pending jobs that
+    asked for one are held (priority 0) with reason ``ReservationDeleted``
+    (slurm://src/slurmctld/reservation.c#_foreach_clear_job_resv).
+    """
+    changed = False
+    for name, resv in list(database.reservations.items()):
+        if resv.end_time is None or resv.end_time > now:
+            continue
+        users = [j for j in database.jobs.values() if j.reservation == name]
+        if any(j.state == "RUNNING" for j in users) and "FLEX" not in resv.flags:
+            continue
+        del database.reservations[name]
+        for job in users:
+            job.reservation = ""
+            if job.state == "PENDING" and job.state_reason != "JobHeldAdmin":
+                job.state_reason = "ReservationDeleted"
+                job.state_description = f"Reservation {name} was deleted"
+                job.priority = 0
+        changed = True
+    return changed
+
+
+def _blocks_whole_job(resv: Reservation, job: Job) -> bool:
+    """``ESLURM_RESERVATION_MAINT`` in slurm://src/slurmctld/reservation.c#job_test_resv."""
+    if "ALL_NODES" in resv.flags:
+        return True
+    if "PART_NODES" in resv.flags and resv.partition == job.partition:
+        return True
+    return "MAINT" in resv.flags and set(partition_nodes(job.partition)) <= set(resv.nodes)
 
 
 # --- per-job request and synthetic usage ---
@@ -512,6 +630,61 @@ def occupancy(
     return usage
 
 
+@dataclass
+class Placement:
+    """Where a job starts, or why it waits (``state_reason``, ``state_description``)."""
+
+    nodes: Optional[list[str]]
+    reason: str = "None"
+    description: str = ""
+
+
+def _overlapping(resv: Reservation, at: datetime, job_end: datetime) -> bool:
+    return bool(
+        resv.start_time and resv.end_time and resv.start_time < job_end and resv.end_time > at
+    )
+
+
+def _reservation_pool(
+    database: SlurmDatabase, job: Job, at: datetime, job_end: datetime
+) -> tuple[Optional[list[str]], Placement]:
+    """Nodes a job may use inside its reservation (job_test_resv, job branch)."""
+    own = database.reservations.get(job.reservation)
+    if own is None or not job_may_access(database, own, job):
+        return None, Placement(None, "Reservation")
+    part = partition_nodes(job.partition)
+    if "FLEX" in own.flags:
+        pool = list(part)
+    else:
+        if own.start_time is None or at < own.start_time:
+            return None, Placement(None, "Reservation")
+        if not own.nodes and "ANY_NODES" not in own.flags:
+            return None, Placement(None, "Reservation")
+        if own.end_time is not None and at > own.end_time:
+            return None, Placement(None, "Reservation")
+        allowed = set(part) if "ANY_NODES" in own.flags else set(own.nodes)
+        pool = [n for n in part if n in allowed]
+    if "MAINT" in own.flags:
+        return pool, Placement(pool)
+    overlap = maint = False
+    own_nodes = set(own.nodes)
+    for other in database.reservations.values():
+        if other is own or not other.nodes or not _overlapping(other, at, job_end):
+            continue
+        steal = set(other.nodes)
+        if "OVERLAP" in own.flags and "MAINT" not in other.flags:
+            if "FLEX" not in own.flags or not own_nodes or steal <= own_nodes:
+                continue
+            steal -= own_nodes
+        if steal.intersection(pool):
+            overlap = True
+            maint = maint or "MAINT" in other.flags
+            pool = [n for n in pool if n not in steal]
+    if overlap and not pool:
+        return None, Placement(None, NODE_NOT_AVAIL, MAINT_DESC if maint else OTHER_RESV_DESC)
+    return pool, Placement(pool)
+
+
 def try_allocate(
     database: SlurmDatabase,
     job: Job,
@@ -519,53 +692,49 @@ def try_allocate(
     duration_seconds: float,
     usage: Optional[dict[str, NodeUse]] = None,
     overrides: Optional[dict[str, tuple[str, str]]] = None,
-) -> tuple[Optional[list[str]], str]:
-    """Nodes ``job`` can start on at ``at``, or ``(None, pending reason)``."""
+    unavailable: Optional[set[str]] = None,
+) -> Placement:
+    """Nodes ``job`` can start on at ``at``, or why it stays pending.
+
+    ``unavailable`` are nodes this scheduling pass no longer hands out
+    (partitions whose first job could not start).
+    """
     if overrides is None:
         overrides = node_state_overrides()
     if usage is None:
         usage = occupancy(database, at, overrides)
     req = job_request(job)
-    pool = partition_nodes(job.partition)
+    job_end = at + timedelta(seconds=duration_seconds)
 
     if job.reservation:
-        own = database.reservations.get(job.reservation)
-        if own is None or not reservation_active(own, at):
-            return None, "Reservation"
-        allowed = set(own.nodes)
-        pool = [n for n in pool if n in allowed]
-
-    job_end = at + timedelta(seconds=duration_seconds)
-    blocking: dict[str, Reservation] = {}
-    for resv in database.reservations.values():
-        if _job_may_use(resv, job) or not resv.start_time or not resv.end_time:
-            continue
-        if resv.start_time < job_end and resv.end_time > at:
-            for node in resv.nodes:
-                blocking.setdefault(node, resv)
+        pool, placement = _reservation_pool(database, job, at, job_end)
+        if pool is None:
+            return placement
+    else:
+        pool = partition_nodes(job.partition)
+        blocked: set[str] = set()
+        for resv in database.reservations.values():
+            if not _overlapping(resv, at, job_end):
+                continue
+            if _blocks_whole_job(resv, job):
+                return Placement(None, NODE_NOT_AVAIL, MAINT_DESC)
+            blocked.update(resv.nodes)
+        pool = [n for n in pool if n not in blocked]
 
     free: list[str] = []
-    maint_blocked = 0
     for node in pool:
-        if node in overrides:
+        if node in overrides or (unavailable and node in unavailable):
             continue
         use = usage.get(node) or NodeUse()
         if use.background:
             continue
         if NODE_CPUS - use.cpus < req.cpus_per_node or NODE_MEM_MB - use.mem < req.mem_per_node:
             continue
-        blocker = blocking.get(node)
-        if blocker is not None:
-            if "MAINT" in blocker.flags:
-                maint_blocked += 1
-            continue
         free.append(node)
 
     if len(free) >= req.node_count:
-        return free[: req.node_count], "None"
-    if maint_blocked and len(free) + maint_blocked >= req.node_count:
-        return None, MAINT_REASON
-    return None, "Resources"
+        return Placement(free[: req.node_count])
+    return Placement(None, "Resources")
 
 
 def allocate(job: Job, nodes: list[str]) -> None:

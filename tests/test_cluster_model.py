@@ -356,7 +356,8 @@ class TestReservations:
         jobs = ctld_jobs(restd, auth_headers)
         assert jobs[short_job]["job_state"] == ["RUNNING"]
         assert jobs[long_job]["job_state"] == ["PENDING"]
-        assert jobs[long_job]["state_reason"] == cluster_model.MAINT_REASON
+        assert jobs[long_job]["state_reason"] == "ReqNodeNotAvail"
+        assert jobs[long_job]["state_description"] == cluster_model.MAINT_DESC
         # After the window it runs.
         set_time(T0 + timedelta(hours=5, minutes=1))
         assert ctld_jobs(restd, auth_headers)[long_job]["job_state"] == ["RUNNING"]
