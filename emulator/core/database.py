@@ -147,6 +147,10 @@ class Association:
     # Empty qos_list means "inherit the account/parent QOS".
     qos_list: list[str] = field(default_factory=list)
     def_qos: str = ""
+    # Fairshare of a user row (slurmdb_assoc_rec_t.shares_raw, 1 when unset —
+    # slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_cluster_get_assocs);
+    # the account-level row keeps its share on the Account record.
+    fairshare: int = 1
 
     def __post_init__(self) -> None:
         """Fold the account and parent account names to lower case.
@@ -348,22 +352,6 @@ class Reservation:
 CLUSTER_NAME_ENV_VAR = "SLURM_EMULATOR_CLUSTER_NAME"
 
 
-class DefaultAssociationError(Exception):
-    """Removing a user's default association while other associations remain.
-
-    slurm_strerror(ESLURM_NO_REMOVE_DEFAULT_ACCOUNT)
-    (slurm://src/common/slurm_errno.c#ESLURM_NO_REMOVE_DEFAULT_ACCOUNT).
-    """
-
-    ERRNO = 7009
-    TEXT = "You can not remove the default account of a user"
-
-    def __init__(self, user: str, account: str):
-        super().__init__(self.TEXT)
-        self.user = user
-        self.account = account
-
-
 class SlurmDatabase:
     """In-memory database for SLURM emulator."""
 
@@ -413,6 +401,9 @@ class SlurmDatabase:
         )
 
         self._seed_root("default")
+        # slurmdbd creates the ``normal`` QoS when it builds its tables
+        # (slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#"Normal QOS default").
+        self.qos_list["normal"] = QOS(name="normal")
         self._apply_cluster_name_env()
 
     def _apply_cluster_name_env(self) -> None:
@@ -446,7 +437,9 @@ class SlurmDatabase:
         be refused under AccountingStorageEnforce=associations.
         """
         if "root" not in self.accounts:
-            self.add_account("root", "Root account", "system")
+            # Description and organization as slurmdbd writes them
+            # (slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#"default root account").
+            self.add_account("root", "default root account", "root")
         if "root" not in self.users:
             self.add_user("root", "root")
         for user in ("", "root"):
@@ -696,40 +689,6 @@ class SlurmDatabase:
             if a.user == user and (cluster is None or a.cluster == cluster)
         ]
 
-    def check_association_removal(self, user: str, account: str) -> None:
-        """Refuse to remove a user's default association while others remain.
-
-        slurmdbd never lets the default association go while the user still
-        has other rows — ``as_mysql_remove_assocs`` sets
-        ``ESLURM_NO_REMOVE_DEFAULT_ACCOUNT`` and discards the change
-        (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#as_mysql_remove_assocs);
-        the last association may go, and takes the user with it. That is the
-        invariant AccountingStorageEnforce relies on when it trusts
-        ``default_account`` on submit.
-        """
-        user_rec = self.users.get(user)
-        if user_rec is None or fold_account(account) != fold_account(user_rec.default_account):
-            return
-        others = [a for a in self.user_association_rows(user) if a.account != fold_account(account)]
-        if others:
-            raise DefaultAssociationError(user, account)
-
-    def remove_user_from_account(
-        self, user: str, account: str, cluster: Optional[str] = None
-    ) -> int:
-        """``sacctmgr remove user where name=U account=A`` with slurmdbd's rules.
-
-        Checks :meth:`check_association_removal`, deletes every partition row
-        for the pair, and deletes the user once no association is left —
-        what ``sacctmgr remove user`` does when the removed association was
-        the last one (slurm://src/sacctmgr/user_functions.c#sacctmgr_delete_user).
-        """
-        self.check_association_removal(user, account)
-        removed = self.delete_user_associations(user, account, cluster)
-        if removed and not self.user_association_rows(user):
-            self.users.pop(user, None)
-        return removed
-
     def remove_user(self, user: str) -> bool:
         """Delete a user and every association it holds (``sacctmgr remove user where name=U``)."""
         if user not in self.users:
@@ -937,6 +896,16 @@ class SlurmDatabase:
 
         return jobs
 
+    def qos_known(self, name: str) -> bool:
+        """Whether ``name`` resolves to a QoS.
+
+        slurmdbd creates ``normal`` when it first starts
+        (slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#"'normal'"),
+        and accounts default to it; the emulator's QoS table leaves that row
+        implicit until something defines it, so it resolves here regardless.
+        """
+        return name in self.qos_list or name == "normal"
+
     def bootstrap_default_qos(self) -> bool:
         """Seed a standard set of usable QoS classes when none are defined.
 
@@ -945,7 +914,11 @@ class SlurmDatabase:
         plus common HPC classes so accounts can be assigned meaningful QoS out
         of the box. Returns True if it seeded anything.
         """
-        if self.qos_list:
+        # A fresh database holds only slurmdbd's plain ``normal``; anything
+        # else, including a tuned ``normal``, is the operator's.
+        if set(self.qos_list) - {"normal"} or (
+            "normal" in self.qos_list and self.qos_list["normal"] != QOS(name="normal")
+        ):
             return False
         defaults = [
             QOS(name="normal", max_wall="7-00:00:00"),

@@ -20,6 +20,7 @@ from emulator import __version__
 from emulator.api.slurmrestd.envelope import (
     ESLURM_REST_UNKNOWN_URL,
     ESLURM_REST_UNKNOWN_URL_METHOD,
+    SLURM_ERROR,
     SLURMDBD_PLUGIN,
     SlurmdbRequestError,
     SlurmrestdRejectError,
@@ -31,6 +32,46 @@ from emulator.api.slurmrestd.envelope import (
 from emulator.api.slurmrestd.routers import slurmctld, slurmdb
 
 DEFAULT_PORT = 6820
+
+_URL_UNRESERVED = frozenset("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ~-._")
+_HEX = frozenset("0123456789abcdefABCDEF")
+
+
+def query_string_parses(query: str) -> bool:
+    """Whether slurmrestd's url-encoded serializer accepts this query string.
+
+    Only rfc3986 unreserved characters pass as they are; ``%XX`` escapes,
+    ``+`` (space), ``&``/``;`` and ``=`` have their rfc1866 meaning, and any
+    other character -- a literal ``,`` in ``user=a,b`` -- fails the whole
+    request (slurm://src/plugins/serializer/url-encoded/serializer_url_encoded.c#serialize_p_string_to_data).
+    A second ``=`` in a value, or one before any key, fails too.
+    """
+    key = buffer = False
+    i = 0
+    while i < len(query):
+        char = query[i]
+        if char in _URL_UNRESERVED or char == "+":
+            buffer = True
+        elif char == "%":
+            if i + 2 >= len(query) or query[i + 1] not in _HEX or query[i + 2] not in _HEX:
+                return False
+            if query[i + 1 : i + 3] == "00":
+                return False
+            buffer = True
+            i += 2
+        elif char in "&;":
+            key = buffer = False
+        elif char == "=":
+            if not key and not buffer:
+                return False
+            if key and buffer:
+                return False
+            if not key:
+                key, buffer = True, False
+        else:
+            return False
+        i += 1
+    return True
 
 
 def _build_openapi_spec(app: FastAPI) -> dict[str, Any]:
@@ -60,6 +101,13 @@ def create_app() -> FastAPI:
     )
     app.include_router(slurmdb.router)
     app.include_router(slurmctld.router)
+
+    @app.middleware("http")
+    async def refuse_unparsable_query(request: Request, call_next):
+        query = request.scope.get("query_string", b"").decode("latin-1")
+        if query and not query_string_parses(query):
+            return reject_response(SLURM_ERROR)
+        return await call_next(request)
 
     @app.exception_handler(SlurmdbRequestError)
     async def handle_slurmdb_request_error(

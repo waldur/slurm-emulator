@@ -1,0 +1,1388 @@
+[
+ {
+  "name": "sinfo -V",
+  "argv": [
+   "sinfo",
+   "-V"
+  ]
+ },
+ {
+  "name": "sacctmgr --version",
+  "argv": [
+   "sacctmgr",
+   "--version"
+  ]
+ },
+ {
+  "name": "sacctmgr list tres",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "tres"
+  ]
+ },
+ {
+  "name": "sacctmgr list cluster format=cluster",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "cluster",
+   "format=cluster"
+  ]
+ },
+ {
+  "name": "sacctmgr list account cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "account",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr add account org_a description=\"Org A\" organization=\"org_a\" cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "add",
+   "account",
+   "org_a",
+   "description=\"Org A\"",
+   "organization=\"org_a\"",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr add account alloc_a description=\"Alloc A\" organization=\"org_a\" parent=\"org_a\" cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "add",
+   "account",
+   "alloc_a",
+   "description=\"Alloc A\"",
+   "organization=\"org_a\"",
+   "parent=\"org_a\"",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr add account alloc_b description=\"Alloc B\" organization=\"org_a\" parent=\"org_a\" cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "add",
+   "account",
+   "alloc_b",
+   "description=\"Alloc B\"",
+   "organization=\"org_a\"",
+   "parent=\"org_a\"",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr add account alloc_a description=\"Alloc A\" organization=\"org_a\" parent=\"org_a\" cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "add",
+   "account",
+   "alloc_a",
+   "description=\"Alloc A\"",
+   "organization=\"org_a\"",
+   "parent=\"org_a\"",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show account alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "account",
+   "alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show account nope cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "account",
+   "nope",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr list account cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "account",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show assoc account=alloc_a format=Account,ParentName,User -n -P cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "assoc",
+   "account=alloc_a",
+   "format=Account,ParentName,User",
+   "-n",
+   "-P",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account where name=alloc_b cluster=demo set parent=root",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "where",
+   "name=alloc_b",
+   "cluster=demo",
+   "set",
+   "parent=root"
+  ]
+ },
+ {
+  "name": "sacctmgr show assoc account=alloc_b format=Account,ParentName,User -n -P cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "assoc",
+   "account=alloc_b",
+   "format=Account,ParentName,User",
+   "-n",
+   "-P",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account where name=alloc_b cluster=demo set parent=org_a",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "where",
+   "name=alloc_b",
+   "cluster=demo",
+   "set",
+   "parent=org_a"
+  ]
+ },
+ {
+  "name": "sacctmgr show assoc account=nope format=Account,ParentName,User -n -P cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "assoc",
+   "account=nope",
+   "format=Account,ParentName,User",
+   "-n",
+   "-P",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show association where account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "association",
+   "where",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr add user alice account=alloc_a DefaultAccount=alloc_a Share=parent cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "add",
+   "user",
+   "alice",
+   "account=alloc_a",
+   "DefaultAccount=alloc_a",
+   "Share=parent",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr add user bob account=alloc_a Share=parent cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "add",
+   "user",
+   "bob",
+   "account=alloc_a",
+   "Share=parent",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr add user alice account=alloc_a Share=parent cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "add",
+   "user",
+   "alice",
+   "account=alloc_a",
+   "Share=parent",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr add user alice account=alloc_b Partition=debug cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "add",
+   "user",
+   "alice",
+   "account=alloc_b",
+   "Partition=debug",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr add user carol account=alloc_b DefaultAccount=alloc_b Partitions=debug,gpu Share=parent cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "add",
+   "user",
+   "carol",
+   "account=alloc_b",
+   "DefaultAccount=alloc_b",
+   "Partitions=debug,gpu",
+   "Share=parent",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show association where user=alice account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "association",
+   "where",
+   "user=alice",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show association where user=nobody account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "association",
+   "where",
+   "user=nobody",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr list associations format=account,user where account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "associations",
+   "format=account,user",
+   "where",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr list associations format=account,user where account=alloc_b cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "associations",
+   "format=account,user",
+   "where",
+   "account=alloc_b",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show association where account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "association",
+   "where",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show association where user=alice format=user,account cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "association",
+   "where",
+   "user=alice",
+   "format=user,account",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show association where user=nobody format=user,account cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "association",
+   "where",
+   "user=nobody",
+   "format=user,account",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show user where name=alice format=user,defaultaccount cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "user",
+   "where",
+   "name=alice",
+   "format=user,defaultaccount",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show user where name=nobody format=user,defaultaccount cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "user",
+   "where",
+   "name=nobody",
+   "format=user,defaultaccount",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify user where name=alice cluster=demo set DefaultAccount=alloc_b",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "user",
+   "where",
+   "name=alice",
+   "cluster=demo",
+   "set",
+   "DefaultAccount=alloc_b"
+  ]
+ },
+ {
+  "name": "sacctmgr show user where name=alice format=user,defaultaccount cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "user",
+   "where",
+   "name=alice",
+   "format=user,defaultaccount",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account alloc_a cluster=demo set GrpTRESMins=cpu=1000,gres/gpu=10,mem=2000",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "alloc_a",
+   "cluster=demo",
+   "set",
+   "GrpTRESMins=cpu=1000,gres/gpu=10,mem=2000"
+  ]
+ },
+ {
+  "name": "sacctmgr show association format=account,GrpTRESMins where accounts=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "show",
+   "association",
+   "format=account,GrpTRESMins",
+   "where",
+   "accounts=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr list tres",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "tres"
+  ]
+ },
+ {
+  "name": "sacctmgr modify user alice where account=alloc_a cluster=demo set MaxTRESMins=cpu=500,mem=-1,energy=-1,node=-1,billing=-",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "user",
+   "alice",
+   "where",
+   "account=alloc_a",
+   "cluster=demo",
+   "set",
+   "MaxTRESMins=cpu=500,mem=-1,energy=-1,node=-1,billing=-1,fs/disk=-1,vmem=-1,pages=-1,gres/gpu=-1,gres/gpumem=-1,gres/gpuutil=-1"
+  ]
+ },
+ {
+  "name": "sacctmgr show association where accounts=alloc_a format=Account,MaxTRESMins,User cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "show",
+   "association",
+   "where",
+   "accounts=alloc_a",
+   "format=Account,MaxTRESMins,User",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account alloc_b cluster=demo set GrpTRES=cpu=64",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "alloc_b",
+   "cluster=demo",
+   "set",
+   "GrpTRES=cpu=64"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account alloc_b cluster=demo set GrpTRES=gres/gpu=2",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "alloc_b",
+   "cluster=demo",
+   "set",
+   "GrpTRES=gres/gpu=2"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account alloc_b cluster=demo set MaxTRES=cpu=32",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "alloc_b",
+   "cluster=demo",
+   "set",
+   "MaxTRES=cpu=32"
+  ]
+ },
+ {
+  "name": "sacctmgr list account format=account,grptres,grptresmin,maxtres,maxtresmin where account=alloc_b cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "account",
+   "format=account,grptres,grptresmin,maxtres,maxtresmin",
+   "where",
+   "account=alloc_b",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account alloc_a cluster=demo set fairshare=10",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "alloc_a",
+   "cluster=demo",
+   "set",
+   "fairshare=10"
+  ]
+ },
+ {
+  "name": "sacctmgr list account format=account,fairshare where account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "account",
+   "format=account,fairshare",
+   "where",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account alloc_a cluster=demo set GrpSubmitJobs=50",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "alloc_a",
+   "cluster=demo",
+   "set",
+   "GrpSubmitJobs=50"
+  ]
+ },
+ {
+  "name": "sacctmgr list account format=account,grptres,grptresmin,maxtres,maxtresmin where account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "account",
+   "format=account,grptres,grptresmin,maxtres,maxtresmin",
+   "where",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show qos q_slow",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "qos",
+   "q_slow"
+  ]
+ },
+ {
+  "name": "sacctmgr add qos q_slow set flags=['DenyOnLimit']",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "add",
+   "qos",
+   "q_slow",
+   "set",
+   "flags=['DenyOnLimit']"
+  ]
+ },
+ {
+  "name": "sacctmgr show qos q_slow",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "qos",
+   "q_slow"
+  ]
+ },
+ {
+  "name": "sacctmgr add qos q_slow",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "add",
+   "qos",
+   "q_slow"
+  ]
+ },
+ {
+  "name": "sacctmgr modify qos q_slow set GrpTRESMins=cpu=6000,gres/gpu=60",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "qos",
+   "q_slow",
+   "set",
+   "GrpTRESMins=cpu=6000,gres/gpu=60"
+  ]
+ },
+ {
+  "name": "sacctmgr show qos q_slow format=Name,GrpTRESMins",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "show",
+   "qos",
+   "q_slow",
+   "format=Name,GrpTRESMins"
+  ]
+ },
+ {
+  "name": "sacctmgr show qos nope format=Name,GrpTRESMins",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "show",
+   "qos",
+   "nope",
+   "format=Name,GrpTRESMins"
+  ]
+ },
+ {
+  "name": "sacctmgr list associations format=account,qos where account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "associations",
+   "format=account,qos",
+   "where",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr list associations format=account,defaultqos where account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "associations",
+   "format=account,defaultqos",
+   "where",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account cluster=demo set qos+=q_slow where account=alloc_a",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "cluster=demo",
+   "set",
+   "qos+=q_slow",
+   "where",
+   "account=alloc_a"
+  ]
+ },
+ {
+  "name": "sacctmgr list associations format=account,qos where account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "associations",
+   "format=account,qos",
+   "where",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account cluster=demo set defaultqos=q_slow where account=alloc_a",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "cluster=demo",
+   "set",
+   "defaultqos=q_slow",
+   "where",
+   "account=alloc_a"
+  ]
+ },
+ {
+  "name": "sacctmgr list associations format=account,defaultqos where account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "associations",
+   "format=account,defaultqos",
+   "where",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account alloc_b cluster=demo set qos=normal,q_slow",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "alloc_b",
+   "cluster=demo",
+   "set",
+   "qos=normal,q_slow"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account alloc_b cluster=demo set qos=q_slow defaultqos=q_slow",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "alloc_b",
+   "cluster=demo",
+   "set",
+   "qos=q_slow",
+   "defaultqos=q_slow"
+  ]
+ },
+ {
+  "name": "sacctmgr list associations format=account,qos where account=alloc_b cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "associations",
+   "format=account,qos",
+   "where",
+   "account=alloc_b",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr list associations format=account,defaultqos where account=alloc_b cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "associations",
+   "format=account,defaultqos",
+   "where",
+   "account=alloc_b",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr add user bob account=alloc_b Partitions=debug QosLevel=normal,q_slow DefaultQOS=normal Share=parent cluster=dem",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "add",
+   "user",
+   "bob",
+   "account=alloc_b",
+   "Partitions=debug",
+   "QosLevel=normal,q_slow",
+   "DefaultQOS=normal",
+   "Share=parent",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr list associations format=account,user where account=alloc_b cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "associations",
+   "format=account,user",
+   "where",
+   "account=alloc_b",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify qos q_slow set RawUsage=0",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "qos",
+   "q_slow",
+   "set",
+   "RawUsage=0"
+  ]
+ },
+ {
+  "name": "sacctmgr modify account alloc_a cluster=demo set RawUsage=0",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "account",
+   "alloc_a",
+   "cluster=demo",
+   "set",
+   "RawUsage=0"
+  ]
+ },
+ {
+  "name": "sacctmgr show association where user=bob format=user,account cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "association",
+   "where",
+   "user=bob",
+   "format=user,account",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show user where name=bob format=user,defaultaccount cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "user",
+   "where",
+   "name=bob",
+   "format=user,defaultaccount",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify user where name=bob cluster=demo set DefaultAccount=alloc_b",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "user",
+   "where",
+   "name=bob",
+   "cluster=demo",
+   "set",
+   "DefaultAccount=alloc_b"
+  ]
+ },
+ {
+  "name": "sacctmgr remove user where name=bob and account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "remove",
+   "user",
+   "where",
+   "name=bob",
+   "and",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show association where user=bob format=user,account cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "association",
+   "where",
+   "user=bob",
+   "format=user,account",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show user where name=bob format=user,defaultaccount cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "user",
+   "where",
+   "name=bob",
+   "format=user,defaultaccount",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr remove user where name=bob and account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "remove",
+   "user",
+   "where",
+   "name=bob",
+   "and",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr list associations format=account,user where account=alloc_a cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "associations",
+   "format=account,user",
+   "where",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr list associations format=account,user where account=alloc_b cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "associations",
+   "format=account,user",
+   "where",
+   "account=alloc_b",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show user where name=alice format=user,defaultaccount cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "user",
+   "where",
+   "name=alice",
+   "format=user,defaultaccount",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show association where user=alice format=user,account cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "association",
+   "where",
+   "user=alice",
+   "format=user,account",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr modify user where name=alice cluster=demo set DefaultAccount=alloc_a",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "modify",
+   "user",
+   "where",
+   "name=alice",
+   "cluster=demo",
+   "set",
+   "DefaultAccount=alloc_a"
+  ]
+ },
+ {
+  "name": "sacctmgr show user where name=bob format=user,defaultaccount cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "user",
+   "where",
+   "name=bob",
+   "format=user,defaultaccount",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show association where user=bob format=user,account cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "association",
+   "where",
+   "user=bob",
+   "format=user,account",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show user where name=carol format=user,defaultaccount cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "user",
+   "where",
+   "name=carol",
+   "format=user,defaultaccount",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr show association where user=carol format=user,account cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "association",
+   "where",
+   "user=carol",
+   "format=user,account",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr remove user where account=alloc_b cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "remove",
+   "user",
+   "where",
+   "account=alloc_b",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr list associations format=account,user where account=alloc_b cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "associations",
+   "format=account,user",
+   "where",
+   "account=alloc_b",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr remove user where name=carol cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "remove",
+   "user",
+   "where",
+   "name=carol",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr remove account where name=alloc_b cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "remove",
+   "account",
+   "where",
+   "name=alloc_b",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr remove account where name=alloc_b cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "remove",
+   "account",
+   "where",
+   "name=alloc_b",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "sacctmgr remove qos where name=q_slow",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "remove",
+   "qos",
+   "where",
+   "name=q_slow"
+  ]
+ },
+ {
+  "name": "sacctmgr list account cluster=demo",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "account",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "list account withassoc fairshare/limits",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "account",
+   "withassoc",
+   "format=account,user,fairshare,grptres,grptresmins,maxtres,maxtresmins",
+   "where",
+   "account=alloc_a",
+   "cluster=demo"
+  ]
+ },
+ {
+  "name": "show qos list",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "show",
+   "qos",
+   "format=name"
+  ]
+ },
+ {
+  "name": "remove qos missing",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "remove",
+   "qos",
+   "where",
+   "name=nope"
+  ]
+ },
+ {
+  "name": "list account sorted",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "account",
+   "format=account,descr,org"
+  ]
+ },
+ {
+  "name": "list clusters",
+  "argv": [
+   "sacctmgr",
+   "--parsable2",
+   "--noheader",
+   "--immediate",
+   "list",
+   "cluster",
+   "format=cluster"
+  ]
+ }
+]
