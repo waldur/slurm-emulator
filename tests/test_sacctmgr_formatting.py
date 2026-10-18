@@ -4,7 +4,9 @@ Expected shapes come from real Slurm 26.05:
 - header/dash rows and column padding: slurm://src/common/print_fields.c#print_fields_header
   (every column is followed by a space, including the last);
 - default field sets: src/sacctmgr/*_functions.c;
-- field headers and widths: slurm://src/sacctmgr/common.c#_get_print_field.
+- field headers and widths: slurm://src/sacctmgr/common.c#_get_print_field;
+- descriptions and organizations are lower-cased on add
+  (slurm://src/sacctmgr/common.c#strip_quotes with make_lower).
 """
 
 import pytest
@@ -35,7 +37,7 @@ class TestDefaultFixedWidthMode:
 
     def test_list_account_row_alignment(self, em):
         out = em.handle_command(["list", "account"])
-        assert "    proj-a                Alpha                 org1 " in out.splitlines()
+        assert "    proj-a                alpha                 org1 " in out.splitlines()
 
     def test_list_user_header(self, em):
         out = em.handle_command(["list", "user"])
@@ -63,10 +65,15 @@ class TestDefaultFixedWidthMode:
         assert "very-long+ " in out
 
     def test_header_only_when_no_rows(self, em):
-        out = em.handle_command(["list", "qos"])
+        out = em.handle_command(["list", "assoc", "where", "user=nobody"])
         # Header + dash row, no data rows; print_fields_header runs before
         # the (empty) list iteration in real sacctmgr.
         assert len(out.splitlines()) == 2
+
+    def test_normal_qos_always_exists(self, em):
+        # slurmdbd creates it with its tables
+        # (slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#"Normal QOS default").
+        assert em.handle_command(["-n", "-P", "list", "qos", "format=name"]) == "normal"
 
     def test_format_width_override(self, em):
         out = em.handle_command(["list", "account", "format=Account%5"])
@@ -80,18 +87,18 @@ class TestParsableModes:
         out = em.handle_command(["-p", "list", "account"])
         lines = out.splitlines()
         assert lines[0] == "Account|Descr|Org|"
-        assert "proj-a|Alpha|org1|" in lines
+        assert "proj-a|alpha|org1|" in lines
 
     def test_parsable2_no_trailing_pipe(self, em):
         out = em.handle_command(["-P", "list", "account"])
         lines = out.splitlines()
         assert lines[0] == "Account|Descr|Org"
-        assert "proj-a|Alpha|org1" in lines
+        assert "proj-a|alpha|org1" in lines
 
     def test_noheader(self, em):
         out = em.handle_command(["-n", "-P", "list", "account"])
         assert "Account|Descr|Org" not in out
-        assert "proj-a|Alpha|org1" in out.splitlines()
+        assert "proj-a|alpha|org1" in out.splitlines()
 
     def test_combined_short_cluster(self, em):
         combined = em.handle_command(["-nP", "list", "account"])
@@ -112,7 +119,7 @@ class TestParsableModes:
 class TestFieldResolution:
     def test_prefix_match_case_insensitive(self, em):
         out = em.handle_command(["-n", "-P", "list", "account", "format=acc,des"])
-        assert "proj-a|Alpha" in out.splitlines()
+        assert "proj-a|alpha" in out.splitlines()
 
     def test_unknown_field_exits_one(self, em):
         out = em.handle_command(["list", "account", "format=bogus"])
@@ -131,19 +138,25 @@ class TestExitCodesAndMessages:
         # branch returns SLURM_ERROR and _modify_it() sets exit_code=1
         # (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account, slurm://src/sacctmgr/sacctmgr.c#_modify_it).
         out = em.handle_command(["modify", "account", "where", "name=ghost", "set", "parent=root"])
-        assert out == "  Nothing modified"
+        assert out == " Modified account associations...\n  Nothing modified"
         assert em.exit_code == 1
         assert em.stdout_error is True
 
     def test_readd_account_reports_no_change(self, em):
+        # SLURM_NO_CHANGE_IN_DATA with slurmdbd's message, on stdout, exit 1
+        # (slurm://src/sacctmgr/account_functions.c#sacctmgr_add_account).
         out = em.handle_command(["add", "account", "proj-a"])
-        assert out == " Data has not changed since time specified"
-        assert em.exit_code == 0
+        assert out == " Already existing account proj-a on cluster default"
+        assert em.exit_code == 1
+        assert em.stdout_error is True
 
     def test_add_account_to_missing_cluster_exits_one(self, em):
+        # slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_add_assoc_cond_cluster
         out = em.handle_command(["add", "account", "proj-b", "cluster=ghost"])
-        assert "Cluster ghost does not exist" in out
-        assert out.startswith(" error: ")
+        assert out == (
+            " error: Cluster 'ghost' has not been added yet, please contact your admin"
+            " before adding accounts to it"
+        )
         assert em.exit_code == 1
 
     def test_missing_parent_exits_one(self, em):
@@ -151,10 +164,12 @@ class TestExitCodesAndMessages:
         assert out == " Parent Account zz doesn't exist."
         assert em.exit_code == 1
 
-    def test_error_prefix_is_real_style(self, em):
+    def test_remove_missing_account_is_nothing_deleted(self, em):
+        # slurm://src/sacctmgr/account_functions.c#sacctmgr_delete_account: stdout, exit 1.
         out = em.handle_command(["remove", "account", "where", "name=ghost"])
-        assert out.startswith(" error: ")
+        assert out == " Nothing deleted"
         assert em.exit_code == 1
+        assert em.stdout_error is True
 
     def test_immediate_is_accepted_noop(self, em):
         out = em.handle_command(["--immediate", "add", "account", "proj-i"])
@@ -164,5 +179,5 @@ class TestExitCodesAndMessages:
     def test_dash_m_is_tolerated(self, em):
         # Intentional deviation: consumers pass -M; it is ignored.
         out = em.handle_command(["-M", "default", "list", "account", "-n", "-P"])
-        assert "proj-a|Alpha|org1" in out.splitlines()
+        assert "proj-a|alpha|org1" in out.splitlines()
         assert em.exit_code == 0

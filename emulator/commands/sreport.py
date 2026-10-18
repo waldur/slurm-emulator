@@ -75,7 +75,6 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Optional
 
-from emulator import __version__
 from emulator.commands.print_fields import (
     FieldSpec,
     OutputMode,
@@ -89,6 +88,7 @@ from emulator.commands.slurm_time import ParseTimeError, parse_time_spec
 from emulator.core import nss
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
+from emulator.slurm_version import current
 
 # Field table subset of slurm://src/sreport/cluster_reports.c#_setup_print_fields_list,
 # in chain order (first prefix match wins).
@@ -175,7 +175,8 @@ class SreportEmulator:
         self.exit_code = 0
         cfg, positional = self._parse_options(args)
         if cfg.version:
-            return f"slurm-emulator {__version__}"
+            # slurm://src/sreport/sreport.c#print_slurm_version: "slurm <release>".
+            return f"slurm {current().release}"
 
         if not positional:
             self._error("sreport: error: no report given (interactive mode is not emulated)")

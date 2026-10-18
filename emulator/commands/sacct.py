@@ -64,7 +64,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional
 
-from emulator import __version__
 from emulator.commands.print_fields import (
     FieldSpec,
     OutputMode,
@@ -78,6 +77,7 @@ from emulator.core import exit_status
 from emulator.core.cluster_model import partition_has_gpus
 from emulator.core.database import Job, SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
+from emulator.slurm_version import current
 
 # Subset of the real field table (slurm://src/sacct/sacct.c#fields), in table
 # order so prefix matching resolves like slurm://src/sacct/options.c#parse_command_line (first
@@ -163,7 +163,8 @@ class SacctEmulator:
         config = self._parse_args(args)
 
         if config.version:
-            return f"slurm-emulator {__version__}"
+            # slurm://src/sacct/options.c#print_slurm_version: "slurm <release>".
+            return f"slurm {current().release}"
 
         try:
             fields = resolve_format(parse_format_spec(config.format_spec), _REGISTRY)

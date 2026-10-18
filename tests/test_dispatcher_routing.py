@@ -36,7 +36,7 @@ class TestSacctmgrRouting:
         )
         captured = capsys.readouterr()
         assert code == 1
-        assert " error: " in captured.err
+        assert captured.err == " No conditions given to remove, not executing.\n"
         assert captured.out == ""
 
     def test_success_goes_to_stdout_exit_zero(self, fresh_emulator, monkeypatch, capsys):

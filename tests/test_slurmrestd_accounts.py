@@ -128,10 +128,27 @@ class TestUsers:
         )
         assert response.status_code == 200
 
-        user = restd.get(f"/slurmdb/{V}/user/alice", headers=auth_headers).json()["users"][0]
+        user = restd.get(
+            f"/slurmdb/{V}/user/alice", headers=auth_headers, params={"with_assocs": ""}
+        ).json()["users"][0]
         assert user["name"] == "alice"
         assert user["default"]["account"] == "proj1"
         assert any(a["account"] == "proj1" for a in user["associations"])
+
+    def test_default_account_needs_with_assocs(self, restd, auth_headers):
+        """slurmdbd derives the default account from the user's associations and
+        reads them only for ``with_assocs``
+        (slurm://src/plugins/accounting_storage/mysql/as_mysql_user.c#as_mysql_get_users).
+        """
+        self.test_create_user_with_association(restd, auth_headers)
+        user = restd.get(f"/slurmdb/{V}/user/alice", headers=auth_headers).json()["users"][0]
+        assert user["default"]["account"] == ""
+        assert user["associations"] == []
+        response = restd.get(
+            f"/slurmdb/{V}/user/alice", headers=auth_headers, params={"with_assocs": "true"}
+        ).json()
+        assert response["users"][0]["default"]["account"] == "proj1"
+        assert response["warnings"][0]["source"] == "#/with_assocs/"
 
     def test_delete_user_removes_associations(self, restd, auth_headers):
         restd.post(
@@ -150,6 +167,7 @@ class TestUsers:
 
 class TestAssociations:
     def _setup(self, restd, auth_headers, partition=None):
+        restd.post(f"/slurmdb/{V}/accounts/", headers=auth_headers, json={"accounts": [ACCOUNT]})
         entry = {"account": "proj1", "user": "alice"}
         if partition:
             entry["partition"] = partition
@@ -171,6 +189,31 @@ class TestAssociations:
         assert assocs[0]["user"] == "alice"
         assert assocs[0]["cluster"] == "default"
 
+    def test_one_default_per_user_without_a_user_record(self, restd, auth_headers):
+        """A user added only through associations still has a single default.
+
+        slurmdbd gives ``is_def`` to the first association of a user that has
+        none (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_make_sure_user_has_default_internal).
+        """
+        for name in ("proj1", "proj2"):
+            restd.post(
+                f"/slurmdb/{V}/accounts/",
+                headers=auth_headers,
+                json={"accounts": [{**ACCOUNT, "name": name}]},
+            )
+            restd.post(
+                f"/slurmdb/{V}/associations/",
+                headers=auth_headers,
+                json={"associations": [{"account": name, "user": "alice"}]},
+            )
+        assocs = restd.get(
+            f"/slurmdb/{V}/associations/", headers=auth_headers, params={"user": "alice"}
+        ).json()["associations"]
+        assert sorted((a["account"], a["is_default"]) for a in assocs) == [
+            ("proj1", True),
+            ("proj2", False),
+        ]
+
     def test_partition_scoped(self, restd, auth_headers):
         self._setup(restd, auth_headers, partition="compute")
         assocs = restd.get(
@@ -181,6 +224,7 @@ class TestAssociations:
         assert assocs[0]["partition"] == "compute"
 
     def test_limits_round_trip(self, restd, auth_headers):
+        restd.post(f"/slurmdb/{V}/accounts/", headers=auth_headers, json={"accounts": [ACCOUNT]})
         restd.post(
             f"/slurmdb/{V}/associations/",
             headers=auth_headers,
@@ -206,7 +250,11 @@ class TestAssociations:
         minutes = assoc["max"]["tres"]["group"]["minutes"]
         assert minutes == [{"type": "cpu", "name": "", "id": 1, "count": 6000}]
 
-    def test_repost_without_limits_preserves_them(self, restd, auth_headers):
+    def test_repost_without_limits_clears_them(self, restd, auth_headers):
+        """A POST is the association's whole TRES state: a list left out is removed.
+
+        slurm://src/slurmrestd/plugins/openapi/slurmdbd/associations.c#_diff_tres@26.05+
+        """
         self.test_limits_round_trip(restd, auth_headers)
         # Re-POST the same association with no limits subtree.
         restd.post(
@@ -219,9 +267,7 @@ class TestAssociations:
             headers=auth_headers,
             params={"user": "alice"},
         ).json()["associations"][0]
-        assert assoc["max"]["tres"]["group"]["minutes"] == [
-            {"type": "cpu", "name": "", "id": 1, "count": 6000}
-        ]
+        assert assoc["max"]["tres"]["group"]["minutes"] == []
 
     def test_delete_returns_real_removal_strings(self, restd, auth_headers):
         self._setup(restd, auth_headers)
@@ -365,14 +411,23 @@ class TestAccountsAssociationRealShape:
         )
         assert response.status_code == 422  # ESLURM_REST_INVALID_QUERY
 
-    def test_legacy_accounts_shape_still_accepted(self, restd, auth_headers):
-        restd.post(
+    def test_body_without_association_condition_is_refused(self, restd, auth_headers):
+        response = restd.post(
             f"/slurmdb/{V}/accounts_association/",
             headers=auth_headers,
-            json={"accounts": [{"name": "legacy1", "associations": [{"account": "legacy1"}]}]},
+            json={"accounts": [{"name": "legacy1"}]},
         )
-        account = restd.get(f"/slurmdb/{V}/account/legacy1", headers=auth_headers).json()
-        assert account["accounts"][0]["name"] == "legacy1"
+        assert response.status_code == 422
+        assert response.json()["errors"][0]["source"] == "#/association_condition/"
+
+    def test_existing_accounts_are_not_modified(self, restd, auth_headers):
+        body = {"association_condition": {"accounts": ["again"]}}
+        restd.post(f"/slurmdb/{V}/accounts_association/", headers=auth_headers, json=body)
+        response = restd.post(
+            f"/slurmdb/{V}/accounts_association/", headers=auth_headers, json=body
+        )
+        assert response.status_code == 304
+        assert response.content == b""
 
 
 class TestUsersAssociationRealShape:
@@ -403,14 +458,16 @@ class TestUsersAssociationRealShape:
                     "clusters": ["default"],
                     "association": {"fairshare": 2147483647},
                 },
-                "user": {"default": {"account": "proj1"}},
+                "user": {"defaultaccount": "proj1"},
             },
         )
         assert response.status_code == 200
         assert response.json()["errors"] == []
         assert response.json()["added_users"] == ["alice"]
 
-        user = restd.get(f"/slurmdb/{V}/user/alice", headers=auth_headers).json()["users"][0]
+        user = restd.get(
+            f"/slurmdb/{V}/user/alice", headers=auth_headers, params={"with_assocs": ""}
+        ).json()["users"][0]
         assert user["default"]["account"] == "proj1"
         assocs = restd.get(
             f"/slurmdb/{V}/associations/",
@@ -425,9 +482,11 @@ class TestUsersAssociationRealShape:
         restd.post(
             f"/slurmdb/{V}/users_association/",
             headers=auth_headers,
-            json={"association_condition": {"users": ["bob"], "accounts": ["proj1"]}},
+            json={"association_condition": {"users": ["bob"], "accounts": ["proj1"]}, "user": {}},
         )
-        user = restd.get(f"/slurmdb/{V}/user/bob", headers=auth_headers).json()["users"][0]
+        user = restd.get(
+            f"/slurmdb/{V}/user/bob", headers=auth_headers, params={"with_assocs": ""}
+        ).json()["users"][0]
         assert user["default"]["account"] == "proj1"
 
     def test_partition_scoped_associations(self, restd, auth_headers):
@@ -440,7 +499,8 @@ class TestUsersAssociationRealShape:
                     "users": ["carol"],
                     "accounts": ["proj1"],
                     "partitions": ["cn", "gpu"],
-                }
+                },
+                "user": {},
             },
         )
         assocs = restd.get(
@@ -458,14 +518,75 @@ class TestUsersAssociationRealShape:
         )
         assert response.status_code == 422  # ESLURM_REST_INVALID_QUERY
 
-    def test_legacy_users_shape_still_accepted(self, restd, auth_headers):
-        restd.post(
+    def test_user_is_required(self, restd, auth_headers):
+        """``user`` is add_parse_req in OPENAPI_USERS_ADD_COND_RESP."""
+        self._create_account(restd, auth_headers)
+        response = restd.post(
             f"/slurmdb/{V}/users_association/",
             headers=auth_headers,
-            json={"users": [{"name": "dave", "default": {"account": "proj1"}}]},
+            json={"association_condition": {"users": ["dave"], "accounts": ["proj1"]}},
         )
-        user = restd.get(f"/slurmdb/{V}/user/dave", headers=auth_headers).json()["users"][0]
-        assert user["name"] == "dave"
+        assert response.status_code == 422
+        assert response.json()["errors"][0]["description"] == (
+            "Missing required field 'user' in dictionary"
+        )
+
+    def test_nested_default_account_is_ignored(self, restd, auth_headers):
+        """USER_SHORT has a flat ``defaultaccount``; ``default.account`` is unknown."""
+        self._create_account(restd, auth_headers)
+        self._create_account(restd, auth_headers, "proj2")
+        response = restd.post(
+            f"/slurmdb/{V}/users_association/",
+            headers=auth_headers,
+            json={
+                "association_condition": {"users": ["erin"], "accounts": ["proj1", "proj2"]},
+                "user": {"default": {"account": "proj2"}},
+            },
+        )
+        assert response.json()["warnings"] == [
+            {
+                "description": (
+                    'Ignoring unknown field "account" of type string in DATA_PARSER_USER_SHORT'
+                ),
+                "source": "#/user/default/account/",
+            }
+        ]
+        user = restd.get(
+            f"/slurmdb/{V}/user/erin", headers=auth_headers, params={"with_assocs": ""}
+        ).json()["users"][0]
+        assert user["default"]["account"] == "proj1"
+
+    def test_qoslevel_string_adds_nothing(self, restd, auth_headers):
+        """QOS_STRING_ID_LIST needs a JSON list; a string is reported and nothing runs."""
+        self._create_account(restd, auth_headers)
+        response = restd.post(
+            f"/slurmdb/{V}/users_association/",
+            headers=auth_headers,
+            json={
+                "association_condition": {
+                    "users": ["fay"],
+                    "accounts": ["proj1"],
+                    "association": {"qoslevel": "normal"},
+                },
+                "user": {},
+            },
+        )
+        assert response.status_code == 200
+        assert "added_users" not in response.json()
+        assert response.json()["warnings"][0]["source"] == (
+            "#/association_condition/association/qoslevel/"
+        )
+        assocs = restd.get(
+            f"/slurmdb/{V}/associations/", headers=auth_headers, params={"user": "fay"}
+        ).json()["associations"]
+        assert assocs == []
+
+    def test_adding_existing_association_is_not_modified(self, restd, auth_headers):
+        self._create_account(restd, auth_headers)
+        body = {"association_condition": {"users": ["gus"], "accounts": ["proj1"]}, "user": {}}
+        restd.post(f"/slurmdb/{V}/users_association/", headers=auth_headers, json=body)
+        response = restd.post(f"/slurmdb/{V}/users_association/", headers=auth_headers, json=body)
+        assert response.status_code == 304
 
 
 class TestAccountLevelAssociationWrites:
@@ -481,6 +602,11 @@ class TestAccountLevelAssociationWrites:
             headers=auth_headers,
             json={"accounts": [{"name": name, "description": name, "organization": "org1"}]},
         )
+        restd.post(
+            f"/slurmdb/{V}/qos/",
+            headers=auth_headers,
+            json={"qos": [{"name": "fast"}, {"name": "slow"}, {"name": "stop"}]},
+        )
 
     def _account_assoc(self, restd, auth_headers, name="proj1"):
         assocs = restd.get(
@@ -495,7 +621,7 @@ class TestAccountLevelAssociationWrites:
         restd.post(
             f"/slurmdb/{V}/associations/",
             headers=auth_headers,
-            json={"associations": [{"account": "proj1", "qos": ["fast", "slow"]}]},
+            json={"associations": [{"account": "proj1", "user": "", "qos": ["fast", "slow"]}]},
         )
         assoc = self._account_assoc(restd, auth_headers)
         assert assoc["qos"] == ["fast", "slow"]
@@ -507,7 +633,12 @@ class TestAccountLevelAssociationWrites:
             headers=auth_headers,
             json={
                 "associations": [
-                    {"account": "proj1", "qos": ["normal", "fast"], "default": {"qos": "fast"}}
+                    {
+                        "account": "proj1",
+                        "user": "",
+                        "qos": ["normal", "fast"],
+                        "default": {"qos": "fast"},
+                    }
                 ]
             },
         )
@@ -526,10 +657,13 @@ class TestAccountLevelAssociationWrites:
         response = restd.post(
             f"/slurmdb/{V}/associations/",
             headers=auth_headers,
-            json={"associations": [{"account": "proj1", "default": {"qos": "fast"}}]},
+            json={"associations": [{"account": "proj1", "user": "", "default": {"qos": "fast"}}]},
         )
         assert response.status_code == http_status_for(ESLURM_NO_REMOVE_DEFAULT_QOS)
-        assert "default qos" in response.json()["errors"][0]["description"]
+        # slurmrestd reports only that the modify failed; the errno carries why.
+        assert response.json()["errors"][0]["description"] == (
+            "slurmdb_associations_modify() failed"
+        )
         after = self._account_assoc(restd, auth_headers)
         assert after["qos"] == before["qos"]
         assert after["default"]["qos"] == before["default"]["qos"]
@@ -540,12 +674,12 @@ class TestAccountLevelAssociationWrites:
         restd.post(
             f"/slurmdb/{V}/associations/",
             headers=auth_headers,
-            json={"associations": [{"account": "proj1", "default": {"qos": "normal"}}]},
+            json={"associations": [{"account": "proj1", "user": "", "default": {"qos": "normal"}}]},
         )
         response = restd.post(
             f"/slurmdb/{V}/associations/",
             headers=auth_headers,
-            json={"associations": [{"account": "proj1", "qos": ["stop"]}]},
+            json={"associations": [{"account": "proj1", "user": "", "qos": ["stop"]}]},
         )
         assert response.status_code == http_status_for(ESLURM_NO_REMOVE_DEFAULT_QOS)
         assoc = self._account_assoc(restd, auth_headers)
@@ -556,7 +690,9 @@ class TestAccountLevelAssociationWrites:
             f"/slurmdb/{V}/associations/",
             headers=auth_headers,
             json={
-                "associations": [{"account": "proj1", "qos": ["stop"], "default": {"qos": "stop"}}]
+                "associations": [
+                    {"account": "proj1", "user": "", "qos": ["stop"], "default": {"qos": "stop"}}
+                ]
             },
         )
         assert response.status_code == 200
@@ -569,14 +705,18 @@ class TestAccountLevelAssociationWrites:
         restd.post(
             f"/slurmdb/{V}/associations/",
             headers=auth_headers,
-            json={"associations": [{"account": "proj1", "shares_raw": 42}]},
+            json={"associations": [{"account": "proj1", "user": "", "shares_raw": 42}]},
         )
         assert self._account_assoc(restd, auth_headers)["shares_raw"] == 42
 
         restd.post(
             f"/slurmdb/{V}/associations/",
             headers=auth_headers,
-            json={"associations": [{"account": "proj1", "shares_raw": {"set": True, "number": 7}}]},
+            json={
+                "associations": [
+                    {"account": "proj1", "user": "", "shares_raw": {"set": True, "number": 7}}
+                ]
+            },
         )
         assert self._account_assoc(restd, auth_headers)["shares_raw"] == 7
 
@@ -585,7 +725,7 @@ class TestAccountLevelAssociationWrites:
         restd.post(
             f"/slurmdb/{V}/associations/",
             headers=auth_headers,
-            json={"associations": [{"account": "proj1", "shares_raw": 99}]},
+            json={"associations": [{"account": "proj1", "user": "", "shares_raw": 99}]},
         )
         database = SlurmDatabase()
         database.load_state()

@@ -119,8 +119,12 @@ class TestModifyDefaultAccount:
             ["modify", "user", "twoacc", "set", "DefaultAccount=accb", "QosLevel+=high"]
         )
         assert em.exit_code == 0
-        assert out.startswith(
-            " Modified users...\n  twoacc\n Modified user associations...\n  twoacc"
+        # slurmdbd lists each modified association
+        # (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_process_modify_assoc_results).
+        assert out == (
+            " Modified users...\n  twoacc\n Modified user associations...\n"
+            "  C = default    A = acca                 U = twoacc   \n"
+            "  C = default    A = accb                 U = twoacc   "
         )
         assert em.database.get_user("twoacc").default_account == "accb"
         assert "high" in em.database.get_association("twoacc", "accb").qos_list
@@ -165,6 +169,8 @@ class TestDefaultAccountClusters:
 
     def test_association_on_every_cluster_allows_it(self, two_clusters):
         em = two_clusters
+        # A user association needs the account's association on that cluster first.
+        em.handle_command(["add", "account", "accb", "cluster=second"])
         em.handle_command(["add", "user", "twoacc", "account=accb", "cluster=second"])
         out = em.handle_command(["modify", "user", "twoacc", "set", "DefaultAccount=accb"])
         assert (out, em.exit_code) == (" Modified users...\n  twoacc", 0)
@@ -270,8 +276,12 @@ class TestShowAssociationFilters:
 
     def test_cluster_and_partition(self, em):
         em.handle_command(["add", "cluster", "second"])
+        em.handle_command(["add", "account", "accb", "cluster=second"])
         em.handle_command(["add", "user", "other", "account=accb", "cluster=second"])
-        em.handle_command(["add", "user", "part", "account=accb", "Partitions=zen3,zen5"])
+        # Without cluster= the user is added on every cluster with the account.
+        em.handle_command(
+            ["add", "user", "part", "account=accb", "Partitions=zen3,zen5", "cluster=default"]
+        )
         out = em.handle_command(
             ["-P", "-n", "show", "assoc", "c=second", "u=other", "format=cluster,user"]
         )

@@ -20,6 +20,7 @@ from emulator.commands.sreport import SreportEmulator
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
 from emulator.core.usage_simulator import UsageSimulator
+from emulator.slurm_version import current
 
 NOW = datetime(2024, 2, 10, 12, 0, 0)
 JAN = ["start=2024-01-01", "end=2024-02-01"]
@@ -137,7 +138,8 @@ class TestFlagParsing:
 
     def test_version(self, env):
         _, _, _, sreport = env
-        assert sreport.handle_command(["-V"]).startswith("slurm-emulator ")
+        # slurm://src/sreport/sreport.c#print_slurm_version: "slurm <release>".
+        assert sreport.handle_command(["-V"]) == f"slurm {current().release}"
 
 
 class TestAggregation:
