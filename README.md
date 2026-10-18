@@ -295,7 +295,16 @@ uv run slurmrestd-emulator
 - `/slurm/v0.0.45/...` — controller read paths: `jobs` (+ `DELETE
   /job/{job_id}` as the `scancel` equivalent), `nodes`, `partitions`
   (static topology matching `sinfo`), `shares`, `ping`, `diag`, `conf`;
-  `reservations`/`licenses` are empty stubs.
+  `reservations` (from `SLURM_EMULATOR_RESERVATIONS`, plus from 25.05
+  `POST /reservation`, `POST /reservations/` and `DELETE
+  /reservation/{name}` with slurmctld's checks — see
+  `emulator/core/reservations.py`); `licenses` is an empty stub.
+  `scontrol create|update|delete|show reservation`, `show partition`,
+  `show job`, `write batch_script` and `ping` work through the CLI
+  dispatcher and the SSH plane on the same state; reservations made
+  that way survive the env-var sync and are purged once they end.
+  Errors answer with each release's HTTP status (422 for slurmctld/slurmdbd
+  errnos only from 26.05, 500 before).
 - `/openapi.json`, `/openapi`, `/openapi/v3` — generated self-description.
 
 Responses use the real envelope (`meta`/`errors`/`warnings`, payload
@@ -360,7 +369,7 @@ installable from disk via `helm install se ./charts/slurm-emulator`.
 For clients that expect a login node in addition to `slurmrestd` (notably
 FireCREST v2), the emulator ships an asyncssh server that provides filesystem
 operations and dispatches the Slurm CLI commands (`sacctmgr`, `sacct`, `sinfo`,
-`sshare`, `scancel`, `sbatch`) against the same shared state:
+`sshare`, `scancel`, `sbatch`, `scontrol`, `squeue`) against the same shared state:
 
 ```bash
 uv run --extra ssh slurm-ssh-emulator   # asyncssh server on port 2222
@@ -427,6 +436,8 @@ docker compose exec slurm id hpc_9001
 | `SLURM_EMULATOR_CLUSTER_NAME` | `default` | slurm.conf `ClusterName`: the cluster associations, submitted jobs and `/slurm/…/conf` are filed under; set it to the site agent's `cluster_name` so the association check on submit sees the agent's rows |
 | `SLURM_EMULATOR_NSS_CACHE_TTL` | `60` | seconds a resolved identity (uid/gid/groups) is trusted before NSS is asked again; misses are retried after 5 s |
 | `SLURM_EMULATOR_ACCOUNTING_ENFORCE` | `associations` | `AccountingStorageEnforce`: with `associations` (or `limits`/`qos`/`safe`/`wckeys`) a submit by a user with no association for the account fails with `ESLURM_INVALID_ACCOUNT`; `none` = permissive pre-0.10 fallback to the default account, then `root` |
+| `SLURM_EMULATOR_JOB_EXECUTE` | off | `1` runs each submitted batch script (bash, in the job's working directory, `module`/`spack`/`srun` stand-ins) when its emulated run ends: stdout/stderr are written with `%j`/`%x`/`%u` expanded, and a non-zero exit ends the job `FAILED` with that exit code. Runs inside the emulator — enable only where executing submitted scripts is acceptable |
+| `SLURM_EMULATOR_JOB_EXECUTE_TIMEOUT` | `60` | Seconds a script may run before it is stopped and the job fails with the time-limit message |
 | `SLURM_EMULATOR_SSSD_CONF` | `/etc/slurm-emulator/sssd.conf` | sssd config the entrypoint installs as a private root-only copy (falls back to `/etc/sssd/sssd.conf`) |
 
 In Kubernetes the chart exposes it as `nss.enabled` + `nss.sssdConfSecret`;

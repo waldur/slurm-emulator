@@ -66,6 +66,8 @@ class OutputMode:
 
     noheader: bool = False
     parsable: Optional[str] = None  # None | "p" (trailing |) | "P" (no trailing |)
+    # Separator of parsable output; sacct's --delimiter (slurm://src/sacct/options.c#parse_command_line).
+    delimiter: str = "|"
 
 
 class UnknownFieldError(Exception):
@@ -135,8 +137,8 @@ def render_header(fields: list[FieldSpec], mode: OutputMode) -> list[str]:
     if mode.noheader:
         return []
     if mode.parsable is not None:
-        line = "|".join(f.display_name for f in fields)
-        return [line + "|" if mode.parsable == "p" else line]
+        line = mode.delimiter.join(f.display_name for f in fields)
+        return [line + mode.delimiter if mode.parsable == "p" else line]
     name_row = "".join(_pad(f.display_name[: f.abs_width], f) for f in fields)
     dash_row = "".join("-" * f.abs_width + " " for f in fields)
     return [name_row, dash_row]
@@ -144,8 +146,8 @@ def render_header(fields: list[FieldSpec], mode: OutputMode) -> list[str]:
 
 def render_row(cells: list[str], fields: list[FieldSpec], mode: OutputMode) -> str:
     if mode.parsable is not None:
-        line = "|".join(cells)
-        return line + "|" if mode.parsable == "p" else line
+        line = mode.delimiter.join(cells)
+        return line + mode.delimiter if mode.parsable == "p" else line
     return "".join(_pad(_clip(cell, f), f) for cell, f in zip(cells, fields))
 
 

@@ -38,6 +38,7 @@ from typing import Any, Optional
 from emulator.commands.dispatcher import SlurmEmulator
 from emulator.core import nss
 from emulator.core.accounting import ESLURM_USER_ID_UNKNOWN, admit_job
+from emulator.core.cluster_model import compress_hostlist
 from emulator.core.database import Job
 from emulator.core.scheduler import advance_job_states, job_clock_now
 
@@ -202,6 +203,7 @@ def _run_slurm(user: str, argv: list[str]) -> tuple[str, str, int]:
     try:
         with contextlib.redirect_stderr(err):
             emu = _new_emulator()
+            emu.caller = user
             if name in {"sacct", "sacctmgr", "sshare", "sreport", "sinfo", "scancel", "id"}:
                 if name in {"sacct", "sshare", "sreport"}:
                     _advance(emu)
@@ -298,37 +300,27 @@ def _squeue(emu) -> str:
         if job.cluster != emu.database.current_cluster:
             continue
         st = st_map.get(job.state, job.state[:2])
+        # NODELIST(REASON): the allocated hostlist, or the pending reason in
+        # parentheses (slurm://src/squeue/print.c#_print_job_reason_list).
+        if job.node_list:
+            where = compress_hostlist(job.node_list)
+        elif job.state == "PENDING":
+            where = f"({job.state_reason or 'None'})"
+        else:
+            where = ""
         rows.append(
-            f"{job.job_id} {job.partition} {job.name} {job.user} {st} 0:00 {job.node_count} node001"
+            f"{job.job_id} {job.partition} {job.name} {job.user} {st} 0:00 {job.node_count} {where}"
         )
     return "\n".join(rows)
 
 
 def _scontrol(emu, args: list[str]) -> tuple[str, str, int]:
-    if len(args) >= 2 and args[0] == "show" and args[1] == "job":
-        job_id = args[2] if len(args) > 2 else ""
-        job = emu.database.get_job(job_id)
-        if job is None:
-            return "", "slurm_load_jobs error: Invalid job id specified\n", 1
-        wd = job.working_directory or f"/home/{job.user}"
-        # scontrol prints ``UserId=name(uid) GroupId=group(gid)``
-        # (slurm://src/scontrol/info_job.c#_sprint_job_info); without NSS
-        # mode every user is 1000 in a group of its own name.
-        uid = job.uid if job.uid is not None else 1000
-        gid = job.gid if job.gid is not None else 1000
-        group = job.group_name or job.user
-        out = (
-            f"JobId={job.job_id} JobName={job.name}\n"
-            f"   UserId={job.user}({uid}) GroupId={group}({gid})\n"
-            f"   Account={job.account} QOS={job.qos} Partition={job.partition}\n"
-            f"   JobState={job.state} Reason=None Dependency=(null)\n"
-            f"   StdOut={job.standard_output or f'{wd}/slurm-{job.job_id}.out'}\n"
-            f"   StdErr={job.standard_error or f'{wd}/slurm-{job.job_id}.err'}\n"
-            f"   Command={job.script}\n"
-            f"   WorkDir={wd}\n"
-        )
-        return out, "", 0
-    return "", "scontrol: unsupported subcommand\n", 1
+    # The same emulator as the CLI dispatcher (emulator/commands/scontrol.py):
+    # reservations, show job / partition, write batch_script, ping.
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        out = emu.scontrol.handle_command(args)
+    return out, err.getvalue(), emu.scontrol.exit_code
 
 
 # --- Shell (filesystem) dispatch ---

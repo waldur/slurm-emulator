@@ -5,6 +5,7 @@ must be visible to a fresh SlurmDatabase load and to the sacctmgr CLI
 emulator (shared JSON state file).
 """
 
+from emulator.api.slurmrestd.envelope import ESLURM_NO_REMOVE_DEFAULT_QOS, http_status_for
 from emulator.commands.dispatcher import SlurmEmulator
 from emulator.core.database import SlurmDatabase
 from emulator.slurm_version import current
@@ -105,7 +106,7 @@ class TestAccounts:
 
     def test_post_without_accounts_is_error(self, restd, auth_headers):
         response = restd.post(f"/slurmdb/{V}/accounts/", headers=auth_headers, json={})
-        assert response.status_code == 400
+        assert response.status_code == 422  # ESLURM_REST_INVALID_QUERY
         assert response.json()["errors"][0]["error_number"] == 9000
 
 
@@ -237,7 +238,7 @@ class TestAssociations:
 
     def test_delete_without_condition_is_error(self, restd, auth_headers):
         response = restd.delete(f"/slurmdb/{V}/associations/", headers=auth_headers)
-        assert response.status_code == 400
+        assert response.status_code == 422  # ESLURM_REST_INVALID_QUERY
 
 
 class TestQos:
@@ -362,7 +363,7 @@ class TestAccountsAssociationRealShape:
             headers=auth_headers,
             json={"association_condition": {}},
         )
-        assert response.status_code == 400
+        assert response.status_code == 422  # ESLURM_REST_INVALID_QUERY
 
     def test_legacy_accounts_shape_still_accepted(self, restd, auth_headers):
         restd.post(
@@ -455,7 +456,7 @@ class TestUsersAssociationRealShape:
             headers=auth_headers,
             json={"association_condition": {"accounts": ["proj1"]}},
         )
-        assert response.status_code == 400
+        assert response.status_code == 422  # ESLURM_REST_INVALID_QUERY
 
     def test_legacy_users_shape_still_accepted(self, restd, auth_headers):
         restd.post(
@@ -527,7 +528,7 @@ class TestAccountLevelAssociationWrites:
             headers=auth_headers,
             json={"associations": [{"account": "proj1", "default": {"qos": "fast"}}]},
         )
-        assert response.status_code == 400
+        assert response.status_code == http_status_for(ESLURM_NO_REMOVE_DEFAULT_QOS)
         assert "default qos" in response.json()["errors"][0]["description"]
         after = self._account_assoc(restd, auth_headers)
         assert after["qos"] == before["qos"]
@@ -546,7 +547,7 @@ class TestAccountLevelAssociationWrites:
             headers=auth_headers,
             json={"associations": [{"account": "proj1", "qos": ["stop"]}]},
         )
-        assert response.status_code == 400
+        assert response.status_code == http_status_for(ESLURM_NO_REMOVE_DEFAULT_QOS)
         assoc = self._account_assoc(restd, auth_headers)
         assert assoc["qos"] == ["normal"]
         assert assoc["default"]["qos"] == "normal"

@@ -403,8 +403,30 @@ so they also appear in the accounting (`/slurmdb` / `sacct`) view. Configurable 
   (`/slurm/v0.0.42/` … `/slurm/v0.0.46/`), `meta.slurm.release` and version-gated response
   shapes; see `emulator/slurm_version.py` `RELEASES` and `docs/slurm-parity.md`
 - `SLURM_EMULATOR_JOB_CLOCK` = `wall` (default, real-time) or `time` (simulated clock)
+- `SLURM_EMULATOR_JOB_EXECUTE` = `1` runs each batch script at the end of its emulated run
+  (`emulator/core/job_execution.py`): real stdout/stderr files, FAILED + exit code on error,
+  once across processes (marker files next to the state file)
 - `SLURM_EMULATOR_JOB_RUN_DELAY` (default 2s to RUNNING), `SLURM_EMULATOR_JOB_RUN_DURATION`
-  (default 8s to COMPLETED)
+  (default 8s to COMPLETED); per job `SLURM_EMULATOR_RUN_SECONDS` in the job environment.
+  A run longer than `time_limit` ends TIMEOUT at the limit
+- Jobs get concrete nodes of their partition (`emulator/core/cluster_model.py`): submit honours
+  `nodes`/`minimum_nodes`/`tasks`/`tasks_per_node`/`cpus_per_task`/`memory_per_node`/`time_limit`/
+  `reservation`/`shared` (`["none"]` = whole nodes); like slurmctld, a job defaults to one task per
+  node and one CPU per task, a request no node set can satisfy is refused at submit (2014), a
+  reservation the user may not use is refused (2052). No free nodes = PENDING with reason
+  `Resources`, later jobs of that partition `Priority`; a reservation over the whole partition
+  = `ReqNodeNotAvail` ("Reserved for maintenance" in `state_description`). Exit codes are wait
+  statuses (`0:9` for SIGKILL, `0:15` for a time limit in the controller). Node views
+  derive IDLE/MIXED/ALLOCATED, `cpu_load`, `free_mem` from the allocations. Optional env:
+  `SLURM_EMULATOR_NODE_STATES` (`node012=DRAIN:Bad DIMM;node030=DOWN:Not responding`),
+  `SLURM_EMULATOR_BACKGROUND_LOAD` (`batch=0.5,gpu=0.75`, other tenants' whole nodes, rotating
+  every 15 min), `SLURM_EMULATOR_RESERVATIONS`
+  (`name:ALL|partition|hostlist:+offset:duration[:FLAGS[:users=..][:accounts=..]]`, `;`-separated;
+  offsets resolved once and kept in the state file). Synthetic CPU efficiency / memory fraction
+  per job (deterministic from the id; `SLURM_EMULATOR_CPU_EFFICIENCY` / `SLURM_EMULATOR_MEM_FRACTION`
+  in the job environment) feed node load, slurmdb `time.total` and the batch step's MaxRSS
+- `SLURM_EMULATOR_TIME_FOLLOW_WALL` = `1` makes the simulated clock the wall clock (no time
+  travel) — for live demo stacks whose clients query accounting in real time
 - `SLURM_EMULATOR_NSS` = `1` resolves user names through the OS NSS (`emulator/core/nss.py`;
   sssd → LDAP inside the image) so `id`, `scontrol show job`, sacct `UID`/`GID`/`Group` and the
   slurmrestd `user_id`/`group_id` carry real ids, and unknown users are refused on submit

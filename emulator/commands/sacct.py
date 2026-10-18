@@ -30,12 +30,30 @@ Output formatting and exit codes mirror real Slurm 26.05:
   The ``energy`` TRES is deliberately *not* added to the ReqTRES/AllocTRES
   string so the site-agent invocation shape stays byte-identical.
 
+* ``StdIn``/``StdOut``/``StdErr`` print the paths as stored, patterns not
+  expanded (slurm://src/sacct/print.c#PRINT_STDIN, ``PRINT_STDOUT``,
+  ``PRINT_STDERR``; ``--expand-patterns`` is not emulated); ``WorkDir`` the
+  job's working directory (slurm://src/sacct/print.c#PRINT_WORK_DIR);
+  ``Eligible`` the eligible time (slurm://src/sacct/print.c#PRINT_ELIGIBLE);
+  ``ReqMem`` the requested memory over the job's nodes
+  (slurm://src/sacct/print.c#PRINT_REQ_MEM); ``UserCPU``/``SystemCPU`` the
+  CPU time split (slurm://src/sacct/print.c#PRINT_USERCPU,
+  ``PRINT_SYSTEMCPU``). The split itself is synthetic: 4% of a job's CPU time
+  is counted as system time.
+* a pending or running job has a row from submission on, with ``Unknown``
+  for times not reached yet and no CPU time or MaxRSS until it ends; a
+  cancelled job's state names the uid that cancelled it
+  (slurm://src/sacct/print.c#PRINT_STATE).
+
 Documented simplifications: ``-X``/``--allocations`` is a no-op (the
 emulator has no job steps, and real ``-X`` only filters step rows);
 ``-a``/``--allusers`` is a no-op (every caller sees every job — the
-emulator never compares the caller's uid to the job's); jobs are
-single-node (``node001``, partition ``compute``, matching the sinfo
-emulator). ``UID``/``GID``/``Group`` print the identity recorded at
+emulator never compares the caller's uid to the job's); injected usage
+records are single-node (``node001``), while records of submitted or
+seeded jobs carry their real node list, CPUs, time limit, submit/eligible
+times, CPU time and MaxRSS. There are no step rows: ``MaxRSS`` (a step
+field in real sacct, slurm://src/sacct/print.c#PRINT_MAXRSS) prints on the
+job row from its batch step, and ``TotalCPU`` is the job total. ``UID``/``GID``/``Group`` print the identity recorded at
 submission (slurm://src/sacct/print.c#PRINT_UID, ``PRINT_GID``,
 ``PRINT_GROUP`` via ``gid_to_string``); without ``SLURM_EMULATOR_NSS``
 every job is uid/gid 1000 in a group named after the user.
@@ -55,8 +73,10 @@ from emulator.commands.print_fields import (
     render_table,
     resolve_format,
 )
-from emulator.commands.slurm_time import parse_time_spec
-from emulator.core.database import SlurmDatabase, UsageRecord
+from emulator.commands.slurm_time import ParseTimeError, parse_time_spec
+from emulator.core import exit_status
+from emulator.core.cluster_model import partition_has_gpus
+from emulator.core.database import Job, SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
 
 # Subset of the real field table (slurm://src/sacct/sacct.c#fields), in table
@@ -72,6 +92,7 @@ _REGISTRY: list[FieldSpec] = [
     FieldSpec("ConsumedEnergyRaw", 17, truncate=False),
     FieldSpec("Elapsed", 10),
     FieldSpec("ElapsedRaw", 10, truncate=False),
+    FieldSpec("Eligible", 19),
     FieldSpec("End", 19),
     FieldSpec("ExitCode", 8),
     FieldSpec("GID", 6, truncate=False),
@@ -79,17 +100,26 @@ _REGISTRY: list[FieldSpec] = [
     FieldSpec("JobID", -12),
     FieldSpec("JobIDRaw", -12),
     FieldSpec("JobName", 10),
+    FieldSpec("MaxRSS", 10),
     FieldSpec("NNodes", 8, truncate=False),
     FieldSpec("NodeList", 15),
     FieldSpec("Partition", 10),
+    FieldSpec("ReqMem", 10),
     FieldSpec("ReqTRES", 10),
     FieldSpec("Start", 19),
     FieldSpec("State", 10),
+    FieldSpec("StdErr", 20),
+    FieldSpec("StdIn", 20),
+    FieldSpec("StdOut", 20),
     FieldSpec("Submit", 19),
+    FieldSpec("SystemCPU", 10),
     FieldSpec("Timelimit", 10),
+    FieldSpec("TotalCPU", 10),
     # UID precedes User in the real table, so ``-o U`` resolves to UID.
     FieldSpec("UID", 6, truncate=False),
     FieldSpec("User", 9),
+    FieldSpec("UserCPU", 10),
+    FieldSpec("WorkDir", 20),
 ]
 
 _DEFAULT_FORMAT = "JobID,JobName,Partition,Account,AllocCPUS,State,ExitCode"  # slurm://src/sacct/sacct.h#DEFAULT_FIELDS
@@ -100,8 +130,6 @@ _DEFAULT_FORMAT = "JobID,JobName,Partition,Account,AllocCPUS,State,ExitCode"  # 
 _NODE_CPUS = 64
 _NODE_MEM_GB = 512
 _NODE_GPUS = 4
-
-_FAILED_STATES = ("FAILED", "OUT_OF_MEMORY", "TIMEOUT")
 
 
 @dataclass
@@ -126,6 +154,8 @@ class SacctEmulator:
         self.time_engine = time_engine
         # Mirrors sacct's exit handling: 0 unless an error path ran.
         self.exit_code = 0
+        # Pending/running jobs behind the rows built for them, by id.
+        self._active_jobs: dict[str, Job] = {}
 
     def handle_command(self, args: list[str]) -> str:
         """Process sacct command and return output."""
@@ -143,6 +173,10 @@ class SacctEmulator:
             self.exit_code = 1
             raise SystemExit(1) from None
 
+        # slurmctld keeps slurmdbd current; the emulator catches jobs up on read.
+        from emulator.core.scheduler import advance_job_states  # noqa: PLC0415
+
+        advance_job_states(self.database, self.time_engine)
         records = self._get_filtered_records(config)
         rows = [self._row(record, config) for record in records]
         return render_table(fields, rows, config.mode)
@@ -176,6 +210,7 @@ class SacctEmulator:
             "-o": "format",
             "--format": "format",
             "--fields": "format",
+            "--delimiter": "delimiter",
         }
         flag_opts = {
             "-V": "version",
@@ -212,6 +247,8 @@ class SacctEmulator:
                 cfg.jobs.extend(item.split(".", 1)[0] for item in _csv(value))
             elif key == "format":
                 cfg.format_spec = value
+            elif key == "delimiter":
+                cfg.mode.delimiter = value
 
         i = 0
         while i < len(args):
@@ -255,24 +292,22 @@ class SacctEmulator:
         return cfg
 
     def _parse_time(self, time_str: str) -> datetime:
-        """Parse a sacct time spec on the simulated clock.
+        """``parse_time(optarg, 1)`` (slurm://src/sacct/options.c#parse_command_line).
 
-        Supports the common parse_time() forms: ISO dates/datetimes,
-        ``HH:MM[:SS]`` (today), ``now[{+|-}count[unit]]``, ``today``,
-        ``midnight``. Failure mirrors slurm://src/common/parse_time.c#parse_time: the message
-        goes to stderr without a ``sacct:`` prefix and the process
-        exits 1.
+        Times without a date or year resolve to the past, on the simulated
+        clock. Failure mirrors slurm://src/common/parse_time.c#parse_time: the
+        message goes to stderr without a ``sacct:`` prefix and sacct exits 1.
         """
         try:
             return self._parse_time_inner(time_str)
-        except (ValueError, IndexError):
-            print(f"Invalid time specification (pos=0): {time_str}", file=sys.stderr)
+        except ParseTimeError as exc:
+            print(exc, file=sys.stderr)
             self.exit_code = 1
             raise SystemExit(1) from None
 
     def _parse_time_inner(self, time_str: str) -> datetime:
-        """Parse one time spec; raises ValueError on anything bogus."""
-        return parse_time_spec(time_str, self.time_engine.get_current_time())
+        """Parse one time spec; raises ParseTimeError on anything bogus."""
+        return parse_time_spec(time_str, self.time_engine.get_current_time(), past=True)
 
     def _get_filtered_records(self, config: _Config) -> list[UsageRecord]:
         """Get usage records based on filters."""
@@ -293,58 +328,216 @@ class SacctEmulator:
             records = [r for r in records if r.user in config.users]
         if config.jobs:
             records = [r for r in records if str(r.job_id) in config.jobs]
+        active = self._active_job_records(config, {str(r.job_id) for r in records})
 
         # Explicit job ids bypass the default time window — real sacct
         # returns the job regardless of when it ran unless -S/-E are given.
         if config.jobs and not (config.start_time or config.end_time):
-            return records
+            return records + active
 
         # Default window: Midnight -> Now on the simulated clock
         # (slurmdb_job_cond_def_start_end, slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end).
         now = self.time_engine.get_current_time()
         start = config.start_time or now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = config.end_time or now
-        return [r for r in records if start <= r.timestamp <= end]
+        finished = [r for r in records if start <= r.timestamp <= end]
+        # A pending or running job is eligible now, so it is in any window
+        # that reaches the present.
+        return finished + (active if end >= now else [])
+
+    def _active_job_records(self, config: _Config, have: set[str]) -> list[UsageRecord]:
+        """Rows for pending and running jobs, which slurmdbd holds from submission.
+
+        The emulator writes accounting when a job ends; until then the row
+        is built from the job: no end time, the requested nodes for a pending
+        job and its allocation once it runs.
+        """
+        from emulator.core.cluster_model import compress_hostlist, job_request  # noqa: PLC0415
+
+        rows = []
+        clusters = config.clusters or [self.database.current_cluster]
+        for job in self.database.jobs.values():
+            job_id = str(job.job_id)
+            if job.state not in ("PENDING", "RUNNING") or job_id in have or not job_id.isdigit():
+                continue
+            if (
+                job.cluster not in clusters
+                or (config.accounts and job.account not in config.accounts)
+                or (config.users and job.user not in config.users)
+                or (config.jobs and job_id not in config.jobs)
+            ):
+                continue
+            request = job_request(job)
+            running = job.state == "RUNNING" and bool(job.node_list)
+            self._active_jobs[job_id] = job
+            rows.append(
+                UsageRecord(
+                    account=job.account,
+                    user=job.user,
+                    node_hours=0.0,
+                    billing_units=0.0,
+                    timestamp=self.time_engine.get_current_time(),
+                    period="",
+                    cluster=job.cluster,
+                    partition=job.partition,
+                    job_id=int(job_id),
+                    state=job.state,
+                    uid=job.uid,
+                    gid=job.gid,
+                    group_name=job.group_name,
+                    job_name=job.name,
+                    working_directory=job.working_directory,
+                    exit_code=job.exit_code,
+                    standard_input=job.standard_input,
+                    standard_output=job.standard_output,
+                    standard_error=job.standard_error,
+                    submit_time=job.submit_time,
+                    eligible_time=job.submit_time,
+                    start_time=job.start_time if running else None,
+                    time_limit=job.time_limit,
+                    node_count=len(job.node_list) if running else request.node_count,
+                    node_list=compress_hostlist(job.node_list) if running else "None assigned",
+                    alloc_cpus=(job.alloc_cpus or request.total_cpus) if running else 0,
+                    req_mem_mb=request.mem_per_node,
+                    tasks=job.tasks,
+                )
+            )
+        return rows
 
     def _row(self, record: UsageRecord, config: _Config) -> dict[str, str]:
-        elapsed_secs = int(record.node_hours * 3600)
-        end = record.timestamp
-        start = end - timedelta(seconds=elapsed_secs)
         state = record.state or "COMPLETED"
-        exit_code = "1:0" if state.startswith(_FAILED_STATES) else "0:0"
-        tres = self._tres_string(record, config.noconvert)
+        # WEXITSTATUS:WTERMSIG of the stored status (slurm://src/sacct/print.c#PRINT_EXITCODE).
+        exit_code = exit_status.colon(state, record.exit_code)
         job_id = str(record.job_id)
-
         energy = _energy_joules(record)
+        fmt = "%Y-%m-%dT%H:%M:%S"
+        active = self._active_jobs.get(job_id) if state in ("PENDING", "RUNNING") else None
+        start: Optional[datetime]
+        end: Optional[datetime]
+
+        if active is not None:
+            # Still in the controller: unset times print "Unknown"
+            # (slurm://src/common/parse_time.c#slurm_make_time_str); CPU time
+            # and MaxRSS only arrive when steps end.
+            from emulator.commands.scontrol_info import job_tres  # noqa: PLC0415
+            from emulator.core.scheduler import job_clock_now  # noqa: PLC0415
+
+            submit = record.submit_time or record.timestamp
+            eligible = record.eligible_time or submit
+            start, end = record.start_time, None
+            elapsed_secs = (
+                max(int((job_clock_now(self.time_engine) - start).total_seconds()), 0)
+                if start
+                else 0
+            )
+            nnodes = record.node_count
+            node_list = record.node_list
+            alloc_cpus = record.alloc_cpus
+            req_tres = job_tres(active, allocated=False)
+            alloc_tres = job_tres(active, allocated=True) if start else ""
+            req_mem_mb = record.req_mem_mb * max(nnodes, 1)
+            req_mem = str(req_mem_mb) + "M" if config.noconvert else _convert_exact(req_mem_mb, 2)
+            limit = _mins2time_str(record.time_limit) if record.time_limit else "UNLIMITED"
+            total_cpu = user_cpu = system_cpu = "00:00:00"
+            max_rss = ""
+        elif record.start_time is not None and record.end_time is not None:
+            # A record of a real run: the values slurmdbd stored for it.
+            start, end = record.start_time, record.end_time
+            submit = record.submit_time or start
+            eligible = record.eligible_time or submit
+            elapsed_secs = max(int((end - start).total_seconds()), 0)
+            nnodes = record.node_count
+            node_list = record.node_list or "None assigned"
+            alloc_cpus = record.alloc_cpus
+            req_tres = self._explicit_tres(record, allocated=False, noconvert=config.noconvert)
+            alloc_tres = self._explicit_tres(record, allocated=True, noconvert=config.noconvert)
+            req_mem_mb = record.req_mem_mb * max(nnodes, 1)
+            req_mem = str(req_mem_mb) + "M" if config.noconvert else _convert_exact(req_mem_mb, 2)
+            # Timelimit through mins2time_str (slurm://src/common/parse_time.c#mins2time_str).
+            limit = _mins2time_str(record.time_limit) if record.time_limit else "UNLIMITED"
+            total = record.cpu_time_seconds
+            system = total * 0.04
+            total_cpu = _elapsed_time(total)
+            user_cpu = _elapsed_time(total - system)
+            system_cpu = _elapsed_time(system)
+            max_rss = (
+                ""
+                if not record.max_rss_bytes
+                else (
+                    str(record.max_rss_bytes)
+                    if config.noconvert
+                    else _convert_exact(record.max_rss_bytes, 0)
+                )
+            )
+        else:
+            elapsed_secs = int(record.node_hours * 3600)
+            end = record.timestamp
+            start = submit = eligible = end - timedelta(seconds=elapsed_secs)
+            nnodes = 1
+            node_list = "node001"
+            alloc_cpus = self._cpu_rate(record)
+            req_tres = alloc_tres = self._tres_string(record, config.noconvert)
+            mem_mb = self._rate(record, "Mem", _NODE_MEM_GB) * 1024
+            req_mem = f"{mem_mb}M" if config.noconvert else _convert_exact(mem_mb, 2)
+            limit = "UNLIMITED"
+            total_cpu = user_cpu = system_cpu = "00:00:00"
+            max_rss = ""
 
         return {
             "JobID": job_id,
             "JobIDRaw": job_id,
             "ConsumedEnergy": str(energy) if config.noconvert else _convert_num_unit(energy),
             "ConsumedEnergyRaw": str(energy),
-            "JobName": f"job_{record.job_id}",
+            "JobName": record.job_name or f"job_{record.job_id}",
             "Partition": record.partition or "compute",
             "Account": record.account,
-            "AllocCPUS": str(self._cpu_rate(record)),
-            "AllocNodes": "1",
-            "AllocTRES": tres,
+            "AllocCPUS": str(alloc_cpus),
+            "AllocNodes": str(nnodes if node_list != "None assigned" else 0),
+            "AllocTRES": alloc_tres,
             "Cluster": record.cluster,
             "Elapsed": _secs2time_str(elapsed_secs),
             "ElapsedRaw": str(elapsed_secs),
-            "End": end.strftime("%Y-%m-%dT%H:%M:%S"),
+            "Eligible": eligible.strftime(fmt),
+            "End": end.strftime(fmt) if end else "Unknown",
             "ExitCode": exit_code,
             "GID": str(record.gid if record.gid is not None else 1000),
             "Group": record.group_name or record.user,
-            "NNodes": "1",
-            "NodeList": "node001",
-            "ReqTRES": tres,
-            "Start": start.strftime("%Y-%m-%dT%H:%M:%S"),
-            "State": state,
-            "Submit": start.strftime("%Y-%m-%dT%H:%M:%S"),
-            "Timelimit": "UNLIMITED",
+            "MaxRSS": max_rss,
+            "NNodes": str(nnodes),
+            "NodeList": node_list,
+            "ReqMem": req_mem,
+            "ReqTRES": req_tres,
+            "Start": start.strftime(fmt) if start else "Unknown",
+            # slurm://src/sacct/print.c#PRINT_STATE: a cancelled job names who did it.
+            "State": f"{state} by {record.requid}"
+            if state == "CANCELLED" and record.requid is not None
+            else state,
+            "Submit": submit.strftime(fmt),
+            "SystemCPU": system_cpu,
+            "Timelimit": limit,
+            "TotalCPU": total_cpu,
             "UID": str(record.uid if record.uid is not None else 1000),
             "User": record.user,
+            "UserCPU": user_cpu,
+            "StdIn": record.standard_input,
+            "StdOut": record.standard_output,
+            "StdErr": record.standard_error,
+            "WorkDir": record.working_directory or f"/home/{record.user}",
         }
+
+    def _explicit_tres(self, record: UsageRecord, allocated: bool, noconvert: bool) -> str:
+        """ReqTRES / AllocTRES of a real run, in TRES-id order."""
+        nodes = record.node_count
+        if allocated and not nodes:
+            return ""
+        nodes = max(nodes, 1)
+        cpus = record.alloc_cpus or _NODE_CPUS * nodes
+        mem_mb = record.req_mem_mb * nodes
+        mem = f"{mem_mb}M" if noconvert else _convert_exact(mem_mb, 2)
+        parts = [f"cpu={cpus}", f"mem={mem}", f"node={nodes}", f"billing={cpus}"]
+        if partition_has_gpus(record.partition):
+            parts.append(f"gres/gpu={_NODE_GPUS * nodes}")
+        return ",".join(parts)
 
     def _cpu_rate(self, record: UsageRecord) -> int:
         return self._rate(record, "CPU", _NODE_CPUS)
@@ -423,3 +616,49 @@ def _secs2time_str(secs: int) -> str:
     if days:
         return f"{days}-{hours:02d}:{minutes:02d}:{seconds:02d}"
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _convert_exact(number: float, unit: int) -> str:
+    """convert_num_unit with sacct's default CONVERT_NUM_UNIT_EXACT.
+
+    sacct sets ``params.convert_flags = CONVERT_NUM_UNIT_EXACT``
+    (slurm://src/sacct/options.c#CONVERT_NUM_UNIT_EXACT): divide by 1024 only
+    while the value stays a multiple of 512, so 262144M prints ``256G`` and
+    4000M stays ``4000M`` (slurm://src/common/slurm_protocol_api.c#convert_num_unit2).
+    ``unit`` is the starting unit index (0 = bytes, 2 = MB).
+    """
+    units = ["", "K", "M", "G", "T", "P"]
+    if int(number) == 0:
+        return "0"
+    num = float(number)
+    while num >= 1024 and int(num) % 512 == 0 and unit < len(units) - 1:
+        num /= 1024
+        unit += 1
+    if float(int(num)) == num:
+        return f"{int(num)}{units[unit]}"
+    return f"{num:.2f}{units[unit]}"
+
+
+def _mins2time_str(minutes: int) -> str:
+    """Port of mins2time_str (slurm://src/common/parse_time.c#mins2time_str)."""
+    days, rem = divmod(int(minutes), 1440)
+    hours, mins = divmod(rem, 60)
+    if days:
+        return f"{days}-{hours:02d}:{mins:02d}:00"
+    return f"{hours:02d}:{mins:02d}:00"
+
+
+def _elapsed_time(seconds: float) -> str:
+    """Port of sacct's _elapsed_time for TotalCPU/UserCPU/SystemCPU (slurm://src/sacct/print.c#_elapsed_time)."""
+    secs = int(seconds)
+    subsec = round((seconds - secs) * 1_000_000) // 1000
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, sec = divmod(rem, 60)
+    if days:
+        return f"{days}-{hours:02d}:{minutes:02d}:{sec:02d}"
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+    if subsec:
+        return f"{minutes:02d}:{sec:02d}.{subsec:03d}"
+    return f"00:{minutes:02d}:{sec:02d}"

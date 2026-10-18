@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.9"
 resolution-markers = [
     "python_full_version >= '3.10'",
@@ -732,6 +732,15 @@ wheels = [
 ]
 
 [[package]]
+name = "kafka-python"
+version = "2.3.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/7e/9eb4363e5018b71edf77de3d2fbd687f1e3a55d43101138a5b7f2ca56d97/kafka_python-2.3.2.tar.gz", hash = "sha256:2d2469bcabc2551be7eaf7fb512e1241484d358800f2665b90e7e24fea84259d", size = 357589, upload-time = "2026-06-03T22:46:49.022Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/db/cfe23cfacc9aabeef59e349aa6c2738d195df1d56ccf8c31362abdd68ddb/kafka_python-2.3.2-py2.py3-none-any.whl", hash = "sha256:e8a5e6f2c4ce13a8041669337038d5125e0e09e6d6f0911902ae5939e5b9595e", size = 326623, upload-time = "2026-06-03T22:46:47.417Z" },
+]
+
+[[package]]
 name = "markupsafe"
 version = "3.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1325,7 +1334,7 @@ wheels = [
 
 [[package]]
 name = "slurm-emulator"
-version = "0.9.6"
+version = "0.9.8"
 source = { editable = "." }
 dependencies = [
     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -1353,6 +1362,9 @@ dev = [
     { name = "types-pyyaml" },
     { name = "types-requests" },
 ]
+sonar = [
+    { name = "kafka-python" },
+]
 ssh = [
     { name = "asyncssh", version = "2.21.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "asyncssh", version = "2.24.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -1365,6 +1377,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.24.0" },
     { name = "jinja2", specifier = ">=3.1.6" },
+    { name = "kafka-python", marker = "extra == 'sonar'", specifier = ">=2.0.2,<3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
@@ -1380,7 +1393,7 @@ requires-dist = [
     { name = "types-requests", marker = "extra == 'dev'" },
     { name = "uvicorn", specifier = ">=0.20.0" },
 ]
-provides-extras = ["ssh", "dev"]
+provides-extras = ["ssh", "dev", "sonar"]
 
 [[package]]
 name = "sniffio"

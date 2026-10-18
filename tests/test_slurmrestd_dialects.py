@@ -115,3 +115,59 @@ def test_partition_memory_limits_dialect(client, target, auth_headers):
     has_mem = "memory_per_cpu" in part["defaults"]
     assert has_mem == ("memory_per_cpu" in part["maximums"])
     assert has_mem == (not slurm_version.at_least("master"))
+
+
+def test_node_and_reservation_shapes_in_every_dialect(client, target, auth_headers, monkeypatch):
+    """NODE ``cpu_load``/``free_mem``/``alloc_idle_cpus``/``tres_used`` and the
+    RESERVATION_INFO fields are the same from v0.0.42 to v0.0.45
+    (slurm://src/plugins/data_parser/v0.0.42/parsers.c#RESERVATION_INFO@24.11,
+    slurm://src/plugins/data_parser/v0.0.45/parsers.c#RESERVATION_INFO@26.05+;
+    ``watts`` is already add_removed in v0.0.42)."""
+    monkeypatch.setenv("SLURM_EMULATOR_RESERVATIONS", "maint:ALL:+1h:2h:MAINT")
+    node = client.get(f"/slurm/{target.api_version}/nodes/", headers=auth_headers).json()["nodes"][
+        0
+    ]
+    assert {"cpu_load", "free_mem", "alloc_idle_cpus", "tres_used", "reason"} <= set(node)
+    assert set(node["free_mem"]) == {"set", "infinite", "number"}
+    resv = client.get(f"/slurm/{target.api_version}/reservations/", headers=auth_headers).json()[
+        "reservations"
+    ][0]
+    assert {"name", "node_list", "node_count", "partition", "flags", "users", "accounts"} <= set(
+        resv
+    )
+    assert "watts" not in resv
+    assert set(resv["start_time"]) == {"set", "infinite", "number"}
+
+
+def test_reservation_writes_exist_from_25_05(client, target, auth_headers):
+    """``POST /reservation``, ``POST /reservations/`` and ``DELETE /reservation/{name}``
+    arrived with 25.05 (slurm://src/slurmrestd/plugins/openapi/slurmctld/api.c#"create or update a reservation"@25.05+);
+    24.11 only serves the GETs
+    (slurm://src/slurmrestd/plugins/openapi/slurmctld/api.c#"get reservation info"@24.11),
+    so the bare path is an unknown URL and the others an unknown method."""
+    base = f"/slurm/{target.api_version}"
+    desc = {
+        "name": "m",
+        "start_time": "now",
+        "duration": 60,
+        "node_list": "node001",
+        "flags": ["MAINT"],
+        "users": "root",
+    }
+    created = client.post(f"{base}/reservation", headers=auth_headers, json=desc)
+    bulk = client.post(
+        f"{base}/reservations/",
+        headers=auth_headers,
+        json={"reservations": [{**desc, "name": "n", "node_list": "node002"}]},
+    )
+    deleted = client.delete(f"{base}/reservation/m", headers=auth_headers)
+    if slurm_version.at_least("25.05"):
+        assert created.status_code == 200 and created.json()["reservations"][0]["name"] == "m"
+        assert bulk.status_code == 200 and bulk.json()["errors"] == []
+        assert deleted.status_code == 200 and deleted.json()["errors"] == []
+    else:
+        assert created.status_code == 404
+        assert bulk.status_code == 405 and deleted.status_code == 405
+        assert (
+            client.get(f"{base}/reservations/", headers=auth_headers).json()["reservations"] == []
+        )

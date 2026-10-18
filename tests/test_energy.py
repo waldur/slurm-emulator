@@ -402,7 +402,19 @@ class TestReviewFixes:
             f"{t}/{n}" if n else t: int(i)
             for t, n, i in (line.split("|") for line in out.splitlines())
         }
-        assert cli == {"CPU": 1, "Mem": 2, "energy": 3, "node": 4, "billing": 5, "GRES/gpu": 1001}
+        assert cli == {
+            "cpu": 1,
+            "mem": 2,
+            "energy": 3,
+            "node": 4,
+            "billing": 5,
+            "fs/disk": 6,
+            "vmem": 7,
+            "pages": 8,
+            "gres/gpu": 1001,
+            "gres/gpumem": 1002,
+            "gres/gpuutil": 1003,
+        }
         resp = restd.get(f"/slurmdb/{current().api_version}/tres/", headers=auth_headers)
         rest = {
             f"{t['type']}/{t['name']}" if t["name"] else t["type"]: t["id"]
