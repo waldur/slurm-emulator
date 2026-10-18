@@ -85,7 +85,7 @@ from emulator.commands.print_fields import (
     render_table,
     resolve_format,
 )
-from emulator.commands.slurm_time import parse_time_spec
+from emulator.commands.slurm_time import ParseTimeError, parse_time_spec
 from emulator.core import nss
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
@@ -375,10 +375,11 @@ class SreportEmulator:
 
     def _parse_time(self, text: str) -> datetime:
         try:
-            return parse_time_spec(text, self.time_engine.get_current_time())
-        except (ValueError, IndexError):
+            # parse_time(..., 1): slurm://src/sreport/cluster_reports.c#_set_assoc_cond
+            return parse_time_spec(text, self.time_engine.get_current_time(), past=True)
+        except ParseTimeError as exc:
             # slurm://src/common/parse_time.c#parse_time — no sreport: prefix
-            self._error(f"Invalid time specification (pos=0): {text}")
+            self._error(str(exc))
             self.exit_code = 1
             raise SystemExit(1) from None
 

@@ -51,7 +51,7 @@ from emulator.api.slurmrestd.schemas import (
     uint_no_val,
 )
 from emulator.api.slurmrestd.state import StateDep
-from emulator.commands.slurm_time import parse_time_spec
+from emulator.commands.slurm_time import ParseTimeError, parse_time_spec
 from emulator.core.accounting import admit_job
 from emulator.core.cluster_model import expand_hostlist, node_views, sync_reservations
 from emulator.core.database import Job, SlurmDatabase
@@ -639,9 +639,10 @@ def _desc_time(value: object, now: datetime) -> Optional[datetime]:
     if value is None:
         return None
     if isinstance(value, str) and not value.strip().lstrip("-").isdigit():
+        # parse_time(str, 0); time 0 ("nothing specified") is a failure too.
         try:
             return parse_time_spec(value, now)
-        except ValueError as exc:
+        except ParseTimeError as exc:
             raise _DescParseError(value) from exc
     number = _desc_int(value)
     if number is None or number == DURATION_INFINITE:

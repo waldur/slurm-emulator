@@ -38,8 +38,6 @@ Intentional deviations:
   AllowedPartitions and MaxStartDelay are refused as unsupported instead of
   being reserved (slurm://src/scontrol/create_res.c#_parse_res_options accepts
   them).
-* An invalid time does not print parse_time()'s ``Invalid time specification
-  (pos=N)`` line before scontrol's own error.
 * ``--json`` output carries a reduced ``meta`` block.
 """
 
@@ -51,7 +49,7 @@ from datetime import datetime
 from typing import Optional
 
 from emulator.api.slurmrestd.schemas import reservation_to_dict, uint_no_val
-from emulator.commands.slurm_time import parse_time_spec
+from emulator.commands.slurm_time import ParseTimeError, parse_time
 from emulator.core import reservations as resv_core
 from emulator.core.cluster_model import NODE_CPUS, compress_hostlist, sync_reservations
 from emulator.core.database import Reservation, SlurmDatabase
@@ -314,11 +312,17 @@ class ScontrolEmulator:
 
     @staticmethod
     def _time(value: str, error: str, now: datetime) -> datetime:
-        """parse_time() (slurm://src/common/parse_time.c#parse_time) on the job clock."""
+        """parse_time(val, 0) (slurm://src/common/parse_time.c#parse_time) on the job clock.
+
+        parse_time() prints its own line before scontrol's error; an empty
+        value is time 0, which the controller then refuses as a past time.
+        """
         try:
-            return parse_time_spec(value, now).replace(microsecond=0)
-        except ValueError as exc:
+            parsed = parse_time(value, now)
+        except ParseTimeError as exc:
+            print(exc, file=sys.stderr)
             raise _ParseError(error) from exc
+        return parsed if parsed is not None else datetime.fromtimestamp(0)  # noqa: DTZ006
 
     # --- create / update / delete ---
 

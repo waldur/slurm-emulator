@@ -139,7 +139,7 @@ class TestRestCreate:
             auth_headers,
             name="part",
             start_time="now",
-            end_time="now+60",
+            end_time="now+60minutes",
             partition="debug",
             accounts="root",
         ).json()
@@ -151,6 +151,19 @@ class TestRestCreate:
         assert resv.nodes == cluster_model.partition_nodes("debug")
         assert resv.flags == ["PART_NODES", "SPEC_NODES"]
         assert (resv.start_time, resv.end_time) == (T0, T0 + timedelta(minutes=60))
+
+    def test_bare_now_offset_is_seconds(self, restd, auth_headers, sim):
+        # slurm://src/common/parse_time.c#_get_delta multiplies only when a unit follows.
+        post_resv(
+            restd,
+            auth_headers,
+            name="s",
+            start_time="now",
+            end_time="now+90",
+            partition="debug",
+            accounts="root",
+        )
+        assert stored()["s"].end_time == T0 + timedelta(seconds=90)
 
     def test_all_nodes_flag(self, restd, auth_headers, sim):
         post_resv(restd, auth_headers, **maint(node_list="ALL"))
@@ -472,7 +485,8 @@ class TestSchedulingWithApiReservations:
         set_time(T0 + timedelta(minutes=2))
         jobs = ctld_jobs(restd, auth_headers)
         assert jobs[short_job]["job_state"] == ["RUNNING"]
-        assert jobs[long_job]["state_reason"] == cluster_model.MAINT_REASON
+        assert jobs[long_job]["state_reason"] == "ReqNodeNotAvail"
+        assert jobs[long_job]["state_description"] == cluster_model.MAINT_DESC
 
     def test_active_maint_flags_nodes(self, restd, auth_headers, sim):
         post_resv(restd, auth_headers, **maint(start=TS0))

@@ -58,7 +58,8 @@ from emulator.commands.print_fields import (
     render_table,
     resolve_format,
 )
-from emulator.commands.slurm_time import parse_time_spec
+from emulator.commands.slurm_time import ParseTimeError, parse_time_spec
+from emulator.core import exit_status
 from emulator.core.cluster_model import partition_has_gpus
 from emulator.core.database import SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
@@ -114,8 +115,6 @@ _DEFAULT_FORMAT = "JobID,JobName,Partition,Account,AllocCPUS,State,ExitCode"  # 
 _NODE_CPUS = 64
 _NODE_MEM_GB = 512
 _NODE_GPUS = 4
-
-_FAILED_STATES = ("FAILED", "OUT_OF_MEMORY", "TIMEOUT")
 
 
 @dataclass
@@ -272,24 +271,22 @@ class SacctEmulator:
         return cfg
 
     def _parse_time(self, time_str: str) -> datetime:
-        """Parse a sacct time spec on the simulated clock.
+        """``parse_time(optarg, 1)`` (slurm://src/sacct/options.c#parse_command_line).
 
-        Supports the common parse_time() forms: ISO dates/datetimes,
-        ``HH:MM[:SS]`` (today), ``now[{+|-}count[unit]]``, ``today``,
-        ``midnight``. Failure mirrors slurm://src/common/parse_time.c#parse_time: the message
-        goes to stderr without a ``sacct:`` prefix and the process
-        exits 1.
+        Times without a date or year resolve to the past, on the simulated
+        clock. Failure mirrors slurm://src/common/parse_time.c#parse_time: the
+        message goes to stderr without a ``sacct:`` prefix and sacct exits 1.
         """
         try:
             return self._parse_time_inner(time_str)
-        except (ValueError, IndexError):
-            print(f"Invalid time specification (pos=0): {time_str}", file=sys.stderr)
+        except ParseTimeError as exc:
+            print(exc, file=sys.stderr)
             self.exit_code = 1
             raise SystemExit(1) from None
 
     def _parse_time_inner(self, time_str: str) -> datetime:
-        """Parse one time spec; raises ValueError on anything bogus."""
-        return parse_time_spec(time_str, self.time_engine.get_current_time())
+        """Parse one time spec; raises ParseTimeError on anything bogus."""
+        return parse_time_spec(time_str, self.time_engine.get_current_time(), past=True)
 
     def _get_filtered_records(self, config: _Config) -> list[UsageRecord]:
         """Get usage records based on filters."""
@@ -366,10 +363,8 @@ class SacctEmulator:
 
     def _row(self, record: UsageRecord, config: _Config) -> dict[str, str]:
         state = record.state or "COMPLETED"
-        exit_status = record.exit_code
-        if exit_status is None:
-            exit_status = 1 if state.startswith(_FAILED_STATES) else 0
-        exit_code = f"{exit_status}:0"
+        # WEXITSTATUS:WTERMSIG of the stored status (slurm://src/sacct/print.c#PRINT_EXITCODE).
+        exit_code = exit_status.colon(state, record.exit_code)
         job_id = str(record.job_id)
         energy = _energy_joules(record)
         fmt = "%Y-%m-%dT%H:%M:%S"
