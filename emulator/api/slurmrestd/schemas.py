@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any, Optional
 
 from emulator.commands.sacct import (
@@ -23,7 +24,7 @@ from emulator.commands.sacct import (
     SacctEmulator,
     _convert_exact,
 )
-from emulator.core import exit_status
+from emulator.core import exit_status, job_execution
 from emulator.core.cluster_model import (
     DEF_MEM_PER_CPU_MB,
     GPU_MEM_MB,
@@ -43,6 +44,7 @@ from emulator.core.database import (
     UsageRecord,
     User,
 )
+from emulator.core.time_engine import TimeEngine
 from emulator.core.tres import DYNAMIC_TRES_FIRST_ID, STATIC_TRES_IDS, tres_id
 from emulator.slurm_version import at_least
 
@@ -366,6 +368,30 @@ def _step_usage(record: UsageRecord, cpu: dict[str, Any]) -> tuple[dict[str, int
     return last, peak
 
 
+def _record_stdio(record: UsageRecord) -> dict[str, str]:
+    """``stdin_expanded``/``stdout_expanded``/``stderr_expanded`` of a stored job.
+
+    slurmdbd's patterns expanded for the batch step
+    (slurm://src/common/slurmdb_defs.c#slurmdb_expand_job_stdio_fields@25.05+); an
+    empty path stays empty.
+    """
+    job = SimpleNamespace(
+        job_id=record.job_id,
+        name=record.job_name or f"job_{record.job_id}",
+        user=record.user,
+        node_list=expand_hostlist(record.node_list) if record.node_count else [],
+        working_directory=record.working_directory or f"/home/{record.user}",
+    )
+    return {
+        f"{key}_expanded": (job_execution.expand_stdio_path(path, job, "") if path else "")
+        for key, path in (
+            ("stdin", record.standard_input),
+            ("stdout", record.standard_output),
+            ("stderr", record.standard_error),
+        )
+    }
+
+
 def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) -> dict[str, Any]:
     """The ``batch`` step of a job (STEP, slurm://src/plugins/data_parser/v0.0.45/parsers.c#STEP@26.05+).
 
@@ -421,6 +447,8 @@ def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) 
             "stderr": record.standard_error,
             "stdin": record.standard_input,
             "stdout": record.standard_output,
+            # slurm://src/plugins/data_parser/v0.0.45/parsers.c#STEP_INFO_STDOUT_EXP@26.05+
+            **(_record_stdio(record) if at_least("25.05") else {}),
         },
         "tres": {
             "requested": {
@@ -440,7 +468,7 @@ def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) 
     }
 
 
-def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
+def dbd_job_to_dict(record: UsageRecord, active: Optional[Job] = None) -> dict[str, Any]:
     """One slurmdb JOB per usage record — agrees with sacct output.
 
     Records that mirror a real run (``start_time`` set: submitted or seeded
@@ -459,7 +487,50 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
     gpus = rate(record, "GRES/gpu", _NODE_GPUS)
     steps: list[dict[str, Any]] = []
 
-    if record.start_time is not None and record.end_time is not None:
+    if active is not None:
+        # A pending or running job: no end yet, elapsed so far, the request
+        # until it is allocated (as slurmdbd holds it from job start/submit,
+        # slurm://src/plugins/accounting_storage/mysql/as_mysql_job.c#as_mysql_job_start).
+        from emulator.core.scheduler import job_clock_now  # noqa: PLC0415
+
+        request = job_request(active)
+        submit = int(active.submit_time.timestamp()) if active.submit_time else 0
+        eligible = submit
+        running = active.state == "RUNNING" and bool(active.node_list)
+        start = int(active.start_time.timestamp()) if running and active.start_time else 0
+        end = 0
+        elapsed = max(int(job_clock_now(TimeEngine()).timestamp()) - start, 0) if start else 0
+        nodes = len(active.node_list) if running else 0
+        node_list = record.node_list
+        cpus = (active.alloc_cpus or request.total_cpus) if running else 0
+        requested = {
+            "cpu": request.total_cpus,
+            "mem": request.mem_per_node * request.node_count,
+            "node": request.node_count,
+            "billing": request.total_cpus,
+        }
+        allocated = (
+            {"cpu": cpus, "mem": request.mem_per_node * nodes, "node": nodes, "billing": cpus}
+            if running
+            else {}
+        )
+        if partition_has_gpus(record.partition):
+            requested["gres/gpu"] = _NODE_GPUS * request.node_count
+            if running:
+                allocated["gres/gpu"] = _NODE_GPUS * nodes
+        zero = {"seconds": 0, "microseconds": 0}
+        cpu = {"system": zero, "user": dict(zero), "total": dict(zero)}
+        limit = uint_no_val(active.time_limit, infinite=active.time_limit is None)
+        tres = {
+            "allocated": tres_list_from_dict(allocated),
+            "requested": tres_list_from_dict(requested),
+        }
+        required = {
+            "CPUs": request.total_cpus,
+            "memory_per_cpu": uint_no_val(),
+            "memory_per_node": uint_no_val(request.mem_per_node),
+        }
+    elif record.start_time is not None and record.end_time is not None:
         start = int(record.start_time.timestamp())
         end = int(record.end_time.timestamp())
         submit = int((record.submit_time or record.start_time).timestamp())
@@ -548,6 +619,8 @@ def dbd_job_to_dict(record: UsageRecord) -> dict[str, Any]:
         "stdout": record.standard_output,
         "stderr": record.standard_error,
         "stdin": record.standard_input,
+        # slurm://src/plugins/data_parser/v0.0.45/parsers.c#"stdout_expanded"@26.05+
+        **_record_stdio(record),
         "time": {
             "elapsed": elapsed,
             "eligible": eligible,
@@ -649,6 +722,19 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         "standard_input": job.standard_input or "/dev/null",
         "standard_output": job.standard_output or "",
         "standard_error": job.standard_error or "",
+        # slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_INFO_STDOUT_EXP@26.05+
+        **(
+            {
+                f"{key}_expanded": job_execution.expand_stdio_path(path, job, "") if path else ""
+                for key, path in (
+                    ("stdin", job.standard_input or "/dev/null"),
+                    ("stdout", job.standard_output),
+                    ("stderr", job.standard_error),
+                )
+            }
+            if at_least("25.05")
+            else {}
+        ),
         "current_working_directory": job.working_directory or f"/home/{job.user}",
     }
 

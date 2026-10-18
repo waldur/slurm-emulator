@@ -61,7 +61,7 @@ from emulator.commands.print_fields import (
 from emulator.commands.slurm_time import ParseTimeError, parse_time_spec
 from emulator.core import exit_status
 from emulator.core.cluster_model import partition_has_gpus
-from emulator.core.database import SlurmDatabase, UsageRecord
+from emulator.core.database import Job, SlurmDatabase, UsageRecord
 from emulator.core.time_engine import TimeEngine
 
 # Subset of the real field table (slurm://src/sacct/sacct.c#fields), in table
@@ -139,6 +139,8 @@ class SacctEmulator:
         self.time_engine = time_engine
         # Mirrors sacct's exit handling: 0 unless an error path ran.
         self.exit_code = 0
+        # Pending/running jobs behind the rows built for them, by id.
+        self._active_jobs: dict[str, Job] = {}
 
     def handle_command(self, args: list[str]) -> str:
         """Process sacct command and return output."""
@@ -156,6 +158,10 @@ class SacctEmulator:
             self.exit_code = 1
             raise SystemExit(1) from None
 
+        # slurmctld keeps slurmdbd current; the emulator catches jobs up on read.
+        from emulator.core.scheduler import advance_job_states  # noqa: PLC0415
+
+        advance_job_states(self.database, self.time_engine)
         records = self._get_filtered_records(config)
         rows = [self._row(record, config) for record in records]
         return render_table(fields, rows, config.mode)
@@ -307,56 +313,78 @@ class SacctEmulator:
             records = [r for r in records if r.user in config.users]
         if config.jobs:
             records = [r for r in records if str(r.job_id) in config.jobs]
-            records += self._unfinished_job_records(config.jobs, records)
+        active = self._active_job_records(config, {str(r.job_id) for r in records})
 
         # Explicit job ids bypass the default time window — real sacct
         # returns the job regardless of when it ran unless -S/-E are given.
         if config.jobs and not (config.start_time or config.end_time):
-            return records
+            return records + active
 
         # Default window: Midnight -> Now on the simulated clock
         # (slurmdb_job_cond_def_start_end, slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end).
         now = self.time_engine.get_current_time()
         start = config.start_time or now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = config.end_time or now
-        return [r for r in records if start <= r.timestamp <= end]
+        finished = [r for r in records if start <= r.timestamp <= end]
+        # A pending or running job is eligible now, so it is in any window
+        # that reaches the present.
+        return finished + (active if end >= now else [])
 
-    def _unfinished_job_records(
-        self, job_ids: list[str], finished: list[UsageRecord]
-    ) -> list[UsageRecord]:
-        """Rows for requested jobs that have no accounting record yet.
+    def _active_job_records(self, config: _Config, have: set[str]) -> list[UsageRecord]:
+        """Rows for pending and running jobs, which slurmdbd holds from submission.
 
-        slurmdbd holds pending and running jobs too, so ``sacct -j`` finds a
-        job from submission on (slurm://src/sacct/sacct.c#main). The emulator
-        records accounting at completion; until then the row is built from
-        the job itself. Deviation: only for explicit ``-j``, so time-window
-        listings stay as before.
+        The emulator writes accounting when a job ends; until then the row
+        is built from the job: no end time, the requested nodes for a pending
+        job and its allocation once it runs.
         """
-        have = {str(r.job_id) for r in finished}
-        now = self.time_engine.get_current_time()
+        from emulator.core.cluster_model import compress_hostlist, job_request  # noqa: PLC0415
+
         rows = []
-        for job_id in job_ids:
-            job = self.database.jobs.get(job_id)
-            if job is None or job_id in have or not job_id.isdigit():
+        clusters = config.clusters or [self.database.current_cluster]
+        for job in self.database.jobs.values():
+            job_id = str(job.job_id)
+            if job.state not in ("PENDING", "RUNNING") or job_id in have or not job_id.isdigit():
                 continue
+            if (
+                job.cluster not in clusters
+                or (config.accounts and job.account not in config.accounts)
+                or (config.users and job.user not in config.users)
+                or (config.jobs and job_id not in config.jobs)
+            ):
+                continue
+            request = job_request(job)
+            running = job.state == "RUNNING" and bool(job.node_list)
+            self._active_jobs[job_id] = job
             rows.append(
                 UsageRecord(
                     account=job.account,
                     user=job.user,
                     node_hours=0.0,
                     billing_units=0.0,
-                    timestamp=now,
+                    timestamp=self.time_engine.get_current_time(),
                     period="",
                     cluster=job.cluster,
                     partition=job.partition,
                     job_id=int(job_id),
                     state=job.state,
+                    uid=job.uid,
+                    gid=job.gid,
+                    group_name=job.group_name,
                     job_name=job.name,
                     working_directory=job.working_directory,
                     exit_code=job.exit_code,
                     standard_input=job.standard_input,
                     standard_output=job.standard_output,
                     standard_error=job.standard_error,
+                    submit_time=job.submit_time,
+                    eligible_time=job.submit_time,
+                    start_time=job.start_time if running else None,
+                    time_limit=job.time_limit,
+                    node_count=len(job.node_list) if running else request.node_count,
+                    node_list=compress_hostlist(job.node_list) if running else "None assigned",
+                    alloc_cpus=(job.alloc_cpus or request.total_cpus) if running else 0,
+                    req_mem_mb=request.mem_per_node,
+                    tasks=job.tasks,
                 )
             )
         return rows
@@ -368,8 +396,36 @@ class SacctEmulator:
         job_id = str(record.job_id)
         energy = _energy_joules(record)
         fmt = "%Y-%m-%dT%H:%M:%S"
+        active = self._active_jobs.get(job_id) if state in ("PENDING", "RUNNING") else None
+        start: Optional[datetime]
+        end: Optional[datetime]
 
-        if record.start_time is not None and record.end_time is not None:
+        if active is not None:
+            # Still in the controller: unset times print "Unknown"
+            # (slurm://src/common/parse_time.c#slurm_make_time_str); CPU time
+            # and MaxRSS only arrive when steps end.
+            from emulator.commands.scontrol_info import job_tres  # noqa: PLC0415
+            from emulator.core.scheduler import job_clock_now  # noqa: PLC0415
+
+            submit = record.submit_time or record.timestamp
+            eligible = record.eligible_time or submit
+            start, end = record.start_time, None
+            elapsed_secs = (
+                max(int((job_clock_now(self.time_engine) - start).total_seconds()), 0)
+                if start
+                else 0
+            )
+            nnodes = record.node_count
+            node_list = record.node_list
+            alloc_cpus = record.alloc_cpus
+            req_tres = job_tres(active, allocated=False)
+            alloc_tres = job_tres(active, allocated=True) if start else ""
+            req_mem_mb = record.req_mem_mb * max(nnodes, 1)
+            req_mem = str(req_mem_mb) + "M" if config.noconvert else _convert_exact(req_mem_mb, 2)
+            limit = _mins2time_str(record.time_limit) if record.time_limit else "UNLIMITED"
+            total_cpu = user_cpu = system_cpu = "00:00:00"
+            max_rss = ""
+        elif record.start_time is not None and record.end_time is not None:
             # A record of a real run: the values slurmdbd stored for it.
             start, end = record.start_time, record.end_time
             submit = record.submit_time or start
@@ -421,13 +477,13 @@ class SacctEmulator:
             "Partition": record.partition or "compute",
             "Account": record.account,
             "AllocCPUS": str(alloc_cpus),
-            "AllocNodes": str(nnodes),
+            "AllocNodes": str(nnodes if node_list != "None assigned" else 0),
             "AllocTRES": alloc_tres,
             "Cluster": record.cluster,
             "Elapsed": _secs2time_str(elapsed_secs),
             "ElapsedRaw": str(elapsed_secs),
             "Eligible": eligible.strftime(fmt),
-            "End": end.strftime(fmt),
+            "End": end.strftime(fmt) if end else "Unknown",
             "ExitCode": exit_code,
             "GID": str(record.gid if record.gid is not None else 1000),
             "Group": record.group_name or record.user,
@@ -436,7 +492,7 @@ class SacctEmulator:
             "NodeList": node_list,
             "ReqMem": req_mem,
             "ReqTRES": req_tres,
-            "Start": start.strftime(fmt),
+            "Start": start.strftime(fmt) if start else "Unknown",
             # slurm://src/sacct/print.c#PRINT_STATE: a cancelled job names who did it.
             "State": f"{state} by {record.requid}"
             if state == "CANCELLED" and record.requid is not None

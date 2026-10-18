@@ -331,7 +331,10 @@ async def submit_job(
         working_directory=job_desc.get("current_working_directory")
         or (identity.home if identity and identity.home else f"/home/{user}"),
         script=script,
-        standard_output=job_desc.get("standard_output") or "",
+        # From 25.11 slurmctld stores the default path when none is given
+        # (slurm://src/slurmctld/job_mgr.c#DEFAULT_BATCH_STDOUT_PATH@25.11+).
+        standard_output=job_desc.get("standard_output")
+        or ("slurm-%j.out" if at_least("25.11") else ""),
         standard_error=job_desc.get("standard_error") or "",
         standard_input=job_desc.get("standard_input") or "/dev/null",
         # Resource request (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_DESC_MSG@26.05+):

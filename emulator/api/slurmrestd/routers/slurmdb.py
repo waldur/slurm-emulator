@@ -1070,7 +1070,7 @@ async def get_jobs(
             cfg.end_time = parsed
 
     records = sacct._get_filtered_records(cfg)
-    payload = [dbd_job_to_dict(r) for r in records]
+    payload = [dbd_job_to_dict(r, sacct._active_jobs.get(str(r.job_id))) for r in records]
     warnings = []
     if not payload:
         warnings.append(found_nothing_warning("slurmdb_jobs_get()", request))
@@ -1088,6 +1088,16 @@ async def get_job(
     state.database.ensure_job_ids()
     matched = [r for r in state.database.usage_records if str(r.job_id) == job_id]
     payload = [dbd_job_to_dict(r) for r in matched]
+    if not payload:
+        # slurmdbd holds the job from submission on.
+        sacct = SacctEmulator(state.database, state.time_engine)
+        cfg = SacctConfig()
+        cfg.jobs = [job_id]
+        cfg.clusters = [state.database.current_cluster]
+        payload = [
+            dbd_job_to_dict(r, sacct._active_jobs.get(str(r.job_id)))
+            for r in sacct._active_job_records(cfg, set())
+        ]
     warnings = []
     if not payload:
         warnings.append(found_nothing_warning("slurmdb_jobs_get()", request))

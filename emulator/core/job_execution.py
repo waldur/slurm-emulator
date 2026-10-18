@@ -85,29 +85,82 @@ def working_directory(job) -> str:
     return job.working_directory or f"/home/{job.user}"
 
 
-def expand_stdio_path(pattern: str, job, default: str) -> str:
-    """Expand Slurm's filename pattern for a job's stdout/stderr.
+# slurm://src/common/print_fields.c#_is_wildcard (outside srun every one expands).
+_NUMERIC_WILDCARDS = set("AabJjrsnt")
+_WILDCARDS = _NUMERIC_WILDCARDS | set("NSux")
+# A job that is not an array task carries NO_VAL as its task id.
+_NO_VAL = 0xFFFFFFFE
 
-    %j/%A job id, %x job name, %u user, %N first node, %% a literal %;
-    relative paths are under the working directory. The same expansion
-    ``scontrol show job`` applies to StdOut/StdErr
-    (slurm://src/api/job_info.c#slurm_get_job_stdout).
-    """
-    pattern = pattern or default
-    replacements = {
-        "%%": "\0",
-        "%j": str(job.job_id),
-        "%A": str(job.job_id),
-        "%x": job.name or "",
-        "%u": job.user or "",
-        "%N": (getattr(job, "node_list", None) or ["node001"])[0],
+
+def _wildcard(char: str, job, padding: int) -> str:
+    """slurm://src/common/print_fields.c#_expand_wildcard for the batch step."""
+    job_id = int(job.job_id) if str(job.job_id).isdigit() else 0
+    numbers = {
+        "A": job_id,  # not an array: the job id
+        "J": job_id,  # the batch step prints no ".step"
+        "j": job_id,
+        "a": _NO_VAL,
+        "b": _NO_VAL % 10,
+        "r": 0,
+        "n": 0,
+        "t": 0,
     }
-    for key, value in replacements.items():
-        pattern = pattern.replace(key, value)
-    pattern = pattern.replace("\0", "%")
-    if not pattern.startswith("/"):
-        pattern = f"{working_directory(job).rstrip('/')}/{pattern}"
-    return pattern
+    if char in numbers:
+        return f"{numbers[char]:0{padding}d}"
+    nodes = getattr(job, "node_list", None) or []
+    return {
+        "s": "batch",
+        "N": nodes[0] if nodes else "(null)",
+        "S": "",
+        "u": job.user or "",
+        "x": job.name or "",
+    }[char]
+
+
+def expand_stdio_path(pattern: str, job, default: str) -> str:
+    r"""Expand a stdin/stdout/stderr filename pattern for a job's batch step.
+
+    A port of slurm://src/common/print_fields.c#expand_stdio_fields: a
+    relative path is under the working directory, ``%%`` is ``%``, a number
+    after ``%`` zero-pads a numeric wildcard (at most 10), an unknown
+    ``%c`` stays as written, a lone ``%`` at the end is dropped, and a ``\``
+    anywhere turns expansion off. The
+    same expansion gives ``scontrol show job``'s StdOut/StdErr
+    (slurm://src/api/job_info.c#slurm_get_job_stdout) and the REST
+    ``stdout_expanded`` fields.
+    """
+    path = pattern or default
+    out = ""
+    if not path.startswith("/"):
+        workdir = working_directory(job)
+        out = workdir if workdir.endswith("/") else f"{workdir}/"
+    if "\\" in path:
+        return out + path.replace("\\", "")
+    i = 0
+    while i < len(path):
+        char = path[i]
+        if char != "%":
+            out += char
+            i += 1
+            continue
+        if i + 1 >= len(path):
+            break
+        i += 1
+        if path[i] == "%":
+            out += "%"
+            i += 1
+            continue
+        start = i
+        while i < len(path) and path[i].isdigit():
+            i += 1
+        padding = min(int(path[start:i]), 10) if i > start else 0
+        if i >= len(path) or path[i] not in _WILDCARDS:
+            out += "%" + path[start : i + 1]
+            i += 1
+            continue
+        out += _wildcard(path[i], job, padding)
+        i += 1
+    return out
 
 
 def stdout_path(job) -> str:
