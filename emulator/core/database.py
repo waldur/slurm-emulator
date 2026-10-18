@@ -337,7 +337,7 @@ class Reservation:
     accounts: str = ""
     spec: str = ""
     origin: str = "env"
-    # slurm://slurm/slurm.h#reserve_info_t.resv_id -- the controller's suffix
+    # slurm://src/slurmctld/slurmctld.h#slurmctld_resv_t.resv_id -- the controller's suffix
     # counter at creation (0 for env-configured ones).
     resv_id: int = 0
     groups: str = ""

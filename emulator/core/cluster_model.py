@@ -792,7 +792,8 @@ def node_views(database: SlurmDatabase, at: datetime) -> dict[str, NodeView]:
             state = ["DOWN"] if override[0] == "DOWN" else [base, "DRAIN"]
         # Every active reservation flags its nodes RESERVED (and MAINTENANCE
         # for a MAINT one); the node names the last of them in list order
-        # (slurm://src/slurmctld/reservation.c#_set_nodes_flags).
+        # (slurm://src/slurmctld/reservation.c#_set_nodes_flags@26.05,25.11,25.05,24.11,
+        # slurm://src/slurmctld/reservation.c#_resv_want_nodes@master).
         covering = [r for r in active if node in r.nodes]
         resv_name = covering[-1].name if covering else ""
         if covering:
