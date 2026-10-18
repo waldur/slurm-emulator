@@ -7,6 +7,7 @@ GET handlers never write state; POST/DELETE handlers call
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Optional, Union
 
@@ -16,9 +17,11 @@ from emulator.api.slurmrestd.auth import slurmrestd_auth
 from emulator.api.slurmrestd.envelope import (
     ESLURM_DATA_CONV_FAILED,
     ESLURM_NO_REMOVE_DEFAULT_QOS,
+    ESLURM_REST_FAIL_PARSING,
     ESLURM_REST_INVALID_QUERY,
     SLURMDBD_PLUGIN,
     SlurmdbRequestError,
+    SlurmrestdRejectError,
     found_nothing_warning,
     make_response,
     slurm_error,
@@ -48,15 +51,22 @@ router = APIRouter(
 )
 
 
-def _respond(request, state, payload=None, errors=None, warnings=None):
-    return make_response(request, SLURMDBD_PLUGIN, state.cluster, payload, errors, warnings)
+def _respond(request, state, payload=None, errors=None, warnings=None, rc=None):
+    return make_response(request, SLURMDBD_PLUGIN, state.cluster, payload, errors, warnings, rc)
 
 
 async def _json_body(request: Request) -> dict[str, Any]:
-    try:
-        body = await request.json()
-    except Exception:
+    """The request body, ``{}`` when empty.
+
+    Invalid JSON is refused as ``Failure during parsing`` before any handler runs.
+    """
+    data = await request.body()
+    if not data.strip():
         return {}
+    try:
+        body = json.loads(data)
+    except ValueError:
+        raise SlurmrestdRejectError(ESLURM_REST_FAIL_PARSING) from None
     return body if isinstance(body, dict) else {}
 
 
@@ -1040,8 +1050,8 @@ async def get_jobs(
     # JOB_CONDITION parses start_time/end_time as TIMESTAMP: parse_time(str, 0)
     # (slurm://src/plugins/data_parser/v0.0.45/parsers.c#_parse_timestamp@26.05+).
     # A failure is the parser's ESLURM_DATA_CONV_FAILED, then the handler's
-    # rejection (slurm://src/slurmrestd/plugins/openapi/slurmdbd/jobs.c#op_handler_jobs);
-    # the first error decides the status.
+    # rejection, whose 9000 the handler returns and so sets the status
+    # (slurm://src/slurmrestd/plugins/openapi/slurmdbd/jobs.c#op_handler_jobs).
     for field, value in (("start_time", start_time), ("end_time", end_time)):
         if not value:
             continue
@@ -1063,6 +1073,7 @@ async def get_jobs(
                         "op_handler_jobs",
                     ),
                 ],
+                rc=ESLURM_REST_INVALID_QUERY,
             )
         if field == "start_time":
             cfg.start_time = parsed

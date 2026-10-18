@@ -118,7 +118,8 @@ class TestRestCreate:
         assert echo["flags"] == ["MAINT"]
         assert echo["duration"] == {"set": True, "infinite": False, "number": 120}
         assert echo["start_time"] == {"set": True, "infinite": False, "number": TS0 + 3600}
-        assert echo["end_time"] == {"set": False, "infinite": False, "number": 0}
+        # An unset end is NO_VAL in a 64-bit time_t (as slurmrestd 26.05 echoes it).
+        assert echo["end_time"] == {"set": True, "infinite": False, "number": 4294967294}
         assert echo["comment"] == "Waldur announcement 7"
         listed = restd.get(f"/slurm/{V}/reservations/", headers=auth_headers).json()
         resv = listed["reservations"][0]
@@ -274,19 +275,43 @@ class TestRestErrors:
             "_mod_reservation",
         )
 
-    def test_empty_body(self, restd, auth_headers, sim):
+    def test_empty_body_lacks_a_name(self, restd, auth_headers, sim):
+        # An empty body parses as {} (verified on slurmrestd 26.05).
         resp = restd.post(f"/slurm/{V}/reservation", headers=auth_headers)
         err = resp.json()["errors"][0]
-        # ESLURM_REST_INVALID_QUERY is 422 in every version.
-        assert resp.status_code == 422
-        assert err["description"] == "unexpected empty query for reservation creation"
-
-    def test_unknown_flag_fails_parsing(self, restd, auth_headers, sim):
-        resp = post_resv(restd, auth_headers, **maint(flags=["MAINT", "BOGUS"]))
-        assert resp.status_code == 422
-        assert resp.json()["errors"][0]["description"] == (
-            "Rejecting request. Failure parsing parameters"
+        assert resp.status_code == http_status_for(2053)
+        assert (err["description"], err["source"]) == (
+            "Reservation must be given.",
+            "_mod_reservation",
         )
+
+    def test_invalid_json_is_refused_before_the_handler(self, restd, auth_headers, sim):
+        resp = restd.post(f"/slurm/{V}/reservation", headers=auth_headers, content="{not json")
+        assert (resp.status_code, resp.text) == (400, "Failure during parsing")
+
+    def test_unknown_flag_is_reported_but_the_reservation_is_made(self, restd, auth_headers, sim):
+        resp = post_resv(restd, auth_headers, **maint(flags=["MAINT", "BOGUS"]))
+        body = resp.json()
+        assert resp.status_code == 500 and "reservations" not in body
+        assert body["errors"] == [
+            {
+                "description": 'Unknown flag "BOGUS"',
+                "error_number": 9207,
+                "error": "Data parser unable to parse invalid flag",
+                "source": "#/flags[1]/",
+            }
+        ]
+        assert stored()["waldur-maint-1"].flags == ["MAINT", "SPEC_NODES"]
+
+    def test_parse_failure_reports_the_field_then_rejects(self, restd, auth_headers, sim):
+        resp = post_resv(restd, auth_headers, **maint(duration="abc"))
+        errors = resp.json()["errors"]
+        assert resp.status_code == 422
+        assert [(e["error_number"], e["source"]) for e in errors] == [
+            (9202, "#/duration/"),
+            (9000, "_parse_resv_desc"),
+        ]
+        assert errors[0]["description"] == 'Expected integer but got "abc"'
 
 
 @REST_WRITES

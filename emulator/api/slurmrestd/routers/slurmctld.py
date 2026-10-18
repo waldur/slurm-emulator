@@ -25,10 +25,12 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, Request
 from starlette.concurrency import run_in_threadpool
 
+from emulator.api.slurmrestd import resv_parser
 from emulator.api.slurmrestd.auth import slurmrestd_auth
 from emulator.api.slurmrestd.envelope import (
     ESLURM_INVALID_JOB_ID,
     ESLURM_RESERVATION_INVALID,
+    ESLURM_REST_FAIL_PARSING,
     ESLURM_REST_INVALID_QUERY,
     ESLURM_REST_UNKNOWN_URL,
     ESLURM_REST_UNKNOWN_URL_METHOD,
@@ -52,7 +54,6 @@ from emulator.api.slurmrestd.schemas import (
     uint_no_val,
 )
 from emulator.api.slurmrestd.state import StateDep
-from emulator.commands.slurm_time import ParseTimeError, parse_time_spec
 from emulator.core.accounting import admit_job
 from emulator.core.cluster_model import (
     expand_hostlist,
@@ -73,7 +74,6 @@ from emulator.core.reservations import (
     create_reservation,
     delete_reservation,
     order_flags,
-    rest_flag_names,
     update_reservation,
     validate_create_desc,
 )
@@ -87,20 +87,29 @@ router = APIRouter(
 )
 
 
-def _respond(request, state, payload=None, errors=None, warnings=None):
-    return make_response(request, SLURMCTLD_PLUGIN, state.cluster, payload, errors, warnings)
+def _respond(request, state, payload=None, errors=None, warnings=None, rc=None):
+    return make_response(request, SLURMCTLD_PLUGIN, state.cluster, payload, errors, warnings, rc)
 
 
 def _float_no_val(number: float) -> dict[str, Any]:
     return {"set": True, "infinite": False, "number": number}
 
 
-async def _json_body(request: Request) -> dict[str, Any]:
-    try:
-        body = await request.json()
-    except Exception:
+async def _json_body(request: Request, keep_type: bool = False) -> object:
+    """The request body, ``{}`` when empty.
+
+    Invalid JSON is refused before any handler runs, as plain-text ``Failure
+    during parsing`` (HTTP 400, seen on slurmrestd 26.05;
+    slurm://src/slurmrestd/operations.c#_operations_router_reject).
+    """
+    data = await request.body()
+    if not data.strip():
         return {}
-    return body if isinstance(body, dict) else {}
+    try:
+        body = json.loads(data)
+    except ValueError:
+        raise SlurmrestdRejectError(ESLURM_REST_FAIL_PARSING) from None
+    return body if keep_type or isinstance(body, dict) else {}
 
 
 def _submit_int(value: object, default: Optional[int]) -> Optional[int]:
@@ -258,7 +267,8 @@ async def submit_job(
     (slurm://src/plugins/data_parser/v0.0.45/parsers.c#OPENAPI_JOB_SUBMIT_RESPONSE@26.05+): top-level ``job_id`` / ``step_id`` /
     ``job_submit_user_msg``.
     """
-    body = await _json_body(request)
+    raw_body = await _json_body(request)
+    body: dict[str, Any] = raw_body if isinstance(raw_body, dict) else {}
     job_desc = body.get("job")
     if isinstance(job_desc, list):
         job_desc = job_desc[0] if job_desc else {}
@@ -725,120 +735,10 @@ async def get_reservation(
 # --- reservation writes (25.05+) ---
 
 
-class _DescParseError(ValueError):
-    """A RESERVATION_DESC_MSG field the data_parser would refuse."""
-
-
-def _desc_int(value: object) -> Optional[int]:
-    """UINT32_NO_VAL: plain number, numeric string or ``{set, infinite, number}``."""
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        raise _DescParseError(value)
-    if isinstance(value, dict):
-        if value.get("infinite"):
-            return DURATION_INFINITE
-        if not value.get("set", True):
-            return None
-        value = value.get("number")
-    if isinstance(value, (int, float)):
-        return int(value)
-    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
-        return int(value)
-    raise _DescParseError(value)
-
-
-def _desc_time(value: object, now: datetime) -> Optional[datetime]:
-    """TIMESTAMP_NO_VAL: UNIX time, ``{set, number}`` or a parse_time() string.
-
-    slurm://src/plugins/data_parser/v0.0.45/parsers.c#_parse_timestamp@26.05+
-    """
-    if value is None:
-        return None
-    if isinstance(value, str) and not value.strip().lstrip("-").isdigit():
-        # parse_time(str, 0); time 0 ("nothing specified") is a failure too.
-        try:
-            return parse_time_spec(value, now)
-        except ParseTimeError as exc:
-            raise _DescParseError(value) from exc
-    number = _desc_int(value)
-    if number is None or number == DURATION_INFINITE:
-        return None
-    return datetime.fromtimestamp(number)  # noqa: DTZ006 - naive local, like the job clock
-
-
-def _desc_csv(value: object) -> Optional[str]:
-    """CSV_STRING / HOSTLIST_STRING: a comma string or a list of strings."""
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list) and all(isinstance(v, str) for v in value):
-        return ",".join(value)
-    raise _DescParseError(value)
-
-
-def _desc_str(value: object) -> Optional[str]:
-    if value is None or isinstance(value, str):
-        return value
-    raise _DescParseError(value)
-
-
-def _desc_flags(value: object) -> Optional[list[str]]:
-    """RESERVATION_FLAGS names (slurm://src/plugins/data_parser/v0.0.45/parsers.c#RESERVATION_FLAGS@26.05+)."""
-    if value is None:
-        return None
-    items = value.split(",") if isinstance(value, str) else value
-    if not isinstance(items, list):
-        raise _DescParseError(value)
-    flags = []
-    for item in items:
-        name = str(item).strip().upper()
-        if name not in rest_flag_names():
-            raise _DescParseError(item)
-        flags.append(name)
-    return flags or None
-
-
-def _parse_resv_desc(raw: object, now: datetime) -> ReservationDesc:
-    """RESERVATION_DESC_MSG (slurm://src/plugins/data_parser/v0.0.45/parsers.c#RESERVATION_DESC_MSG@26.05+).
-
-    Core/TRES/license/burst-buffer/feature fields are accepted and ignored
-    (whole-node reservations only, see emulator/core/reservations.py).
-    """
-    if not isinstance(raw, dict):
-        raise _DescParseError(raw)
-    purge = raw.get("purge_completed")
-    if purge is not None and not isinstance(purge, dict):
-        raise _DescParseError(purge)
-    return ReservationDesc(
-        name=_desc_str(raw.get("name")) or None,
-        start_time=_desc_time(raw.get("start_time"), now),
-        end_time=_desc_time(raw.get("end_time"), now),
-        duration=_desc_int(raw.get("duration")),
-        node_list=_desc_csv(raw.get("node_list")) or None,
-        node_cnt=_desc_int(raw.get("node_count")),
-        partition=_desc_str(raw.get("partition")),
-        flags=_desc_flags(raw.get("flags")),
-        users=_desc_csv(raw.get("users")) or None,
-        accounts=_desc_csv(raw.get("accounts")) or None,
-        groups=_desc_csv(raw.get("groups")) or None,
-        comment=_desc_str(raw.get("comment")),
-    )
-
-
-def _parse_resv_list(raw: object) -> Optional[list]:
-    """RESERVATION_MOD_REQ: ``{"reservations": [...]}``; ``None`` when the key is missing."""
-    if not isinstance(raw, dict):
-        raise _DescParseError(raw)
-    items = raw.get("reservations")
-    if items is not None and not isinstance(items, list):
-        raise _DescParseError(items)
-    return items
-
-
 def _ts_no_val(value: Optional[datetime]) -> dict[str, Any]:
-    return uint_no_val(int(value.timestamp())) if value else uint_no_val()
+    # An unset time is NO_VAL in a 64-bit time_t, so it echoes as a set number
+    # (seen on slurmrestd 26.05; slurm://src/api/init_msg.c#slurm_init_resv_desc_msg).
+    return uint_no_val(int(value.timestamp()) if value else resv_parser.NO_VAL)
 
 
 def _desc_to_dict(desc: ReservationDesc) -> dict[str, Any]:
@@ -918,17 +818,19 @@ def _mod_one(db: SlurmDatabase, desc: ReservationDesc, now: datetime) -> Optiona
     return None
 
 
-async def _raw_body(request: Request) -> object:
-    body = await request.body()
-    if not body.strip():
-        return None
-    try:
-        return json.loads(body)
-    except ValueError:
-        return _BAD_BODY
-
-
-_BAD_BODY = object()
+def _parse_failure(
+    request, state, parsed: resv_parser.Parsed, fatal: resv_parser.Fatal, source: str
+):
+    """The parser's own error (if any), then the handler's rejection; status from 9000."""
+    errors = [*parsed.errors, *([fatal.entry] if fatal.entry else [])]
+    errors.append(
+        slurm_error(
+            "Rejecting request. Failure parsing parameters", ESLURM_REST_INVALID_QUERY, source
+        )
+    )
+    return _respond(
+        request, state, errors=errors, warnings=parsed.warnings, rc=ESLURM_REST_INVALID_QUERY
+    )
 
 
 def _resv_write_state(state) -> datetime:
@@ -947,53 +849,41 @@ async def post_reservation(request: Request, state: StateDep):
 
     slurm://src/slurmrestd/plugins/openapi/slurmctld/api.c#"create or update a reservation"@25.05+,
     slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_mod_reservation@25.05+.
-    Earlier releases have no such path.
+    An empty body parses as ``{}`` and so lacks a name. A request that
+    parsed with only non-fatal errors (unknown flags) is carried out, but
+    those errors keep the echo out and set the status
+    (``rc = rc ? rc : ctxt->rc`` in _create_or_update_each_resv).
     """
     if not at_least("25.05"):
         raise SlurmrestdRejectError(ESLURM_REST_UNKNOWN_URL)
-    raw = await _raw_body(request)
-    if raw is None:
-        return _respond(
-            request,
-            state,
-            errors=[
-                slurm_error(
-                    "unexpected empty query for reservation creation",
-                    ESLURM_REST_INVALID_QUERY,
-                    "_parse_resv_desc",
-                )
-            ],
-        )
+    raw = await _json_body(request, keep_type=True)
     now = _resv_write_state(state)
+    parsed = resv_parser.Parsed()
     try:
-        desc = _parse_resv_desc(raw, now)  # a non-JSON body is not a dict either
-    except _DescParseError:
-        return _respond(
-            request,
-            state,
-            errors=[
-                slurm_error(
-                    "Rejecting request. Failure parsing parameters",
-                    ESLURM_REST_INVALID_QUERY,
-                    "_parse_resv_desc",
-                )
-            ],
-        )
+        desc = resv_parser.DescParser(now, parsed).desc(raw)
+    except resv_parser.Fatal as fatal:
+        return _parse_failure(request, state, parsed, fatal, "_parse_resv_desc")
     if not desc.name:
+        error = slurm_error(
+            "Reservation must be given.", ESLURM_RESERVATION_INVALID, "_mod_reservation"
+        )
         return _respond(
             request,
             state,
-            errors=[
-                slurm_error(
-                    "Reservation must be given.", ESLURM_RESERVATION_INVALID, "_mod_reservation"
-                )
-            ],
+            errors=[*parsed.errors, error],
+            warnings=parsed.warnings,
+            rc=ESLURM_RESERVATION_INVALID,
         )
-    error = _mod_one(state.database, desc, now)
-    if error is not None:
-        return _respond(request, state, errors=[error])
-    state.commit()
-    return _respond(request, state, {"reservations": [_desc_to_dict(desc)]})
+    refused = _mod_one(state.database, desc, now)
+    if refused is None:
+        state.commit()
+    errors = [*parsed.errors, *([refused] if refused else [])]
+    if errors:
+        rc = refused["error_number"] if refused else errors[0]["error_number"]
+        return _respond(request, state, errors=errors, warnings=parsed.warnings, rc=rc)
+    return _respond(
+        request, state, {"reservations": [_desc_to_dict(desc)]}, warnings=parsed.warnings
+    )
 
 
 @router.post("/reservations/")
@@ -1002,61 +892,49 @@ async def post_reservations(request: Request, state: StateDep):
 
     slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#_mod_reservations@25.05+:
     every description needs a name before anything is applied; then each is
-    created or updated in turn, the successful ones stay, and any error
-    drops the echo from the response.
+    created or updated in turn, the successful ones stay, and any error --
+    a refused entry or an unknown flag -- drops the echo from the response.
     """
     if not at_least("25.05"):
         raise SlurmrestdRejectError(ESLURM_REST_UNKNOWN_URL_METHOD)
-    raw = await _raw_body(request)
+    raw = await _json_body(request, keep_type=True)
     empty = "No reservation descriptions specified in reservations array"
-    if raw is None:
-        return _respond(
-            request,
-            state,
-            errors=[
-                slurm_error(
-                    "unexpected empty query for reservation creation",
-                    ESLURM_REST_INVALID_QUERY,
-                    "_parse_resv_desc_list",
-                )
-            ],
-        )
     now = _resv_write_state(state)
+    parsed = resv_parser.Parsed()
     try:
-        items = _parse_resv_list(raw)
-        descs = [_parse_resv_desc(item, now) for item in items or []]
-    except _DescParseError:
+        descs = resv_parser.DescParser(now, parsed).mod_req(raw)
+    except resv_parser.Fatal as fatal:
+        return _parse_failure(request, state, parsed, fatal, "_parse_resv_desc_list")
+    if descs is None:
         return _respond(
             request,
             state,
             errors=[
-                slurm_error(
-                    "Rejecting request. Failure parsing parameters",
-                    ESLURM_REST_INVALID_QUERY,
-                    "_parse_resv_desc_list",
-                )
+                *parsed.errors,
+                slurm_error(empty, ESLURM_REST_INVALID_QUERY, "_parse_resv_desc_list"),
             ],
+            warnings=parsed.warnings,
+            rc=ESLURM_REST_INVALID_QUERY,
         )
-    if items is None:
-        return _respond(
-            request,
-            state,
-            errors=[slurm_error(empty, ESLURM_REST_INVALID_QUERY, "_parse_resv_desc_list")],
-        )
-    warnings = [] if descs else [{"description": empty, "source": "_parse_resv_desc_list"}]
+    warnings = [*parsed.warnings]
+    if not descs:
+        warnings.append({"description": empty, "source": "_parse_resv_desc_list"})
     if any(not d.name for d in descs):
         return _respond(
             request,
             state,
             errors=[
+                *parsed.errors,
                 slurm_error(
                     "Reservation must be given", ESLURM_RESERVATION_INVALID, "_check_resv_name"
-                )
+                ),
             ],
+            warnings=warnings,
         )
-    errors = [e for e in (_mod_one(state.database, d, now) for d in descs) if e is not None]
-    if len(errors) < len(descs):
+    results = [_mod_one(state.database, d, now) for d in descs]
+    if any(r is None for r in results):
         state.commit()
+    errors = [*parsed.errors, *(r for r in results if r is not None)]
     if errors:
         return _respond(request, state, errors=errors, warnings=warnings)
     return _respond(

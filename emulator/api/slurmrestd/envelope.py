@@ -18,6 +18,15 @@ from emulator.core import reservations
 from emulator.core.accounting import ESLURM_INVALID_ACCOUNT, ESLURM_USER_ID_UNKNOWN
 from emulator.slurm_version import at_least, current
 
+# data_parser errnos (slurm://src/common/slurm_errno.c#ESLURM_DATA_CONV_FAILED).
+_DATA_STRERROR = {
+    9206: "Data parser expects flags to be a list",
+    9207: "Data parser unable to parse invalid flag",
+    9208: "Data parser expected a list",
+    9209: "Data parser expected a dictionary or object",
+    9216: "Request to parse invalid data",
+}
+
 
 def api_version() -> str:
     """data_parser version served by the active Slurm target (e.g. ``v0.0.45``)."""
@@ -68,8 +77,8 @@ _STRERROR = {
     ESLURM_USER_ID_UNKNOWN: "Unable to resolve user ID to user name",
     ESLURM_INVALID_ACCOUNT: "Invalid account or account/partition combination specified",
     ESLURM_RESERVATION_INVALID: "Requested reservation is invalid",
-    ESLURM_REST_INVALID_QUERY: "Query empty or incorrect type",
-    ESLURM_REST_FAIL_PARSING: "Unable to parse request",
+    ESLURM_REST_INVALID_QUERY: "Query empty or not RFC7320 compliant",
+    ESLURM_REST_FAIL_PARSING: "Failure during parsing",
     ESLURM_REST_EMPTY_RESULT: "Nothing found with query",
     ESLURM_REST_UNKNOWN_URL: (
         "Unable to find requested URL endpoint. Please query the "
@@ -84,6 +93,7 @@ _STRERROR = {
     # Reservation write errnos (ESLURM_NODES_BUSY, ESLURM_RESERVATION_* …),
     # raised by emulator/core/reservations.py.
     **reservations.STRERROR,
+    **_DATA_STRERROR,
 }
 
 # The HTTP status a handler's error code becomes. 25.11 moved the mapping into
@@ -223,15 +233,21 @@ def make_response(
     payload: Optional[dict[str, Any]] = None,
     errors: Optional[list[dict[str, Any]]] = None,
     warnings: Optional[list[dict[str, Any]]] = None,
+    rc: Optional[int] = None,
 ) -> JSONResponse:
+    """The enveloped response.
+
+    The status follows the handler's return code ``rc`` when it has one,
+    else the first error that carried a number (``ctxt->rc``); with neither
+    the request succeeded (slurm://src/slurmrestd/openapi.c#wrap_openapi_ctxt_callback).
+    """
     body: dict[str, Any] = dict(payload or {})
     body["meta"] = build_meta(request, plugin, cluster)
     body["errors"] = list(errors or [])
     body["warnings"] = list(warnings or [])
-    # The first error with a number decides the status; an error without one
-    # (number 0) leaves the request successful (slurm://src/slurmrestd/openapi.c#openapi_resp_error).
-    first = next((e["error_number"] for e in body["errors"] if e.get("error_number")), 0)
-    status = http_status_for(first) if first else 200
+    if not rc:
+        rc = next((e["error_number"] for e in body["errors"] if e.get("error_number")), 0)
+    status = http_status_for(rc) if rc else 200
     return JSONResponse(status_code=status, content=body)
 
 

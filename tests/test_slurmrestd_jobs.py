@@ -103,10 +103,10 @@ class TestSlurmdbJobs:
         response = restd.get(
             f"/slurmdb/{V}/jobs/", headers=auth_headers, params={"start_time": "bogus"}
         )
-        # The TIMESTAMP parser's ESLURM_DATA_CONV_FAILED comes first and maps to
-        # no specific status (500); the handler's rejection follows
+        # The TIMESTAMP parser's ESLURM_DATA_CONV_FAILED, then the handler's
+        # rejection; the handler returns 9000, which sets the status
         # (slurm://src/slurmrestd/plugins/openapi/slurmdbd/jobs.c#op_handler_jobs).
-        assert response.status_code == 500
+        assert response.status_code == 422
         errors = response.json()["errors"]
         assert [e["error_number"] for e in errors] == [9202, 9000]
         assert errors[0]["description"] == "Parsing of bogus for timestamp failed"
