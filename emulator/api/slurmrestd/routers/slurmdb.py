@@ -257,16 +257,28 @@ def _user_assocs(state: RequestState, name: str) -> list[Association]:
 def _assoc_is_default(state: RequestState, assoc: Association) -> bool:
     """Whether this row is the user's default-account association (ASSOC.is_default).
 
-    Account-level rows are never a default (``is_def`` is a user-row flag); a
-    row whose user has no record or no default account counts as the default,
-    as the only association of such a user is in slurmdbd.
+    Account-level rows are never a default (``is_def`` is a user-row flag).
+    Without a user record or default account, slurmdbd still keeps exactly one
+    default per user and cluster: after every add, a user with no default row
+    gets ``is_def`` on the account of its association (all of that account's
+    rows), so the first association added keeps it
+    (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_make_sure_user_has_default_internal).
+    The emulator's associations keep creation order.
     """
     if not assoc.user:
         return False
     user = state.database.get_user(assoc.user)
-    if user is None or not user.default_account:
-        return True
-    return user.default_account == assoc.account
+    if user is not None and user.default_account:
+        return user.default_account == assoc.account
+    first = next(
+        (
+            a
+            for a in state.database.associations.values()
+            if a.user == assoc.user and a.cluster == assoc.cluster
+        ),
+        None,
+    )
+    return first is not None and first.account == assoc.account
 
 
 # --- ping / diag / conf ---

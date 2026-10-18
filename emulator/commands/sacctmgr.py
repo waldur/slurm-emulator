@@ -15,8 +15,9 @@ Output formatting and exit codes mirror real Slurm 26.05:
   modified`` goes to stdout but exits 1 (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account
   returns SLURM_ERROR, which slurm://src/sacctmgr/sacctmgr.c#_modify_it
   turns into the global ``exit_code``);
-* re-adding an existing account reports ``SLURM_NO_CHANGE_IN_DATA``:
-  `` Data has not changed since time specified`` on stdout, exit 0
+* re-adding an existing account is ``SLURM_NO_CHANGE_IN_DATA``: slurmdbd's
+  `` Already existing account <name> on cluster <cluster>`` goes to stdout
+  and sacctmgr exits 1, as recorded on a real 26.05 cluster
   (slurm://src/sacctmgr/account_functions.c#sacctmgr_add_account, slurm://src/common/slurm_errno.c#SLURM_NO_CHANGE_IN_DATA).
 
 Intentional deviations: no interactive commit prompt (``-i`` is an
@@ -33,6 +34,7 @@ emulator always seeds is left out of "every cluster" when
 no such placeholder.
 """
 
+import copy
 import dataclasses
 from typing import Optional
 
@@ -1046,9 +1048,18 @@ class SacctmgrEmulator:
             ]
         assoc_lines: list[str] = []
         added = False
+        # Decided up front: creating an account below also seeds its row on
+        # the current cluster, which a later cluster pass must not report as
+        # already existing.
+        existing = {
+            (name, cluster)
+            for cluster in clusters
+            for name in names
+            if self._account_row(name, cluster) is not None
+        }
         for cluster in clusters:
             for name in names:
-                if self._account_row(name, cluster) is not None:
+                if (name, cluster) in existing:
                     assoc_lines.append(f"Already existing account {name} on cluster {cluster}")
                     continue
                 if not added:
@@ -1180,6 +1191,7 @@ class SacctmgrEmulator:
         clusters = clusters or self._all_clusters()
         new_users = [u for u in users if self.database.get_user(u) is None]
         lines: list[str] = []
+        first_added: dict[str, str] = {}
         for cluster in clusters:
             for account in accounts:
                 if self._account_row(account, cluster) is None:
@@ -1193,6 +1205,7 @@ class SacctmgrEmulator:
                         self.database.add_association(
                             username, account, cluster=cluster, partition=partition or None
                         )
+                        first_added.setdefault(username, account)
                         row = self.database.get_association(
                             username, account, cluster=cluster, partition=partition or None
                         )
@@ -1213,12 +1226,16 @@ class SacctmgrEmulator:
             out.append(" Settings")
             if default_account:
                 out.append(f"  Default Account = {default_account}")
+        # Without DefaultAccount= the default is the first association
+        # actually added (is_def,
+        # slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_make_sure_user_has_default_internal),
+        # not the first account named.
         for username in new_users:
-            self.database.add_user(username, default_account or accounts[0])
+            self.database.add_user(username, default_account or first_added.get(username, ""))
         for username in users:
             user = self.database.get_user(username)
             if user is not None and not user.default_account:
-                user.default_account = default_account or accounts[0]
+                user.default_account = default_account or first_added.get(username, "")
         self.database.save_state()
         out.append(" Associations =")
         out += lines
@@ -1226,24 +1243,6 @@ class SacctmgrEmulator:
             out.append(" Non Default Settings")
             out += _print_assoc_limits(rec)
         return "\n".join(out)
-
-    @staticmethod
-    def _extract_account_filter(cond_args: list[str]) -> Optional[str]:
-        """Resolve the target account name from a modify/where clause.
-
-        Real sacctmgr (account ``_set_cond``) accepts the account either
-        positionally or via ``name=`` / ``account=`` (the ``where`` keyword is
-        optional). Returns the account name, or None if none was given.
-        """
-        for arg in cond_args:
-            low = arg.lower()
-            if low in {"where", "set"}:
-                continue
-            if low.startswith(("name=", "account=")):
-                return arg.split("=", 1)[1]
-            if "=" not in arg:
-                return arg
-        return None
 
     @staticmethod
     def _split_cond_set(args: list[str]) -> tuple[list[str], list[str]]:
@@ -1318,10 +1317,16 @@ class SacctmgrEmulator:
 
         accounts = [a for a in (self.database.get_account(n) for n in names) if a is not None]
         if raw_usage is not None:
-            # Special case: reset raw usage only, nothing printed on success.
+            # Special case: reset raw usage only, nothing printed on success;
+            # any other value is refused and nothing changes
+            # (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account,
+            # value read with strtol by slurm://src/sacctmgr/common.c#get_uint).
+            value = _strip_quotes(raw_usage, True)
+            digits = value.lstrip("+-")
+            if digits.isdigit() and int(value) != 0:
+                return self._fail("sacctmgr: error: Raw usage can only be set to 0 (zero)")
             for account in accounts:
-                if raw_usage == "0":
-                    self.database.reset_raw_usage(account.name)
+                self.database.reset_raw_usage(account.name)
             self.database.save_state()
             return ""
 
@@ -1346,6 +1351,9 @@ class SacctmgrEmulator:
             return self._fail(f" Parent Account {rec.parent} doesn't exist.")
         lines: list[str] = []
         snapshots = []
+        # slurmdbd refuses the whole modification when it fails the
+        # DefaultQOS check, parent moves included.
+        saved = (copy.deepcopy(self.database.accounts), copy.deepcopy(self.database.associations))
         for account in accounts:
             rows = [c for c in clusters if self._account_row(account.name, c) is not None]
             if not rows:
@@ -1354,7 +1362,7 @@ class SacctmgrEmulator:
             moved = rec.parent is not None and rec.parent != old_parent
             if rec.parent is not None and not moved and not self._rec_without_parent(rec):
                 continue  # "Trying to move association to the same parent? Nothing to do."
-            snapshots.append((account, dataclasses.replace(account, limits=dict(account.limits))))
+            snapshots.append(account)
             self._apply_rec_to_account(account, rec)
             if moved:
                 for cluster in rows:
@@ -1369,11 +1377,10 @@ class SacctmgrEmulator:
             return "\n".join(out)
 
         violations = []
-        for account, _ in snapshots:
+        for account in snapshots:
             violations.extend(self.database.default_qos_violations(account))
         if violations:
-            for account, before in snapshots:
-                self.database.accounts[account.name] = before
+            self.database.accounts, self.database.associations = saved
             return self._fail(self._default_qos_error(violations))
 
         self.database.save_state()

@@ -189,6 +189,31 @@ class TestAssociations:
         assert assocs[0]["user"] == "alice"
         assert assocs[0]["cluster"] == "default"
 
+    def test_one_default_per_user_without_a_user_record(self, restd, auth_headers):
+        """A user added only through associations still has a single default.
+
+        slurmdbd gives ``is_def`` to the first association of a user that has
+        none (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_make_sure_user_has_default_internal).
+        """
+        for name in ("proj1", "proj2"):
+            restd.post(
+                f"/slurmdb/{V}/accounts/",
+                headers=auth_headers,
+                json={"accounts": [{**ACCOUNT, "name": name}]},
+            )
+            restd.post(
+                f"/slurmdb/{V}/associations/",
+                headers=auth_headers,
+                json={"associations": [{"account": name, "user": "alice"}]},
+            )
+        assocs = restd.get(
+            f"/slurmdb/{V}/associations/", headers=auth_headers, params={"user": "alice"}
+        ).json()["associations"]
+        assert sorted((a["account"], a["is_default"]) for a in assocs) == [
+            ("proj1", True),
+            ("proj2", False),
+        ]
+
     def test_partition_scoped(self, restd, auth_headers):
         self._setup(restd, auth_headers, partition="compute")
         assocs = restd.get(
