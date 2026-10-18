@@ -21,9 +21,11 @@ from emulator.commands.sacct import (
     _NODE_GPUS,
     _NODE_MEM_GB,
     SacctEmulator,
+    _convert_exact,
 )
 from emulator.core import exit_status
 from emulator.core.cluster_model import (
+    DEF_MEM_PER_CPU_MB,
     GPU_MEM_MB,
     NodeView,
     compress_hostlist,
@@ -591,8 +593,10 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         "nodes": nodes,
         "node_count": uint_no_val(node_count),
         "cpus": uint_no_val(total_cpus),
-        "tasks": uint_no_val(job.tasks or None),
-        "cpus_per_task": uint_no_val(job.cpus_per_task or None),
+        # Unset tasks fall back to the node count, cpus_per_task to 1
+        # (slurm://src/slurmctld/job_mgr.c#_pack_default_job_details).
+        "tasks": uint_no_val(job.tasks or (job.tasks_per_node or 1) * node_count),
+        "cpus_per_task": uint_no_val(job.cpus_per_task or 1),
         "tasks_per_node": uint_no_val(job.tasks_per_node or None),
         "memory_per_node": uint_no_val(request.mem_per_node),
         "memory_per_cpu": uint_no_val(),
@@ -739,6 +743,15 @@ def _node_names(partition: str) -> list[str]:
     return [f"node{i:03d}" for i in range(first, last + 1)]
 
 
+# slurm://slurm/slurm.h#MEM_PER_CPU
+MEM_PER_CPU = 0x8000000000000000
+
+
+def _mem_str(megabytes: int) -> str:
+    """Memory in a TRES string, units converted exactly (512G, 4000M)."""
+    return _convert_exact(megabytes, 2)
+
+
 def node_to_dict(name: str, now_ts: int, view: Optional[NodeView] = None) -> dict[str, Any]:
     """NODE (slurm://src/plugins/data_parser/v0.0.45/parsers.c#NODE@26.05+).
 
@@ -754,8 +767,7 @@ def node_to_dict(name: str, now_ts: int, view: Optional[NodeView] = None) -> dic
     tres_used = ""
     if view.alloc_cpus:
         mem_used = view.alloc_memory
-        mem_str = f"{mem_used // 1024}G" if mem_used % 1024 == 0 else f"{mem_used}M"
-        tres_used = f"cpu={view.alloc_cpus},mem={mem_str}"
+        tres_used = f"cpu={view.alloc_cpus},mem={_mem_str(mem_used)}"
         if view.gpus_used:
             tres_used += f",gres/gpu={view.gpus_used}"
     return {
@@ -787,7 +799,8 @@ def node_to_dict(name: str, now_ts: int, view: Optional[NodeView] = None) -> dic
         "slurmd_start_time": uint_no_val(now_ts),
         # PARSER_ARRAY(NODE) serializes weight as UINT32 (a plain int).
         "weight": 1,
-        "tres": f"cpu={_NODE_CPUS},mem={mem_mb}M,billing={_NODE_CPUS},gres/gpu={_NODE_GPUS}",
+        "tres": f"cpu={_NODE_CPUS},mem={_mem_str(mem_mb)},billing={_NODE_CPUS},"
+        f"gres/gpu={_NODE_GPUS}",
         "tres_used": tres_used,
         "reason": view.reason,
         "reservation": view.reservation,
@@ -843,11 +856,22 @@ def partition_to_dict(name: str) -> dict[str, Any]:
         "minimums": {"nodes": 1},
         "partition": {"state": ["UP"]},
     }
-    if not at_least("master"):
-        # 26.11 drops the per-CPU memory limits from PARTITION_INFO
-        # (slurm://src/plugins/data_parser/v0.0.45/parsers.c#"defaults/memory_per_cpu"@26.05).
+    # DefMemPerCPU (cluster-wide, node memory / CPUs) and no MaxMemPer*: the
+    # raw def_mem_per_cpu carries the MEM_PER_CPU flag, decoded into
+    # partition_memory_per_cpu/_node (slurm://src/plugins/data_parser/v0.0.45/parsers.c#"defaults/partition_memory_per_cpu"@26.05+).
+    partition["defaults"]["partition_memory_per_cpu"] = uint_no_val(DEF_MEM_PER_CPU_MB)
+    partition["defaults"]["partition_memory_per_node"] = uint_no_val()
+    partition["maximums"]["partition_memory_per_cpu"] = uint_no_val()
+    partition["maximums"]["partition_memory_per_node"] = uint_no_val(0)
+    if at_least("26.05") and not at_least("master"):
+        # 26.05 keeps the raw values as removed fields, dumped as 0; 26.11
+        # drops them (slurm://src/plugins/data_parser/v0.0.45/parsers.c#"defaults/memory_per_cpu"@26.05).
         partition["defaults"]["memory_per_cpu"] = 0
-        partition["maximums"]["memory_per_cpu"] = uint_no_val()
+        partition["maximums"]["memory_per_cpu"] = 0
+    elif not at_least("26.05"):
+        # Raw UINT64 before 26.05: MEM_PER_CPU | DefMemPerCPU, and 0 = unlimited.
+        partition["defaults"]["memory_per_cpu"] = MEM_PER_CPU | DEF_MEM_PER_CPU_MB
+        partition["maximums"]["memory_per_cpu"] = 0
     partition.update(
         {
             "priority": {"job_factor": 1, "tier": 1},

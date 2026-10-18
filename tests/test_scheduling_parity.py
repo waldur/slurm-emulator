@@ -37,7 +37,8 @@ class TestMaintenanceReason:
     def test_partial_maint_is_just_unavailable_nodes(self, restd, auth_headers, sim, monkeypatch):
         # node001-002 of debug (node001-004) are reserved; a 4-node job waits for Resources.
         monkeypatch.setenv(cluster_model.RESERVATIONS_ENV, "m:node[001-002]:now:2h:MAINT")
-        jid = submit(restd, auth_headers, name="big", partition="debug", nodes="4", time_limit=30)
+        jid = submit(restd, auth_headers, name="big", partition="debug", nodes="4", time_limit=30,
+                     shared=["none"])
         set_time(T0 + timedelta(minutes=2))
         job = ctld_jobs(restd, auth_headers)[jid]
         assert (job["state_reason"], job["state_description"]) == ("Resources", "")
@@ -70,9 +71,13 @@ class TestMaintenanceReason:
 
 class TestPriority:
     def test_later_jobs_of_a_blocked_partition_wait_with_priority(self, restd, auth_headers, sim):
-        first = submit(restd, auth_headers, name="a", partition="debug", nodes="4", time_limit=600)
-        second = submit(restd, auth_headers, name="b", partition="debug", nodes="4", time_limit=60)
-        third = submit(restd, auth_headers, name="c", partition="debug", nodes="1", time_limit=60)
+        whole = {"shared": ["none"]}
+        first = submit(restd, auth_headers, name="a", partition="debug", nodes="4",
+                       time_limit=600, **whole)
+        second = submit(restd, auth_headers, name="b", partition="debug", nodes="4",
+                        time_limit=60, **whole)
+        third = submit(restd, auth_headers, name="c", partition="debug", nodes="1",
+                       time_limit=60, **whole)
         other = submit(restd, auth_headers, name="d", partition="compute", time_limit=60)
         set_time(T0 + timedelta(minutes=2))
         jobs = ctld_jobs(restd, auth_headers)
@@ -142,7 +147,7 @@ class TestEndedReservation:
     def test_pending_jobs_are_held(self, restd, auth_headers, sim, monkeypatch):
         monkeypatch.setenv(cluster_model.RESERVATIONS_ENV, "r:node001:now:1h")
         busy = submit(restd, auth_headers, name="busy", partition="debug", reservation="r",
-                      time_limit=120)
+                      time_limit=120, shared=["none"])
         waiting = submit(restd, auth_headers, name="w", partition="debug", reservation="r",
                          time_limit=30)
         set_time(T0 + timedelta(minutes=2))

@@ -100,9 +100,17 @@ class TestJobRequest:
             2, 32, 16, 16000,
         )
 
-    def test_whole_nodes_by_default(self):
+    def test_one_task_per_node_by_default(self):
+        # num_tasks falls back to the node count, cpus_per_task to 1
+        # (slurm://src/slurmctld/job_mgr.c#_pack_default_job_details).
         req = cluster_model.job_request(Job(job_id="1", account="a", user="u", state="PENDING",
                                             node_count=3))
+        assert (req.total_cpus, req.cpus_per_node) == (3, 1)
+        assert req.mem_per_node == cluster_model.DEF_MEM_PER_CPU_MB
+
+    def test_exclusive_takes_whole_nodes(self):
+        req = cluster_model.job_request(Job(job_id="1", account="a", user="u", state="PENDING",
+                                            node_count=3, exclusive=True))
         assert req.total_cpus == 3 * cluster_model.NODE_CPUS
         assert req.mem_per_node == cluster_model.NODE_MEM_MB
 
@@ -172,8 +180,10 @@ class TestSubmitAndAllocate:
         assert db.jobs[str(b)].node_count == 2
 
     def test_running_jobs_get_distinct_nodes(self, restd, auth_headers, sim):
-        a = submit(restd, auth_headers, name="a", partition="compute", nodes="4")
-        b = submit(restd, auth_headers, name="b", partition="compute", nodes="2")
+        a = submit(restd, auth_headers, name="a", partition="compute", nodes="4",
+                   shared=["none"])
+        b = submit(restd, auth_headers, name="b", partition="compute", nodes="2",
+                   shared=["none"])
         set_time(T0 + timedelta(minutes=2))
         jobs = ctld_jobs(restd, auth_headers)
         assert jobs[a]["nodes"] == "node[005-008]"
@@ -194,8 +204,10 @@ class TestSubmitAndAllocate:
         assert node["alloc_idle_cpus"] == cluster_model.NODE_CPUS - 16
 
     def test_queue_waits_for_resources_then_starts(self, restd, auth_headers, sim):
-        first = submit(restd, auth_headers, name="big", partition="debug", nodes="4")
-        second = submit(restd, auth_headers, name="next", partition="debug", nodes="2")
+        first = submit(restd, auth_headers, name="big", partition="debug", nodes="4",
+                       shared=["none"])
+        second = submit(restd, auth_headers, name="next", partition="debug", nodes="2",
+                        shared=["none"])
         set_time(T0 + timedelta(minutes=5))
         jobs = ctld_jobs(restd, auth_headers)
         assert jobs[first]["job_state"] == ["RUNNING"]
@@ -216,10 +228,12 @@ class TestSubmitAndAllocate:
     def test_drained_and_down_nodes_are_skipped(self, restd, auth_headers, sim, monkeypatch):
         monkeypatch.setenv(cluster_model.NODE_STATES_ENV,
                            "node001=DRAIN:Bad DIMM;node002=DOWN:Not responding")
-        jid = submit(restd, auth_headers, name="d", partition="debug", nodes="2")
+        jid = submit(restd, auth_headers, name="d", partition="debug", nodes="2",
+                     shared=["none"])
         set_time(T0 + timedelta(minutes=2))
         assert ctld_jobs(restd, auth_headers)[jid]["nodes"] == "node[003-004]"
-        more = submit(restd, auth_headers, name="e", partition="debug", nodes="1")
+        more = submit(restd, auth_headers, name="e", partition="debug", nodes="1",
+                      shared=["none"])
         set_time(T0 + timedelta(minutes=4))
         assert ctld_jobs(restd, auth_headers)[more]["state_reason"] == "Resources"
 
@@ -262,7 +276,7 @@ class TestNodes:
         assert node["tres_used"] == ""
 
     def test_allocated_node_load_follows_efficiency(self, restd, auth_headers, sim):
-        jid = submit(restd, auth_headers, name="l", partition="debug",
+        jid = submit(restd, auth_headers, name="l", partition="debug", shared=["none"],
                      environment=["SLURM_EMULATOR_CPU_EFFICIENCY=0.5",
                                   "SLURM_EMULATOR_MEM_FRACTION=0.25"])
         set_time(T0 + timedelta(minutes=2))
@@ -409,7 +423,7 @@ class TestReservations:
 class TestAccounting:
     def _run_one(self, restd, auth_headers):
         jid = submit(restd, auth_headers, name="acct", partition="compute", nodes="2",
-                     time_limit=90, memory_per_node=200000,
+                     time_limit=90, memory_per_node=200000, shared=["none"],
                      environment=["SLURM_EMULATOR_CPU_EFFICIENCY=0.5",
                                   "SLURM_EMULATOR_MEM_FRACTION=0.25"])
         set_time(T0 + timedelta(hours=2))

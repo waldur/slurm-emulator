@@ -285,6 +285,9 @@ class Job:
     tasks: int = 0
     cpus_per_task: int = 0
     tasks_per_node: int = 0
+    # ``shared: ["none"]`` (sbatch --exclusive): the job gets whole nodes
+    # (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_SHARED@26.05+).
+    exclusive: bool = False
     memory_per_node: int = 0
     reservation: str = ""
     # Allocation made when the job started: concrete node names and CPUs

@@ -1,4 +1,4 @@
-"""scontrol emulator: reservation create / update / delete / show.
+"""scontrol emulator: reservations, partitions and jobs.
 
 Covers what a site agent needs to manage maintenance windows:
 
@@ -32,7 +32,10 @@ code 1, as scontrol's ``error()`` does.
 
 Intentional deviations:
 
-* Only reservations (plus ``show job`` on the SSH plane) are emulated; other
+* ``scontrol show partition [<name>]`` and ``scontrol show job [<id>]`` --
+  ``emulator/commands/scontrol_info.py``; ``write batch_script <id> [-]``
+  and ``ping``.
+* Only those entities are emulated; other
   entities print ``scontrol: unsupported``.
 * CoreCnt, TRES, TRESPerNode, Licenses, BurstBuffer, Features, QOS,
   AllowedPartitions and MaxStartDelay are refused as unsupported instead of
@@ -46,9 +49,11 @@ from __future__ import annotations
 import json
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from emulator.api.slurmrestd.schemas import reservation_to_dict, uint_no_val
+from emulator.commands import scontrol_info
 from emulator.commands.slurm_time import ParseTimeError, parse_time
 from emulator.core import reservations as resv_core
 from emulator.core.cluster_model import NODE_CPUS, compress_hostlist, sync_reservations
@@ -189,6 +194,10 @@ class ScontrolEmulator:
             return self._delete(rest)
         if command == "show":
             return self._show(rest, one_liner, as_json)
+        if command == "write":
+            return self._write(rest)
+        if command == "ping":
+            return self._ping()
         return self._fail(f"scontrol: unsupported command: {words[0]}")
 
     def _fail(self, message: str, stdout: str = "") -> str:
@@ -207,6 +216,7 @@ class ScontrolEmulator:
         plane or another process wrote since this emulator was created.
         """
         self.database.load_state()
+        self.time_engine._load_state()  # the clock may have moved since, too
         changed = advance_job_states(self.database, self.time_engine)
         now = self._now()
         if sync_reservations(self.database, now) or changed:
@@ -409,6 +419,11 @@ class ScontrolEmulator:
             return self._fail("scontrol: error: too many arguments for keyword:show")
         tag, _, val = args[0].partition("=")
         name: Optional[str] = val or (args[1] if len(args) == 2 else None)
+        # Entity prefixes and minimum lengths of slurm://src/scontrol/scontrol.c#_show_it.
+        if _tag_is(tag, "jobs", 1) or _tag_is(tag, "jobid", 1):
+            return self._show_job(name, one_liner)
+        if _tag_is(tag, "partitions", 2) or _tag_is(tag, "partitionname", 2):
+            return self._show_partition(name, one_liner)
         if not (_tag_is(tag, "reservations", 1) or _tag_is(tag, "reservationname", 1)):
             return self._fail(f"scontrol: unsupported: show {args[0]}")
         now = self._refresh()
@@ -425,6 +440,64 @@ class ScontrolEmulator:
                 return f"Reservation {name} not found\n"
             return "No reservations in the system\n"
         return out
+
+    def _show_partition(self, name: Optional[str], one_liner: bool) -> str:
+        """slurm://src/scontrol/info_part.c#scontrol_print_part."""
+        names = scontrol_info.partitions()
+        default = names[0] if names else None
+        if name:
+            names = [n for n in names if n == name][:1]
+        out = "".join(scontrol_info.sprint_partition(n, n == default, one_liner) for n in names)
+        if not names:
+            if name:
+                self.exit_code = 1
+                return f"Partition {name} not found\n"
+            return "No partitions in the system\n"
+        return out
+
+    def _show_job(self, job_id: Optional[str], one_liner: bool) -> str:
+        """slurm://src/scontrol/info_job.c#scontrol_print_job."""
+        if job_id and not all(c.isdigit() or c in "_+" for c in job_id):
+            return self._fail("scontrol_print_job error: Invalid job id specified")
+        self._refresh()
+        now = job_clock_now(self.time_engine)
+        jobs = sorted(self.database.jobs.values(), key=lambda j: int(j.job_id or 0))
+        if job_id:
+            wanted = job_id.split("_")[0].split("+")[0]
+            jobs = [j for j in jobs if str(j.job_id) == wanted]
+            if not jobs:
+                # slurm_load_job() refuses an id the controller does not hold.
+                return self._fail("slurm_load_jobs error: Invalid job id specified")
+        if not jobs:
+            return "No jobs in the system\n"
+        return "".join(scontrol_info.sprint_job(j, now, one_liner) for j in jobs)
+
+    def _write(self, args: list[str]) -> str:
+        """``write batch_script <job> [file|-]`` (slurm://src/scontrol/info_job.c#scontrol_batch_script)."""
+        if not args:
+            return self._fail("too few arguments for keyword:write")
+        if not _tag_is(args[0], "batch_script", max(len(args[0]), 5)):
+            return self._fail(f"scontrol: unsupported: write {args[0]}")
+        if len(args) > 3:
+            return self._fail("too many arguments for keyword:write")
+        if len(args) < 2:
+            return ""
+        self.database.load_state()
+        job = self.database.jobs.get(args[1].split(".")[0])
+        target = args[2] if len(args) > 2 else f"slurm-{args[1]}.sh"
+        if job is None or not job.script:
+            # scontrol prints the failure but keeps exit code 0
+            # (slurm://src/scontrol/scontrol.c#"batch_script").
+            print("job script retrieval failed: Invalid job id specified", file=sys.stderr)
+            return ""
+        if target == "-":
+            return job.script
+        Path(target).write_text(job.script, encoding="utf-8")
+        return f"batch script for job {args[1]} written to {target}\n"
+
+    def _ping(self) -> str:
+        """slurm://src/scontrol/scontrol.c#_print_ping (one primary controller)."""
+        return "Slurmctld(primary) at localhost is UP\n"
 
     def _json(self, records: list[Reservation], now: datetime) -> str:
         """``scontrol --json show reservation`` (OPENAPI_RESERVATION_RESP via DATA_DUMP_CLI)."""

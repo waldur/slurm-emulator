@@ -320,7 +320,8 @@ class TestRunningJobs:
 
     def test_node_count_without_partition_note(self, restd, auth_headers, sim):
         for _ in range(4):
-            submit(restd, auth_headers, name="fill", partition="debug", time_limit=600)
+            submit(restd, auth_headers, name="fill", partition="debug", time_limit=600,
+                   shared=["none"])
         set_time(T0 + timedelta(minutes=2))
         err = post_resv(
             restd,

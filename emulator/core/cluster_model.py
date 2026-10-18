@@ -10,9 +10,12 @@ What it models after real Slurm:
 * **Allocation** (select/cons_tres): a job gets ``node_count`` nodes of its
   partition, each with enough free CPUs and memory for its per-node share;
   nodes that are DRAIN/DOWN, already full, or in a reservation the job is
-  not part of are skipped, lowest node index first. CPUs = ``tasks`` x
-  ``cpus_per_task`` when given, else every CPU of the allocated nodes
-  (slurm://src/plugins/select/cons_tres/job_test.c#job_test@25.05+). Memory
+  not part of are skipped, lowest node index first. CPUs = tasks x
+  ``cpus_per_task``, where tasks default to one per node
+  (``tasks_per_node`` x nodes when given) and ``cpus_per_task`` to 1 -- or
+  every CPU of the nodes for an exclusive job -- as
+  slurmctld fills them in (slurm://src/slurmctld/job_mgr.c#_pack_default_job_details,
+  slurm://src/plugins/select/cons_tres/job_test.c#job_test@25.05+). Memory
   without ``memory_per_node`` follows a ``DefMemPerCPU`` of node memory / CPUs
   (slurm://src/common/read_config.c#"DefMemPerCPU").
 * **Pending reasons** (``state_reason`` plus ``state_description``,
@@ -484,8 +487,10 @@ def job_request(job: Job) -> JobRequest:
         total = job.tasks * cpt
     elif job.tasks_per_node:
         total = job.tasks_per_node * nodes * cpt
+    elif job.exclusive:
+        total = nodes * NODE_CPUS  # whole nodes
     else:
-        total = nodes * NODE_CPUS
+        total = nodes * cpt  # one task per node
     nodes = max(nodes, math.ceil(total / NODE_CPUS))
     per_node = min(math.ceil(total / nodes), NODE_CPUS)
     mem = job.memory_per_node or per_node * DEF_MEM_PER_CPU_MB
@@ -742,7 +747,7 @@ def allocate(job: Job, nodes: list[str]) -> None:
     req = job_request(job)
     job.node_list = list(nodes)
     job.node_count = len(nodes)
-    job.alloc_cpus = req.total_cpus if (job.tasks or job.tasks_per_node) else len(nodes) * NODE_CPUS
+    job.alloc_cpus = req.total_cpus
 
 
 # --- node view ---

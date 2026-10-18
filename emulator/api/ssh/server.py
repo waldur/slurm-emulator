@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from emulator.commands.dispatcher import SlurmEmulator
-from emulator.core import job_execution, nss
+from emulator.core import nss
 from emulator.core.accounting import ESLURM_USER_ID_UNKNOWN, admit_job
 from emulator.core.cluster_model import compress_hostlist
 from emulator.core.database import Job
@@ -314,33 +314,8 @@ def _squeue(emu) -> str:
 
 
 def _scontrol(emu, args: list[str]) -> tuple[str, str, int]:
-    if len(args) >= 2 and args[0] == "show" and args[1] == "job":
-        job_id = args[2] if len(args) > 2 else ""
-        job = emu.database.get_job(job_id)
-        if job is None:
-            return "", "slurm_load_jobs error: Invalid job id specified\n", 1
-        wd = job.working_directory or f"/home/{job.user}"
-        # scontrol prints ``UserId=name(uid) GroupId=group(gid)``
-        # (slurm://src/scontrol/info_job.c#_sprint_job_info); without NSS
-        # mode every user is 1000 in a group of its own name.
-        uid = job.uid if job.uid is not None else 1000
-        gid = job.gid if job.gid is not None else 1000
-        group = job.group_name or job.user
-        out = (
-            f"JobId={job.job_id} JobName={job.name}\n"
-            f"   UserId={job.user}({uid}) GroupId={group}({gid})\n"
-            f"   Account={job.account} QOS={job.qos} Partition={job.partition}\n"
-            f"   JobState={job.state} Reason=None Dependency=(null)\n"
-            # Filename patterns expanded, as slurm_get_job_stdout() does
-            # (slurm://src/api/job_info.c#slurm_get_job_stdout).
-            f"   StdOut={job_execution.stdout_path(job)}\n"
-            f"   StdErr={job_execution.stderr_path(job)}\n"
-            f"   Command={job.script}\n"
-            f"   WorkDir={wd}\n"
-        )
-        return out, "", 0
-    # Reservations (create/update/delete/show) go through the same
-    # emulator as the CLI dispatcher (emulator/commands/scontrol.py).
+    # The same emulator as the CLI dispatcher (emulator/commands/scontrol.py):
+    # reservations, show job / partition, write batch_script, ping.
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
         out = emu.scontrol.handle_command(args)

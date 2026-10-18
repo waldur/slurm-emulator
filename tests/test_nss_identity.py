@@ -187,7 +187,7 @@ class TestSshPlane:
         job = emu.database.get_job(jid)
         assert (job.uid, job.gid, job.group_name) == (9001, 9001, "hpc_9001")
         show, _, _ = server._scontrol(emu, ["show", "job", jid])
-        assert "   UserId=hpc_9001(9001) GroupId=hpc_9001(9001)\n" in show
+        assert "   UserId=hpc_9001(9001) GroupId=hpc_9001(9001) MCS_label=N/A\n" in show
 
     def test_sbatch_rejects_unknown_user(self, emu, nss_on):
         out, err, code = server._sbatch(emu, "ghost", ["job.sh"])
@@ -199,7 +199,7 @@ class TestSshPlane:
         out, _, _ = server._sbatch(emu, "alice", ["job.sh"])
         jid = out.split()[-1]
         show, _, _ = server._scontrol(emu, ["show", "job", jid])
-        assert "   UserId=alice(1000) GroupId=alice(1000)\n" in show
+        assert "   UserId=alice(1000) GroupId=alice(1000) MCS_label=N/A\n" in show
 
     def test_bare_id_over_ssh_means_the_login_user(self, state_env, nss_on):
         out, err, code = server._run_slurm("hpc_9001", ["id"])

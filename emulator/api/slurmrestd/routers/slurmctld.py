@@ -141,6 +141,12 @@ def _submit_count(value: object) -> int:
     return number if number and number > 0 else 0
 
 
+def _submit_exclusive(value: object) -> bool:
+    """``shared`` (JOB_SHARED flags): ``none`` / ``topo`` take whole nodes."""
+    flags = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+    return any(str(f).lower() in ("none", "topo") for f in flags)
+
+
 def _env_to_dict(value: object) -> dict[str, str]:
     """Job ``environment`` is a ``KEY=VALUE`` list in data_parser >=0.0.39; accept dicts too."""
     if isinstance(value, dict):
@@ -336,6 +342,7 @@ async def submit_job(
         cpus_per_task=_submit_count(job_desc.get("cpus_per_task")),
         memory_per_node=_submit_count(job_desc.get("memory_per_node")),
         reservation=reservation,
+        exclusive=_submit_exclusive(job_desc.get("shared")),
         priority=_submit_int(job_desc.get("priority"), 1) or 1,
         time_limit=_submit_count(job_desc.get("time_limit")) or None,
         environment=_env_to_dict(job_desc.get("environment")),
