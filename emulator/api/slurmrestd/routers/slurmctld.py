@@ -61,6 +61,7 @@ from emulator.core.cluster_model import (
     sync_reservations,
 )
 from emulator.core.database import Job, SlurmDatabase
+from emulator.core.nss import lookup as nss_lookup
 from emulator.core.reservations import (
     DURATION_INFINITE,
     ESLURM_NODES_BUSY,
@@ -424,41 +425,88 @@ async def get_job(
     )
 
 
+# slurm://slurm/slurm_errno.h#ESLURM_ACCESS_DENIED, slurm://slurm/slurm_errno.h#ESLURM_ALREADY_DONE
+ESLURM_ACCESS_DENIED = 2002
+ESLURM_ALREADY_DONE = 2021
+_SIGNAL_ERRORS = {
+    ESLURM_ACCESS_DENIED: "Access/permission denied",
+    ESLURM_INVALID_JOB_ID: "Invalid job id specified",
+    ESLURM_ALREADY_DONE: "Job/step already completing or completed",
+}
+_SIGNALS = {"HUP": 1, "INT": 2, "QUIT": 3, "KILL": 9, "USR1": 10, "USR2": 12, "TERM": 15}
+
+
+def _requested_signal(value: Optional[str]) -> int:
+    """The ``signal`` query: a number or a name with or without ``SIG``; default SIGKILL."""
+    if not value:
+        return 9
+    text = value.strip().upper().removeprefix("SIG")
+    if text.isdigit():
+        return int(text) or 9
+    return _SIGNALS.get(text, 9)
+
+
+def _uid_of(user: str) -> int:
+    if user == "root":
+        return 0
+    identity = nss_lookup(user)
+    return identity.uid if identity is not None else 1000
+
+
 @router.delete("/job/{job_id}")
 async def cancel_job(
     job_id: str,
     request: Request,
     state: StateDep,
-    signal: Optional[str] = None,  # noqa: ARG001 - accepted, not modeled
+    signal: Optional[str] = None,
+    flags: Optional[str] = None,
 ):
-    job = state.database.get_job(job_id)
+    """slurm_kill_jobs() for one job (slurm://src/slurmrestd/plugins/openapi/slurmctld/jobs.c#_handle_job_delete).
+
+    The job is first brought up to date. slurmctld answers per job only on
+    failure -- not the owner (``ESLURM_ACCESS_DENIED``), unknown
+    (``ESLURM_INVALID_JOB_ID``), already ended (``ESLURM_ALREADY_DONE``) --
+    or for every job with ``flags=VERBOSE``
+    (slurm://src/slurmctld/job_mgr.c#_add_signal_job_resp); the HTTP status
+    stays 200. Only SIGKILL, the default, cancels the job; other signals go
+    to its processes, which the emulator does not run.
+    """
+    db = state.database
+    if advance_job_states(db, state.time_engine):
+        state.commit()
+    requester = str(getattr(request.state, "slurm_user", "root") or "root")
+    job = db.get_job(job_id)
+    verbose = "VERBOSE" in (flags or "").upper()
+    errno = 0
     if job is None:
-        return _respond(
-            request,
-            state,
-            errors=[
-                slurm_error(
-                    f"Failure cancelling job {job_id}", ESLURM_INVALID_JOB_ID, request.url.path
-                )
-            ],
-        )
-    if job.state in ("RUNNING", "PENDING"):
+        errno = ESLURM_INVALID_JOB_ID
+    elif requester not in ("root", job.user):
+        errno = ESLURM_ACCESS_DENIED
+    elif job.state not in ("RUNNING", "PENDING"):
+        errno = ESLURM_ALREADY_DONE
+    elif _requested_signal(signal) == 9:
         job.state = "CANCELLED"
+        job.state_reason, job.state_description = "None", ""
+        job.requid = _uid_of(requester)
         # On the job clock, like start/submit, so the run length is right;
         # the job's nodes are free again and it lands in accounting.
         job.end_time = job_clock_now(state.time_engine)
-        advance_job_states(state.database, state.time_engine)
-    state.commit()
-    status = [
-        {
-            "job_id": uint_no_val(int(job_id) if job_id.isdigit() else None),
-            "step_id": job_id,
-            "error": "No error",
-            "error_code": 0,
-            "error_message": "",
-            "federation": {"sibling": ""},
-        }
-    ]
+        advance_job_states(db, state.time_engine)
+        state.commit()
+    status = []
+    if errno or verbose:
+        status.append(
+            {
+                "error": {
+                    "string": _SIGNAL_ERRORS.get(errno, "No error"),
+                    "code": errno,
+                    "message": _SIGNAL_ERRORS.get(errno, ""),
+                },
+                "step_id": job_id,
+                "job_id": uint_no_val(int(job.job_id) if job is not None else None),
+                "federation": {"sibling": ""},
+            }
+        )
     return _respond(request, state, {"status": status})
 
 

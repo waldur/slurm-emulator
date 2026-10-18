@@ -437,7 +437,10 @@ class SacctEmulator:
             "ReqMem": req_mem,
             "ReqTRES": req_tres,
             "Start": start.strftime(fmt),
-            "State": state,
+            # slurm://src/sacct/print.c#PRINT_STATE: a cancelled job names who did it.
+            "State": f"{state} by {record.requid}"
+            if state == "CANCELLED" and record.requid is not None
+            else state,
             "Submit": submit.strftime(fmt),
             "SystemCPU": system_cpu,
             "Timelimit": limit,

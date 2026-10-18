@@ -196,6 +196,7 @@ class UsageRecord:
     job_name: str = ""
     working_directory: str = ""
     exit_code: Optional[int] = None
+    requid: Optional[int] = None
     # Output paths as submitted (patterns unexpanded), what sacct's
     # StdIn/StdOut/StdErr print for a job (slurm://src/sacct/print.c#print_fields).
     standard_input: str = ""
@@ -294,6 +295,9 @@ class Job:
     # (slurm://slurm/slurm.h#job_info_t.nodes, slurm://slurm/slurm.h#job_info_t.num_cpus).
     node_list: list[str] = field(default_factory=list)
     alloc_cpus: int = 0
+    # uid of whoever cancelled the job (slurm://slurm/slurmdb.h#slurmdb_job_rec_t.requid);
+    # sacct prints "CANCELLED by <uid>".
+    requid: Optional[int] = None
     # Why a pending job waits, or how a finished one failed
     # (slurm://slurm/slurm.h#job_info_t.state_reason), and the free-text
     # detail slurmctld adds to some reasons (slurm://slurm/slurm.h#job_info_t.state_desc).

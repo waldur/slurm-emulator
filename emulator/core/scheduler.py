@@ -332,6 +332,7 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
             # Accounting logs a timed-out job when the limit fires, before
             # the script is signalled (slurm://src/slurmctld/job_mgr.c#_job_timed_out).
             exit_code=0 if job.state == "TIMEOUT" else job.exit_code,
+            requid=job.requid,
             standard_input=job.standard_input or "",
             standard_output=job.standard_output or "",
             standard_error=job.standard_error or "",

@@ -2,10 +2,18 @@
 
 from datetime import datetime
 
+import pytest
+
 from emulator.core.database import Job, SlurmDatabase
 from emulator.slurm_version import current
 
 V = current().api_version
+
+
+@pytest.fixture
+def still_running(monkeypatch):
+    """Seeded jobs keep running: their emulated run outlasts the test."""
+    monkeypatch.setenv("SLURM_EMULATOR_JOB_RUN_DURATION", str(10**10))
 
 
 def _seed_job(state="RUNNING"):
@@ -85,24 +93,79 @@ class TestCtldJobs:
         assert body["errors"][0]["error_number"] == 2017  # ESLURM_INVALID_JOB_ID
         assert body["errors"][0]["error"] == "Invalid job id specified"
 
-    def test_cancel_job_persists(self, restd, auth_headers, state_env):
+    def test_cancel_job_persists(self, restd, auth_headers, state_env, still_running):
+        # Success sends no per-job entry (slurm://src/slurmctld/job_mgr.c#_add_signal_job_resp).
         _seed_job()
         response = restd.delete(f"/slurm/{V}/job/42", headers=auth_headers)
         assert response.status_code == 200
-        status = response.json()["status"][0]
-        assert status["job_id"]["number"] == 42
-        assert status["error_code"] == 0
+        assert response.json()["status"] == []
 
         database = SlurmDatabase()
         database.load_state()
         job = database.get_job("42")
         assert job.state == "CANCELLED"
         assert job.end_time is not None
+        assert job.requid == 0  # root
+
+    def test_cancel_verbose_reports_success(self, restd, auth_headers, state_env, still_running):
+        _seed_job()
+        status = restd.delete(
+            f"/slurm/{V}/job/42", headers=auth_headers, params={"flags": "VERBOSE"}
+        ).json()["status"]
+        assert status == [
+            {
+                "error": {"string": "No error", "code": 0, "message": ""},
+                "step_id": "42",
+                "job_id": {"set": True, "infinite": False, "number": 42},
+                "federation": {"sibling": ""},
+            }
+        ]
 
     def test_cancel_unknown_job(self, restd, auth_headers):
         response = restd.delete(f"/slurm/{V}/job/9999", headers=auth_headers)
-        assert response.status_code == 404
-        assert response.json()["errors"][0]["error_number"] == 2017
+        assert response.status_code == 200
+        entry = response.json()["status"][0]
+        assert entry["error"] == {
+            "string": "Invalid job id specified",
+            "code": 2017,
+            "message": "Invalid job id specified",
+        }
+        assert entry["job_id"]["set"] is False
+
+    def test_cancel_finished_job_is_already_done(self, restd, auth_headers, state_env, still_running):
+        _seed_job()
+        restd.delete(f"/slurm/{V}/job/42", headers=auth_headers)
+        entry = restd.delete(f"/slurm/{V}/job/42", headers=auth_headers).json()["status"][0]
+        assert entry["error"]["code"] == 2021
+        assert entry["error"]["string"] == "Job/step already completing or completed"
+
+    def test_cancel_other_users_job_is_denied(self, restd, auth_headers, state_env, still_running):
+        _seed_job()
+        headers = {**auth_headers, "X-SLURM-USER-NAME": "mallory"}
+        entry = restd.delete(f"/slurm/{V}/job/42", headers=headers).json()["status"][0]
+        assert entry["error"]["code"] == 2002
+        database = SlurmDatabase()
+        database.load_state()
+        assert database.get_job("42").state != "CANCELLED"
+
+    def test_other_signals_do_not_cancel(self, restd, auth_headers, state_env, still_running):
+        _seed_job()
+        restd.delete(f"/slurm/{V}/job/42", headers=auth_headers, params={"signal": "SIGUSR1"})
+        database = SlurmDatabase()
+        database.load_state()
+        assert database.get_job("42").state != "CANCELLED"
+
+
+class TestCancelCatchesUp:
+    def test_job_that_should_have_ended_is_already_done(self, restd, auth_headers, state_env):
+        # Started in 2024 with the default 8 s run: by now it has completed, so
+        # the cancel finds it done instead of recording it CANCELLED.
+        _seed_job()
+        entry = restd.delete(f"/slurm/{V}/job/42", headers=auth_headers).json()["status"][0]
+        assert entry["error"]["code"] == 2021
+        database = SlurmDatabase()
+        database.load_state()
+        assert database.get_job("42").state == "COMPLETED"
 
 
 class TestStubs:

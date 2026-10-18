@@ -203,6 +203,7 @@ def _run_slurm(user: str, argv: list[str]) -> tuple[str, str, int]:
     try:
         with contextlib.redirect_stderr(err):
             emu = _new_emulator()
+            emu.caller = user
             if name in {"sacct", "sacctmgr", "sshare", "sreport", "sinfo", "scancel", "id"}:
                 if name in {"sacct", "sshare", "sreport"}:
                     _advance(emu)
