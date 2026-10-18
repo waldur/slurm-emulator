@@ -21,10 +21,10 @@ def sacct(*args):
 
 
 def test_running_and_pending_rows(restd, auth_headers, sim):
-    running = submit(restd, auth_headers, name="r", partition="debug", nodes="4",
-                     shared=["none"], time_limit=600)
-    pending = submit(restd, auth_headers, name="p", partition="debug", nodes="2",
-                     time_limit=60)
+    running = submit(
+        restd, auth_headers, name="r", partition="debug", nodes="4", shared=["none"], time_limit=600
+    )
+    pending = submit(restd, auth_headers, name="p", partition="debug", nodes="2", time_limit=60)
     set_time(T0 + timedelta(minutes=11))
     rows = {r["JobID"]: r for r in sacct("-n", "-P", "-o", FIELDS)}
     run = rows[str(running)]
@@ -61,8 +61,14 @@ def test_default_stdout_and_expanded_paths(restd, auth_headers, sim):
 
     from emulator.slurm_version import at_least  # noqa: PLC0415
 
-    jid = submit(restd, auth_headers, name="d", partition="debug", time_limit=10,
-                 current_working_directory="/home/root")
+    jid = submit(
+        restd,
+        auth_headers,
+        name="d",
+        partition="debug",
+        time_limit=10,
+        current_working_directory="/home/root",
+    )
     job = restd.get(f"/slurm/{V}/job/{jid}", headers=auth_headers).json()["jobs"][0]
     if not at_least("25.05"):
         pytest.skip("no *_expanded fields before 25.05")

@@ -132,7 +132,9 @@ class TestCtldJobs:
         }
         assert entry["job_id"]["set"] is False
 
-    def test_cancel_finished_job_is_already_done(self, restd, auth_headers, state_env, still_running):
+    def test_cancel_finished_job_is_already_done(
+        self, restd, auth_headers, state_env, still_running
+    ):
         _seed_job()
         restd.delete(f"/slurm/{V}/job/42", headers=auth_headers)
         entry = restd.delete(f"/slurm/{V}/job/42", headers=auth_headers).json()["status"][0]

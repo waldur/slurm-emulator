@@ -299,9 +299,12 @@ uv run slurmrestd-emulator
   `POST /reservation`, `POST /reservations/` and `DELETE
   /reservation/{name}` with slurmctld's checks — see
   `emulator/core/reservations.py`); `licenses` is an empty stub.
-  `scontrol create|update|delete|show reservation` works through the
-  CLI dispatcher and the SSH plane on the same state; reservations made
-  that way survive the env-var sync.
+  `scontrol create|update|delete|show reservation`, `show partition`,
+  `show job`, `write batch_script` and `ping` work through the CLI
+  dispatcher and the SSH plane on the same state; reservations made
+  that way survive the env-var sync and are purged once they end.
+  Errors answer with each release's HTTP status (422 for slurmctld/slurmdbd
+  errnos only from 26.05, 500 before).
 - `/openapi.json`, `/openapi`, `/openapi/v3` — generated self-description.
 
 Responses use the real envelope (`meta`/`errors`/`warnings`, payload
@@ -366,7 +369,7 @@ installable from disk via `helm install se ./charts/slurm-emulator`.
 For clients that expect a login node in addition to `slurmrestd` (notably
 FireCREST v2), the emulator ships an asyncssh server that provides filesystem
 operations and dispatches the Slurm CLI commands (`sacctmgr`, `sacct`, `sinfo`,
-`sshare`, `scancel`, `sbatch`) against the same shared state:
+`sshare`, `scancel`, `sbatch`, `scontrol`, `squeue`) against the same shared state:
 
 ```bash
 uv run --extra ssh slurm-ssh-emulator   # asyncssh server on port 2222

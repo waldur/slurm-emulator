@@ -100,7 +100,11 @@ def test_nodes_plus_minus_on_update(sim, capsys):
     scontrol.handle_command(["update", "ReservationName=r", "Nodes+=node[003-004],node006"])
     assert capsys.readouterr().err == "" and scontrol.exit_code == 0
     assert scontrol.database.reservations["r"].nodes == [
-        "node001", "node002", "node003", "node004", "node006",
+        "node001",
+        "node002",
+        "node003",
+        "node004",
+        "node006",
     ]
     scontrol.handle_command(["update", "ReservationName=r", "Nodes-=node001"])
     assert scontrol.database.reservations["r"].nodes[0] == "node002"

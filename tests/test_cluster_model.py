@@ -93,30 +93,44 @@ class TestHostlist:
 
 class TestJobRequest:
     def test_tasks_times_cpus_per_task(self):
-        job = Job(job_id="1", account="a", user="u", state="PENDING", node_count=2,
-                  tasks=8, cpus_per_task=4, memory_per_node=16000)
+        job = Job(
+            job_id="1",
+            account="a",
+            user="u",
+            state="PENDING",
+            node_count=2,
+            tasks=8,
+            cpus_per_task=4,
+            memory_per_node=16000,
+        )
         req = cluster_model.job_request(job)
         assert (req.node_count, req.total_cpus, req.cpus_per_node, req.mem_per_node) == (
-            2, 32, 16, 16000,
+            2,
+            32,
+            16,
+            16000,
         )
 
     def test_one_task_per_node_by_default(self):
         # num_tasks falls back to the node count, cpus_per_task to 1
         # (slurm://src/slurmctld/job_mgr.c#_pack_default_job_details).
-        req = cluster_model.job_request(Job(job_id="1", account="a", user="u", state="PENDING",
-                                            node_count=3))
+        req = cluster_model.job_request(
+            Job(job_id="1", account="a", user="u", state="PENDING", node_count=3)
+        )
         assert (req.total_cpus, req.cpus_per_node) == (3, 1)
         assert req.mem_per_node == cluster_model.DEF_MEM_PER_CPU_MB
 
     def test_exclusive_takes_whole_nodes(self):
-        req = cluster_model.job_request(Job(job_id="1", account="a", user="u", state="PENDING",
-                                            node_count=3, exclusive=True))
+        req = cluster_model.job_request(
+            Job(job_id="1", account="a", user="u", state="PENDING", node_count=3, exclusive=True)
+        )
         assert req.total_cpus == 3 * cluster_model.NODE_CPUS
         assert req.mem_per_node == cluster_model.NODE_MEM_MB
 
     def test_tasks_beyond_nodes_add_nodes(self):
-        req = cluster_model.job_request(Job(job_id="1", account="a", user="u", state="PENDING",
-                                            node_count=1, tasks=100))
+        req = cluster_model.job_request(
+            Job(job_id="1", account="a", user="u", state="PENDING", node_count=1, tasks=100)
+        )
         assert req.node_count == 2
 
 
@@ -139,12 +153,25 @@ class TestStateFileCompat:
     def test_old_job_without_new_fields_loads(self, state_env):
         old = {
             "jobs": {
-                "5": {"job_id": "5", "account": "a", "user": "u", "state": "RUNNING",
-                      "submit_time": "2024-01-01T00:00:00", "node_count": 1}
+                "5": {
+                    "job_id": "5",
+                    "account": "a",
+                    "user": "u",
+                    "state": "RUNNING",
+                    "submit_time": "2024-01-01T00:00:00",
+                    "node_count": 1,
+                }
             },
             "usage_records": [
-                {"account": "a", "user": "u", "node_hours": 1.0, "billing_units": 1.0,
-                 "timestamp": "2024-01-01T01:00:00", "period": "2024-Q1", "job_id": 4}
+                {
+                    "account": "a",
+                    "user": "u",
+                    "node_hours": 1.0,
+                    "billing_units": 1.0,
+                    "timestamp": "2024-01-01T01:00:00",
+                    "period": "2024-Q1",
+                    "job_id": 4,
+                }
             ],
         }
         (state_env / "db.json").write_text(json.dumps(old))
@@ -161,10 +188,17 @@ class TestStateFileCompat:
 
 class TestSubmitAndAllocate:
     def test_submit_reads_resource_request(self, restd, auth_headers, sim):
-        jid = submit(restd, auth_headers, name="r", partition="debug", nodes="2-4", tasks=8,
-                     cpus_per_task=4, memory_per_node={"set": True, "infinite": False,
-                                                       "number": 16000},
-                     time_limit={"set": True, "infinite": False, "number": 90})
+        jid = submit(
+            restd,
+            auth_headers,
+            name="r",
+            partition="debug",
+            nodes="2-4",
+            tasks=8,
+            cpus_per_task=4,
+            memory_per_node={"set": True, "infinite": False, "number": 16000},
+            time_limit={"set": True, "infinite": False, "number": 90},
+        )
         job = SlurmDatabase()
         job.load_state()
         stored = job.jobs[str(jid)]
@@ -180,16 +214,16 @@ class TestSubmitAndAllocate:
         assert db.jobs[str(b)].node_count == 2
 
     def test_running_jobs_get_distinct_nodes(self, restd, auth_headers, sim):
-        a = submit(restd, auth_headers, name="a", partition="compute", nodes="4",
-                   shared=["none"])
-        b = submit(restd, auth_headers, name="b", partition="compute", nodes="2",
-                   shared=["none"])
+        a = submit(restd, auth_headers, name="a", partition="compute", nodes="4", shared=["none"])
+        b = submit(restd, auth_headers, name="b", partition="compute", nodes="2", shared=["none"])
         set_time(T0 + timedelta(minutes=2))
         jobs = ctld_jobs(restd, auth_headers)
         assert jobs[a]["nodes"] == "node[005-008]"
         assert jobs[b]["nodes"] == "node[009-010]"
         assert jobs[a]["job_resources"]["nodes"] == {
-            "count": 4, "list": "node[005-008]", "allocation": [],
+            "count": 4,
+            "list": "node[005-008]",
+            "allocation": [],
         }
         assert jobs[a]["cpus"]["number"] == 4 * cluster_model.NODE_CPUS
 
@@ -204,10 +238,12 @@ class TestSubmitAndAllocate:
         assert node["alloc_idle_cpus"] == cluster_model.NODE_CPUS - 16
 
     def test_queue_waits_for_resources_then_starts(self, restd, auth_headers, sim):
-        first = submit(restd, auth_headers, name="big", partition="debug", nodes="4",
-                       shared=["none"])
-        second = submit(restd, auth_headers, name="next", partition="debug", nodes="2",
-                        shared=["none"])
+        first = submit(
+            restd, auth_headers, name="big", partition="debug", nodes="4", shared=["none"]
+        )
+        second = submit(
+            restd, auth_headers, name="next", partition="debug", nodes="2", shared=["none"]
+        )
         set_time(T0 + timedelta(minutes=5))
         jobs = ctld_jobs(restd, auth_headers)
         assert jobs[first]["job_state"] == ["RUNNING"]
@@ -226,30 +262,40 @@ class TestSubmitAndAllocate:
         )
 
     def test_drained_and_down_nodes_are_skipped(self, restd, auth_headers, sim, monkeypatch):
-        monkeypatch.setenv(cluster_model.NODE_STATES_ENV,
-                           "node001=DRAIN:Bad DIMM;node002=DOWN:Not responding")
-        jid = submit(restd, auth_headers, name="d", partition="debug", nodes="2",
-                     shared=["none"])
+        monkeypatch.setenv(
+            cluster_model.NODE_STATES_ENV, "node001=DRAIN:Bad DIMM;node002=DOWN:Not responding"
+        )
+        jid = submit(restd, auth_headers, name="d", partition="debug", nodes="2", shared=["none"])
         set_time(T0 + timedelta(minutes=2))
         assert ctld_jobs(restd, auth_headers)[jid]["nodes"] == "node[003-004]"
-        more = submit(restd, auth_headers, name="e", partition="debug", nodes="1",
-                      shared=["none"])
+        more = submit(restd, auth_headers, name="e", partition="debug", nodes="1", shared=["none"])
         set_time(T0 + timedelta(minutes=4))
         assert ctld_jobs(restd, auth_headers)[more]["state_reason"] == "Resources"
 
 
 class TestTimeout:
     def test_run_past_limit_ends_timeout_at_limit(self, restd, auth_headers, sim):
-        jid = submit(restd, auth_headers, name="t", partition="debug", time_limit=30,
-                     environment=["SLURM_EMULATOR_RUN_SECONDS=7200"])
+        jid = submit(
+            restd,
+            auth_headers,
+            name="t",
+            partition="debug",
+            time_limit=30,
+            environment=["SLURM_EMULATOR_RUN_SECONDS=7200"],
+        )
         set_time(T0 + timedelta(hours=3))
         job = ctld_jobs(restd, auth_headers)[jid]
         assert job["job_state"] == ["TIMEOUT"]
         assert job["end_time"]["number"] - job["start_time"]["number"] == 30 * 60
 
     def test_run_seconds_per_job(self, restd, auth_headers, sim):
-        jid = submit(restd, auth_headers, name="q", partition="debug",
-                     environment=["SLURM_EMULATOR_RUN_SECONDS=120"])
+        jid = submit(
+            restd,
+            auth_headers,
+            name="q",
+            partition="debug",
+            environment=["SLURM_EMULATOR_RUN_SECONDS=120"],
+        )
         set_time(T0 + timedelta(minutes=5))
         job = ctld_jobs(restd, auth_headers)[jid]
         assert job["job_state"] == ["COMPLETED"]
@@ -276,9 +322,14 @@ class TestNodes:
         assert node["tres_used"] == ""
 
     def test_allocated_node_load_follows_efficiency(self, restd, auth_headers, sim):
-        jid = submit(restd, auth_headers, name="l", partition="debug", shared=["none"],
-                     environment=["SLURM_EMULATOR_CPU_EFFICIENCY=0.5",
-                                  "SLURM_EMULATOR_MEM_FRACTION=0.25"])
+        jid = submit(
+            restd,
+            auth_headers,
+            name="l",
+            partition="debug",
+            shared=["none"],
+            environment=["SLURM_EMULATOR_CPU_EFFICIENCY=0.5", "SLURM_EMULATOR_MEM_FRACTION=0.25"],
+        )
         set_time(T0 + timedelta(minutes=2))
         node_name = ctld_jobs(restd, auth_headers)[jid]["nodes"]
         node = nodes_by_name(restd, auth_headers)[node_name]
@@ -291,8 +342,9 @@ class TestNodes:
         assert abs(used - (0.25 * cluster_model.NODE_MEM_MB + cluster_model.OS_MEM_MB)) < 2
 
     def test_overrides_drain_and_down(self, restd, auth_headers, sim, monkeypatch):
-        monkeypatch.setenv(cluster_model.NODE_STATES_ENV,
-                           "node012=DRAIN:Bad DIMM;node030=DOWN:Not responding")
+        monkeypatch.setenv(
+            cluster_model.NODE_STATES_ENV, "node012=DRAIN:Bad DIMM;node030=DOWN:Not responding"
+        )
         nodes = nodes_by_name(restd, auth_headers)
         assert nodes["node012"]["state"] == ["IDLE", "DRAIN"]
         assert nodes["node012"]["reason"] == "Bad DIMM"
@@ -308,12 +360,14 @@ class TestNodes:
         assert all(nodes[n]["cpu_load"] > 3000 for n in busy)
         assert not busy & {"node001", "node002", "node003", "node004"}
         # Same window -> same set; 15 minutes later -> another set.
-        again = {n for n, v in nodes_by_name(restd, auth_headers).items()
-                 if v["state"] == ["ALLOCATED"]}
+        again = {
+            n for n, v in nodes_by_name(restd, auth_headers).items() if v["state"] == ["ALLOCATED"]
+        }
         assert again == busy
         set_time(T0 + timedelta(minutes=15))
-        later = {n for n, v in nodes_by_name(restd, auth_headers).items()
-                 if v["state"] == ["ALLOCATED"]}
+        later = {
+            n for n, v in nodes_by_name(restd, auth_headers).items() if v["state"] == ["ALLOCATED"]
+        }
         assert later != busy and len(later) == 48
 
     def test_background_nodes_are_not_allocated(self, restd, auth_headers, sim, monkeypatch):
@@ -347,12 +401,16 @@ class TestReservations:
         assert maint["node_list"] == "node[001-100]" and maint["node_count"] == 100
         assert maint["partition"] == "" and maint["users"] == "root"
         assert maint["start_time"] == {
-            "set": True, "infinite": False, "number": int((T0 + timedelta(hours=72)).timestamp()),
+            "set": True,
+            "infinite": False,
+            "number": int((T0 + timedelta(hours=72)).timestamp()),
         }
         assert maint["end_time"]["number"] - maint["start_time"]["number"] == 12 * 3600
         train = by_name["train"]
         assert (train["partition"], train["node_list"], train["users"]) == (
-            "debug", "node[001-004]", "alice,bob",
+            "debug",
+            "node[001-004]",
+            "alice,bob",
         )
         # Resolved once: a later request does not move the window.
         set_time(T0 + timedelta(hours=10))
@@ -400,8 +458,7 @@ class TestReservations:
         assert nodes["node001"]["reservation"] == "maint"
         assert nodes["node003"]["state"] == ["IDLE"]
 
-    def test_job_requesting_reservation_runs_inside_it(self, restd, auth_headers, sim,
-                                                       monkeypatch):
+    def test_job_requesting_reservation_runs_inside_it(self, restd, auth_headers, sim, monkeypatch):
         monkeypatch.setenv(cluster_model.RESERVATIONS_ENV, "train:debug:+1h:4h")
         jid = submit(restd, auth_headers, name="in", partition="debug", reservation="train")
         set_time(T0 + timedelta(minutes=5))
@@ -411,8 +468,11 @@ class TestReservations:
         assert ctld_jobs(restd, auth_headers)[jid]["job_state"] == ["RUNNING"]
 
     def test_unknown_reservation_refused(self, restd, auth_headers, sim):
-        body = restd.post(f"/slurm/{V}/job/submit", headers=auth_headers,
-                          json={"job": {"name": "x", "reservation": "nope"}}).json()
+        body = restd.post(
+            f"/slurm/{V}/job/submit",
+            headers=auth_headers,
+            json={"job": {"name": "x", "reservation": "nope"}},
+        ).json()
         assert body["errors"][0]["error_number"] == 2053
         assert body["errors"][0]["description"] == "Requested reservation is invalid"
 
@@ -422,10 +482,17 @@ class TestReservations:
 
 class TestAccounting:
     def _run_one(self, restd, auth_headers):
-        jid = submit(restd, auth_headers, name="acct", partition="compute", nodes="2",
-                     time_limit=90, memory_per_node=200000, shared=["none"],
-                     environment=["SLURM_EMULATOR_CPU_EFFICIENCY=0.5",
-                                  "SLURM_EMULATOR_MEM_FRACTION=0.25"])
+        jid = submit(
+            restd,
+            auth_headers,
+            name="acct",
+            partition="compute",
+            nodes="2",
+            time_limit=90,
+            memory_per_node=200000,
+            shared=["none"],
+            environment=["SLURM_EMULATOR_CPU_EFFICIENCY=0.5", "SLURM_EMULATOR_MEM_FRACTION=0.25"],
+        )
         set_time(T0 + timedelta(hours=2))
         restd.get(f"/slurm/{V}/jobs/", headers=auth_headers)
         jobs = restd.get(f"/slurmdb/{V}/job/{jid}", headers=auth_headers).json()["jobs"]
@@ -453,8 +520,14 @@ class TestAccounting:
         assert peaks["mem"]["count"] == int(0.25 * 200000 * 1024) * 1024
         assert (peaks["mem"]["task"], peaks["mem"]["node"]) == (0, "node005")
         # Every gathered TRES is in every list, in TRES id order.
-        assert [e["type"] for e in requested["max"]] == ["cpu", "mem", "energy", "fs", "vmem",
-                                                         "pages"]
+        assert [e["type"] for e in requested["max"]] == [
+            "cpu",
+            "mem",
+            "energy",
+            "fs",
+            "vmem",
+            "pages",
+        ]
         assert [e["type"] for e in requested["average"]] == [e["type"] for e in requested["max"]]
         # CPU time in ms: 2 whole nodes x 50% for the 1 h run.
         assert peaks["cpu"]["count"] == 2 * cluster_model.NODE_CPUS * 3600 * 1000 // 2
@@ -469,8 +542,13 @@ class TestAccounting:
         db = SlurmDatabase()
         db.load_state()
         out = SacctEmulator(db, TimeEngine()).handle_command(
-            ["-j", str(jid), "-P", "-o",
-             "Submit,Start,Timelimit,NNodes,NodeList,AllocCPUS,ReqMem,TotalCPU,MaxRSS,Elapsed"]
+            [
+                "-j",
+                str(jid),
+                "-P",
+                "-o",
+                "Submit,Start,Timelimit,NNodes,NodeList,AllocCPUS,ReqMem,TotalCPU,MaxRSS,Elapsed",
+            ]
         )
         row = dict(zip(out.splitlines()[0].split("|"), out.splitlines()[1].split("|")))
         assert row["Submit"] == "2026-10-17T09:00:00"
@@ -494,8 +572,16 @@ class TestAccounting:
     def test_legacy_record_renders_as_before(self, restd, auth_headers, sim):
         db = SlurmDatabase()
         db.load_state()
-        db.add_usage_record(UsageRecord(account="p", user="u", node_hours=2.0, billing_units=2.0,
-                                        timestamp=T0, period="2026-Q4"))
+        db.add_usage_record(
+            UsageRecord(
+                account="p",
+                user="u",
+                node_hours=2.0,
+                billing_units=2.0,
+                timestamp=T0,
+                period="2026-Q4",
+            )
+        )
         db.save_state()
         job = restd.get(f"/slurmdb/{V}/jobs/", headers=auth_headers).json()["jobs"][0]
         assert job["nodes"] == "node001" and job["steps"] == []

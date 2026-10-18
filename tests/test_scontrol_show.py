@@ -86,8 +86,16 @@ class TestShowPartition:
 
 class TestShowJob:
     def test_running_job(self, restd, auth_headers, scontrol, capsys):
-        jid = submit(restd, auth_headers, name="sim", partition="compute", nodes="2",
-                     tasks_per_node=4, cpus_per_task=2, time_limit=90)
+        jid = submit(
+            restd,
+            auth_headers,
+            name="sim",
+            partition="compute",
+            nodes="2",
+            tasks_per_node=4,
+            cpus_per_task=2,
+            time_limit=90,
+        )
         set_time(T0 + timedelta(minutes=11))
         out, err, code = run(scontrol, capsys, "show", "job", str(jid))
         assert (err, code) == ("", 0)
@@ -109,8 +117,9 @@ class TestShowJob:
         assert ("SubmitLine" in record) is at_least("25.11")
         assert out.endswith("\n\n")
 
-    def test_pending_job_and_reason_blanks(self, restd, auth_headers, scontrol, capsys,
-                                            monkeypatch):
+    def test_pending_job_and_reason_blanks(
+        self, restd, auth_headers, scontrol, capsys, monkeypatch
+    ):
         monkeypatch.setenv(cluster_model.RESERVATIONS_ENV, "m:debug:now:2h:MAINT")
         jid = submit(restd, auth_headers, name="p", partition="debug", time_limit=30)
         set_time(T0 + timedelta(minutes=2))

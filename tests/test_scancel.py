@@ -26,8 +26,9 @@ def run(capsys, caller, *args):
 def jobs(restd, auth_headers, sim):
     def job(user, account, **extra):
         headers = {**auth_headers, "X-SLURM-USER-NAME": user}
-        return submit(restd, headers, name="j", partition="compute", account=account,
-                      time_limit=600, **extra)
+        return submit(
+            restd, headers, name="j", partition="compute", account=account, time_limit=600, **extra
+        )
 
     ids = {
         "alice_a": job("alice", "proj_a"),
@@ -68,8 +69,10 @@ def test_cancelled_by_caller_in_accounting(restd, auth_headers, jobs, capsys):
 def test_other_users_job_is_denied(restd, auth_headers, jobs, capsys):
     _, err, code = run(capsys, "alice", str(jobs["bob_a"]))
     assert code == 1
-    assert err == f"scancel: error: Kill job error on job id {jobs['bob_a']}: " \
+    assert (
+        err == f"scancel: error: Kill job error on job id {jobs['bob_a']}: "
         "Access/permission denied\n"
+    )
     assert states(restd, auth_headers)[jobs["bob_a"]] == "RUNNING"
 
 

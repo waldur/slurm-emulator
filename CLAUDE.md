@@ -411,7 +411,12 @@ so they also appear in the accounting (`/slurmdb` / `sacct`) view. Configurable 
   A run longer than `time_limit` ends TIMEOUT at the limit
 - Jobs get concrete nodes of their partition (`emulator/core/cluster_model.py`): submit honours
   `nodes`/`minimum_nodes`/`tasks`/`tasks_per_node`/`cpus_per_task`/`memory_per_node`/`time_limit`/
-  `reservation`; no free nodes = PENDING with reason `Resources` until nodes free up. Node views
+  `reservation`/`shared` (`["none"]` = whole nodes); like slurmctld, a job defaults to one task per
+  node and one CPU per task, a request no node set can satisfy is refused at submit (2014), a
+  reservation the user may not use is refused (2052). No free nodes = PENDING with reason
+  `Resources`, later jobs of that partition `Priority`; a reservation over the whole partition
+  = `ReqNodeNotAvail` ("Reserved for maintenance" in `state_description`). Exit codes are wait
+  statuses (`0:9` for SIGKILL, `0:15` for a time limit in the controller). Node views
   derive IDLE/MIXED/ALLOCATED, `cpu_load`, `free_mem` from the allocations. Optional env:
   `SLURM_EMULATOR_NODE_STATES` (`node012=DRAIN:Bad DIMM;node030=DOWN:Not responding`),
   `SLURM_EMULATOR_BACKGROUND_LOAD` (`batch=0.5,gpu=0.75`, other tenants' whole nodes, rotating
