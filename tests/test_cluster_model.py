@@ -448,9 +448,20 @@ class TestAccounting:
         assert job["required"]["memory_per_node"]["number"] == 200000
         step = job["steps"][0]
         assert step["step"]["id"] == f"{jid}.batch" and step["step"]["name"] == "batch"
-        peak = step["tres"]["requested"]["max"][0]
-        assert peak["type"] == "mem"
-        assert peak["count"] == int(0.25 * 200000 * 1024) * 1024
+        requested = step["tres"]["requested"]
+        peaks = {e["type"]: e for e in requested["max"]}
+        assert peaks["mem"]["count"] == int(0.25 * 200000 * 1024) * 1024
+        assert (peaks["mem"]["task"], peaks["mem"]["node"]) == (0, "node005")
+        # Every gathered TRES is in every list, in TRES id order.
+        assert [e["type"] for e in requested["max"]] == ["cpu", "mem", "energy", "fs", "vmem",
+                                                         "pages"]
+        assert [e["type"] for e in requested["average"]] == [e["type"] for e in requested["max"]]
+        # CPU time in ms: 2 whole nodes x 50% for the 1 h run.
+        assert peaks["cpu"]["count"] == 2 * cluster_model.NODE_CPUS * 3600 * 1000 // 2
+        assert step["statistics"]["energy"]["consumed"]["set"] is True
+        assert step["tres"]["consumed"]["total"] == [
+            {"type": "fs", "name": "disk", "id": 6, "count": 0}
+        ]
         assert step["nodes"]["list"] == ["node005"]
 
     def test_sacct_columns_agree(self, restd, auth_headers, sim):

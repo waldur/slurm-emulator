@@ -384,9 +384,24 @@ class SlurmDatabase:
         # How far the lazy scheduler has simulated (emulator/core/scheduler.py).
         self.sched_cursor: Optional[datetime] = None
         # Static TRES in id order (slurm://src/common/slurmdb_defs.h#TRES_ENERGY:
-        # cpu=1, mem=2, energy=3, node=4, billing=5) then dynamic ones (>= 1001);
-        # ids are derived in emulator/core/tres.py.
-        self.tres_types = ["CPU", "Mem", "energy", "node", "billing", "GRES/gpu"]
+        # cpu=1, mem=2, energy=3, node=4, billing=5, fs/disk=6, vmem=7,
+        # pages=8 -- slurmdbd creates all of them) then the dynamic ones of
+        # AccountingStorageTRES (>= 1001): the GPUs and what the NVML plugin
+        # samples (slurm://src/interfaces/gpu.c#gpu_get_tres_pos). Ids are
+        # derived in emulator/core/tres.py.
+        self.tres_types = [
+            "CPU",
+            "Mem",
+            "energy",
+            "node",
+            "billing",
+            "fs/disk",
+            "vmem",
+            "pages",
+            "GRES/gpu",
+            "GRES/gpumem",
+            "GRES/gpuutil",
+        ]
         self.state_file = Path(
             os.environ.get("SLURM_EMULATOR_STATE_FILE", "/tmp/slurm_emulator_db.json")
         )

@@ -1547,10 +1547,12 @@ class SacctmgrEmulator:
                 type_part, name_part = tres_type.split("/", 1)
             else:
                 type_part, name_part = tres_type, ""
+            # slurmdbd stores TRES types and names in lower case
+            # (slurm://src/sacctmgr/tres_function.c#sacctmgr_list_tres).
             rows.append(
                 {
-                    "Type": type_part,
-                    "Name": name_part,
+                    "Type": type_part.lower(),
+                    "Name": name_part.lower(),
                     "ID": str(tres_id(tres_type, self.database.tres_types)),
                 }
             )

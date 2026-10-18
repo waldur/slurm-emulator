@@ -86,6 +86,11 @@ def test_gpu_jobs_report_nvml_usage(seed, state_env):
     util = step_tres(gpu, "average")["gres/gpuutil"]
     assert 0 < util <= 100 * schemas._NODE_GPUS
     assert step_tres(gpu, "max")["gres/gpumem"] > 0
+    # Both are in every list: the last sample averaged over tasks, the peak in max/min
+    # (slurm://src/plugins/jobacct_gather/common/common_jag.c#jag_common_poll_data).
+    assert step_tres(gpu, "max")["gres/gpuutil"] >= util
+    assert step_tres(gpu, "average")["gres/gpumem"] > 0
+    assert step_tres(gpu, "min") == step_tres(gpu, "max")
     allocated = {
         f"{t['type']}/{t['name']}".rstrip("/"): t["count"]
         for t in schemas.dbd_job_to_dict(gpu)["tres"]["allocated"]

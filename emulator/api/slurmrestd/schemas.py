@@ -49,8 +49,7 @@ from emulator.slurm_version import at_least
 # Canonical TRES ids as initialized by slurmdbd (emulator/core/tres.py);
 # dynamic ids are resolved against the database's TRES list when one is given.
 # gres/gpumem and gres/gpuutil exist where AccountingStorageTRES lists them
-# (slurm://src/interfaces/gpu.c#gpu_get_tres_pos); they are rendered only in
-# GPU jobs' step usage, not in the database's TRES list.
+# (slurm://src/interfaces/gpu.c#gpu_get_tres_pos), as in the database's list.
 _TRES_IDS = {
     **STATIC_TRES_IDS,
     "gres/gpu": DYNAMIC_TRES_FIRST_ID,
@@ -332,49 +331,68 @@ def _exit_code(state: str, return_code: Optional[int]) -> dict[str, Any]:
     return exit_status.verbose(state, return_code)
 
 
+def _step_usage(record: UsageRecord, cpu: dict[str, Any]) -> tuple[dict[str, int], dict[str, int]]:
+    """(last sample, peak) of the batch task's gathered TRES.
+
+    jobacct keeps a task's latest sample as its total and its highest as its
+    max (slurm://src/plugins/jobacct_gather/common/common_jag.c#jag_common_poll_data);
+    slurmdbd averages the totals over the tasks
+    (slurm://src/plugins/accounting_storage/mysql/as_mysql_job.c#_average_tres_usage).
+    ``cpu`` is CPU time in milliseconds (``CPU_TIME_ADJ``), ``mem``/``vmem``
+    bytes, ``energy`` joules. A GPU task carries what the NVML plugin reads
+    summed over its GPUs (slurm://src/plugins/gpu/nvml/gpu_nvml.c#gpu_p_usage_read):
+    ``gres/gpuutil`` percent and ``gres/gpumem`` bytes. The emulator's GPU use
+    is a mean (``synthetic_gpu_use``); the peak sample is put 10% above it.
+    """
+    total = cpu["total"]
+    usage = {
+        "cpu": total["seconds"] * 1000 + total["microseconds"] // 1000,
+        "mem": int(record.max_rss_bytes),
+    }
+    if record.raw_tres.get("energy"):
+        usage["energy"] = int(record.raw_tres["energy"])
+    usage.update({"fs/disk": 0, "vmem": int(record.max_rss_bytes), "pages": 0})
+    last, peak = dict(usage), dict(usage)
+    if partition_has_gpus(record.partition):
+        util, mem_fraction = synthetic_gpu_use(record.job_id)
+        gpumem = int(mem_fraction * GPU_MEM_MB * _NODE_GPUS) * 1024 * 1024
+        last.update({"gres/gpumem": gpumem, "gres/gpuutil": round(util * 100 * _NODE_GPUS)})
+        peak.update(
+            {
+                "gres/gpumem": gpumem,
+                "gres/gpuutil": min(round(util * 110 * _NODE_GPUS), 100 * _NODE_GPUS),
+            }
+        )
+    return last, peak
+
+
 def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) -> dict[str, Any]:
     """The ``batch`` step of a job (STEP, slurm://src/plugins/data_parser/v0.0.45/parsers.c#STEP@26.05+).
 
-    It runs on the first allocated node; ``tres/requested/max`` carries the
-    peak task memory in bytes -- what sacct prints as MaxRSS
-    (slurm://src/plugins/data_parser/v0.0.45/parsers.c#STEP_TRES_REQ_MAX@26.05+,
-    slurm://src/sacct/print.c#PRINT_MAXRSS). A timed-out job's batch step is
-    CANCELLED by the time-limit signal.
-
-    A GPU job's step also carries what the NVML plugin samples per task,
-    summed over the task's GPUs (slurm://src/plugins/gpu/nvml/gpu_nvml.c#gpu_p_usage_read):
-    ``gres/gpuutil`` (SM utilisation, percent) in ``tres/requested/average``
-    and ``gres/gpumem`` (bytes) in ``tres/requested/max``. The batch task runs
-    on the first node, so those are that node's GPUs.
+    It runs on the first allocated node as one task. ``tres/requested`` holds
+    every gathered TRES (``_step_usage``): ``max``/``min`` with the task and
+    node that reached it (slurm://src/plugins/data_parser/v0.0.45/parsers.c#STEP_TRES_REQ_MAX@26.05+),
+    ``average``/``total`` without -- what sacct prints as MaxRSS
+    (slurm://src/sacct/print.c#PRINT_MAXRSS) and TRESUsageIn*.
+    ``tres/consumed`` holds the writes (``fs/disk``). The step's consumed
+    energy is the job's: the batch step is the only one. A timed-out job's
+    batch step is CANCELLED by the time-limit signal.
     """
     first_node = (expand_hostlist(record.node_list) or ["node001"])[0]
     state = record.state or "COMPLETED"
     step_state = "CANCELLED" if state == "TIMEOUT" else state
-    peak = [
-        {
-            "type": "mem",
-            "name": "",
-            "id": _TRES_IDS["mem"],
-            "count": int(record.max_rss_bytes),
-            "task": 0,
-            "node": first_node,
-        }
-    ]
-    average: list[dict[str, Any]] = []
-    if partition_has_gpus(record.partition):
-        util, mem_fraction = synthetic_gpu_use(record.job_id)
-        average = [tres_entry("gres/gpuutil", round(util * 100 * _NODE_GPUS))]
-        peak.append(
-            {
-                **tres_entry(
-                    "gres/gpumem", int(mem_fraction * GPU_MEM_MB * _NODE_GPUS) * 1024 * 1024
-                ),
-                "task": 0,
-                "node": first_node,
-            }
-        )
+    last, peak = _step_usage(record, cpu)
+
+    def located(values: dict[str, int]) -> list[dict[str, Any]]:
+        return [{**tres_entry(k, v), "task": 0, "node": first_node} for k, v in values.items()]
+
+    def plain(values: dict[str, int]) -> list[dict[str, Any]]:
+        return [tres_entry(k, v) for k, v in values.items()]
+
+    writes = {"fs/disk": 0}
     cpus_on_node = min(record.alloc_cpus, _NODE_CPUS) if record.alloc_cpus else _NODE_CPUS
     mem_on_node = record.req_mem_mb or cpus_on_node * (_NODE_MEM_GB * 1024 // _NODE_CPUS)
+    energy = record.raw_tres.get("energy")
     return {
         "time": {
             "elapsed": end - start,
@@ -393,7 +411,10 @@ def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) 
         "tasks": {"count": 1},
         "kill_request_user": "",
         "state": [step_state],
-        "statistics": {"CPU": {"actual_frequency": 0}, "energy": {"consumed": uint_no_val()}},
+        "statistics": {
+            "CPU": {"actual_frequency": 0},
+            "energy": {"consumed": uint_no_val(int(energy) if energy else None)},
+        },
         "step": {
             "id": f"{record.job_id}.batch",
             "name": "batch",
@@ -402,8 +423,18 @@ def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) 
             "stdout": record.standard_output,
         },
         "tres": {
-            "requested": {"max": peak, "min": peak, "average": average, "total": []},
-            "consumed": {"max": [], "min": [], "average": [], "total": []},
+            "requested": {
+                "max": located(peak),
+                "min": located(peak),
+                "average": plain(last),
+                "total": plain(last),
+            },
+            "consumed": {
+                "max": located(writes),
+                "min": located(writes),
+                "average": plain(writes),
+                "total": plain(writes),
+            },
             "allocated": tres_list_from_dict({"cpu": cpus_on_node, "mem": mem_on_node, "node": 1}),
         },
     }
