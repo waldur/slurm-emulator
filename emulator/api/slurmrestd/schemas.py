@@ -44,6 +44,7 @@ from emulator.core.database import (
     UsageRecord,
     User,
 )
+from emulator.core.reservations import INFINITE_TIME, YEAR
 from emulator.core.time_engine import TimeEngine
 from emulator.core.tres import DYNAMIC_TRES_FIRST_ID, STATIC_TRES_IDS, tres_id
 from emulator.slurm_version import at_least
@@ -667,10 +668,11 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
     # The script's own status when it ran (SLURM_EMULATOR_JOB_EXECUTE),
     # else 1/0 from the state (slurm://slurm/slurm.h#job_info_t.exit_code).
     exit_code = _exit_code(job.state, getattr(job, "exit_code", None))
-    # A running job's end_time is its expected end: start + time limit.
+    # A running job's end_time is its expected end: start + time limit, or
+    # a year without one (slurm://src/slurmctld/job_mgr.c#job_end_time_reset).
     end = job.end_time
-    if end is None and job.state == "RUNNING" and job.start_time and time_limit:
-        end = job.start_time + timedelta(minutes=time_limit)
+    if end is None and job.state == "RUNNING" and job.start_time:
+        end = job.start_time + (timedelta(minutes=time_limit) if time_limit else YEAR)
 
     return {
         "job_id": int(job.job_id) if str(job.job_id).isdigit() else 0,
@@ -932,6 +934,8 @@ def reservation_to_dict(resv: Reservation) -> dict[str, Any]:
     """
 
     def ts(value) -> dict[str, Any]:
+        if value is not None and value == INFINITE_TIME:
+            return uint_no_val(infinite=True)
         return uint_no_val(int(value.timestamp())) if value else uint_no_val()
 
     return {

@@ -114,6 +114,10 @@ STRERROR = {
 # slurm://src/slurmctld/reservation.c#MAX_RESV_DELAY
 MAX_RESV_DELAY = 600
 YEAR = timedelta(days=365)
+# end_time INFINITE: a reservation with neither an end nor a duration never
+# ends (slurm://src/slurmctld/reservation.c#create_resv); slurm_make_time_str
+# prints it "Unknown" and slurmrestd dumps it as infinite.
+INFINITE_TIME = datetime.fromtimestamp(0xFFFFFFFE)  # noqa: DTZ006 - naive local
 # Duration value meaning INFINITE (slurm://slurm/slurm.h#INFINITE).
 DURATION_INFINITE = -1
 
@@ -439,7 +443,7 @@ def create_reservation(db: SlurmDatabase, desc: ReservationDesc, now: datetime) 
     elif desc.duration:
         end = start + timedelta(minutes=desc.duration)
     else:
-        end = start + YEAR
+        end = INFINITE_TIME
 
     partition = desc.partition or ""
     if partition and partition not in cluster_model.partition_ranges():

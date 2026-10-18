@@ -30,6 +30,21 @@ Output formatting and exit codes mirror real Slurm 26.05:
   The ``energy`` TRES is deliberately *not* added to the ReqTRES/AllocTRES
   string so the site-agent invocation shape stays byte-identical.
 
+* ``StdIn``/``StdOut``/``StdErr`` print the paths as stored, patterns not
+  expanded (slurm://src/sacct/print.c#PRINT_STDIN, ``PRINT_STDOUT``,
+  ``PRINT_STDERR``; ``--expand-patterns`` is not emulated); ``WorkDir`` the
+  job's working directory (slurm://src/sacct/print.c#PRINT_WORK_DIR);
+  ``Eligible`` the eligible time (slurm://src/sacct/print.c#PRINT_ELIGIBLE);
+  ``ReqMem`` the requested memory over the job's nodes
+  (slurm://src/sacct/print.c#PRINT_REQ_MEM); ``UserCPU``/``SystemCPU`` the
+  CPU time split (slurm://src/sacct/print.c#PRINT_USERCPU,
+  ``PRINT_SYSTEMCPU``). The split itself is synthetic: 4% of a job's CPU time
+  is counted as system time.
+* a pending or running job has a row from submission on, with ``Unknown``
+  for times not reached yet and no CPU time or MaxRSS until it ends; a
+  cancelled job's state names the uid that cancelled it
+  (slurm://src/sacct/print.c#PRINT_STATE).
+
 Documented simplifications: ``-X``/``--allocations`` is a no-op (the
 emulator has no job steps, and real ``-X`` only filters step rows);
 ``-a``/``--allusers`` is a no-op (every caller sees every job — the

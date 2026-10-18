@@ -103,13 +103,12 @@ def _planned(job: Job, run_duration: float) -> tuple[float, bool]:
 def expected_end(job: Job) -> Optional[datetime]:
     """When a RUNNING job's allocation ends, as slurmctld sees it.
 
-    slurmctld sets a running job's ``end_time`` to start + time limit
-    (slurm://src/slurmctld/job_mgr.c#_job_timed_out); a job without a
-    limit is taken at its emulated run length, as the scheduler does.
+    slurmctld sets a running job's ``end_time`` to start + time limit, or
+    start + a year without one (slurm://src/slurmctld/job_mgr.c#job_end_time_reset).
     """
     if job.start_time is None:
         return None
-    seconds = _limit_seconds(job) or _planned(job, _run_duration())[0]
+    seconds = _limit_seconds(job) or 365 * 86400
     return job.start_time + timedelta(seconds=seconds)
 
 

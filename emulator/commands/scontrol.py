@@ -525,8 +525,10 @@ class ScontrolEmulator:
 
 
 def _time_str(value: Optional[datetime]) -> str:
-    """slurm_make_time_str() default ``%FT%T`` format."""
-    return value.strftime("%Y-%m-%dT%H:%M:%S") if value else "Unknown"
+    """slurm_make_time_str() default ``%FT%T`` format; 0 and INFINITE print ``Unknown``."""
+    if not value or value == resv_core.INFINITE_TIME:
+        return "Unknown"
+    return value.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def secs2time_str(seconds: int) -> str:

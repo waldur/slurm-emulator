@@ -218,3 +218,31 @@ class TestExitStatus:
             ["-j", str(jid), "-n", "-P", "-o", "State,ExitCode"]
         )
         assert out.splitlines()[0] == "TIMEOUT|0:0"
+
+
+class TestEndTimes:
+    def test_running_job_without_limit_ends_in_a_year(self, restd, auth_headers, sim):
+        # slurm://src/slurmctld/job_mgr.c#job_end_time_reset
+        jid = submit(restd, auth_headers, name="open", partition="compute")
+        set_time(T0 + timedelta(minutes=2))
+        job = ctld_jobs(restd, auth_headers)[jid]
+        assert job["end_time"]["number"] - job["start_time"]["number"] == 365 * 86400
+
+    def test_reservation_without_end_or_duration_never_ends(self, state_env):
+        # slurm://src/slurmctld/reservation.c#create_resv: end_time = INFINITE
+        from emulator.core import reservations  # noqa: PLC0415
+        from emulator.core.reservations import ReservationDesc  # noqa: PLC0415
+
+        db = SlurmDatabase()
+        desc = ReservationDesc(
+            name="forever", start_time=T0, duration=0, node_list="node001", users="root"
+        )
+        resv = reservations.create_reservation(db, desc, T0)
+        assert resv.end_time == reservations.INFINITE_TIME
+        from emulator.api.slurmrestd.schemas import reservation_to_dict  # noqa: PLC0415
+
+        assert reservation_to_dict(resv)["end_time"] == {
+            "set": False,
+            "infinite": True,
+            "number": 0,
+        }
