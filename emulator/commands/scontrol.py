@@ -303,9 +303,13 @@ class ScontrolEmulator:
                 raise _ParseError(f'"{val}" is not a valid node count')
             desc.node_cnt = int(val)
         elif _tag_is(tag, "Nodes", 5):
-            if sign:
-                raise _ParseError(f"{tag}{sign}= is not supported by slurm-emulator.  {msg}")
-            desc.node_list = val
+            # Nodes+=/-= prefix every hostlist token
+            # (slurm://src/scontrol/create_res.c#_parse_res_options).
+            desc.node_list = (
+                ",".join(f"{sign}{t}" for t in resv_core._hostlist_tokens(val) if t)
+                if sign
+                else val
+            )
         elif _tag_is(tag, "PartitionName", 1):
             desc.partition = val
         elif any(_tag_is(tag, name, minimum) for name, minimum in _UNSUPPORTED_TAGS):
@@ -318,6 +322,7 @@ class ScontrolEmulator:
             _tag_is(tag, "Accounts", 1)
             or _tag_is(tag, "Groups", 1)
             or (_tag_is(tag, "Users", 1) or _tag_is(tag, "Flags", 2) or _tag_is(tag, "Duration", 1))
+            or _tag_is(tag, "Nodes", 5)
         )
         if sign and not handled_sign:
             raise _ParseError(f"The +=/-= notation is not supported when updating {tag}.  {msg}")

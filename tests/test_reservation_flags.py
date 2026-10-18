@@ -18,6 +18,7 @@ from emulator.core.database import SlurmDatabase
 from emulator.core.reservations import ReservationDesc, ReservationError
 from emulator.slurm_version import at_least
 from tests.test_cluster_model import T0
+from tests.test_cluster_model import sim as sim  # noqa: F401 - fixture
 
 
 def test_plus_replace_parses():
@@ -86,3 +87,39 @@ def test_overlapping_reservations_flag_nodes(state_env):
     view = cluster_model.node_views(db, T0.replace(hour=10))["node001"]
     assert view.state == ["IDLE", "RESERVED", "MAINTENANCE"]
     assert view.reservation == "other"
+
+
+def test_nodes_plus_minus_on_update(sim, capsys):
+    from emulator.commands.scontrol import ScontrolEmulator  # noqa: PLC0415
+    from emulator.core.time_engine import TimeEngine  # noqa: PLC0415
+
+    db = SlurmDatabase()
+    _create(db, name="r", node_list="node[001-002]")
+    db.save_state()
+    scontrol = ScontrolEmulator(db, TimeEngine())
+    scontrol.handle_command(["update", "ReservationName=r", "Nodes+=node[003-004],node006"])
+    assert capsys.readouterr().err == "" and scontrol.exit_code == 0
+    assert scontrol.database.reservations["r"].nodes == [
+        "node001", "node002", "node003", "node004", "node006",
+    ]
+    scontrol.handle_command(["update", "ReservationName=r", "Nodes-=node001"])
+    assert scontrol.database.reservations["r"].nodes[0] == "node002"
+    scontrol.handle_command(["update", "ReservationName=r", "Nodes+=bogus01"])
+    assert scontrol.exit_code == 1
+    assert "Invalid node name specified" in capsys.readouterr().err
+
+
+def test_impossible_request_is_refused_at_submit(restd, auth_headers):
+    from tests.test_cluster_model import V  # noqa: PLC0415
+
+    for job in (
+        {"partition": "debug", "nodes": "5"},  # debug has 4 nodes
+        {"partition": "debug", "memory_per_node": 10**7},
+        {"partition": "debug", "cpus_per_task": 65},
+        {"partition": "debug", "nodes": "1", "tasks": 65},
+    ):
+        body = restd.post(
+            f"/slurm/{V}/job/submit", headers=auth_headers, json={"job": {"name": "x", **job}}
+        ).json()
+        assert body["errors"][0]["error_number"] == 2014, job
+        assert body["errors"][0]["description"] == "Requested node configuration is not available"

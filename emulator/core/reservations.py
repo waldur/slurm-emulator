@@ -51,15 +51,19 @@ Records made here carry ``origin="api"`` and survive the
 Intentional deviations:
 
 * No recurrence: HOURLY/DAILY/WEEKDAY/WEEKEND/WEEKLY are stored and shown but
-  the window never repeats; TIME_FLOAT does not float; FLEX/MAGNETIC do not
-  change which jobs may use the reservation.
+  the window never repeats; TIME_FLOAT does not float; MAGNETIC does not
+  draw jobs in (FLEX, OVERLAP, MAINT and ANY_NODES do apply to the jobs
+  inside, see ``cluster_model``).
+* ``REPLACE``/``REPLACE_DOWN`` are stored but never swap nodes (the emulator
+  has no node failures to replace).
 * No core, TRES, license, burst-buffer, feature, QOS or AllowedPartitions
   reservations: whole nodes only, users/groups/accounts as the access list.
 * Users are checked against NSS only in NSS mode
   (slurm://src/slurmctld/reservation.c#_build_uid_list refuses an unknown
   user with ``ESLURM_USER_ID_MISSING``); without it every name is accepted,
   as every user is uid 1000 there.
-* A group list is stored as given; members are not resolved.
+* A group list is stored as given; a job may use a Groups= reservation
+  when its primary group is listed (supplementary groups are not resolved).
 """
 
 from __future__ import annotations
@@ -102,6 +106,7 @@ STRERROR = {
     ESLURM_RESERVATION_INVALID: "Requested reservation is invalid",
     ESLURM_INVALID_TIME_VALUE: "Invalid time specified",
     ESLURM_NOT_SUPPORTED: "Requested operation not supported on this system",
+    2014: "Requested node configuration is not available",
     ESLURM_RESERVATION_BUSY: "Requested reservation is in use",
     ESLURM_RESERVATION_OVERLAP: "Requested reservation overlaps with another reservation",
     ESLURM_RESERVATION_EMPTY: "Reservation request lacks users, groups or accounts",
@@ -340,6 +345,43 @@ def _busy_nodes(db: SlurmDatabase, start: datetime, resv_name: Optional[str] = N
         if end is None or end > start:
             busy.update(job.node_list)
     return busy
+
+
+def _hostlist_tokens(node_list: str) -> list[str]:
+    """Comma-separated hostlist tokens, keeping ``node[1-3,5]`` whole."""
+    tokens, depth, current = [], 0, ""
+    for char in node_list:
+        if char == "," and depth == 0:
+            tokens.append(current)
+            current = ""
+            continue
+        depth += {"[": 1, "]": -1}.get(char, 0)
+        current += char
+    tokens.append(current)
+    return tokens
+
+
+def _update_nodes(current: list[str], node_list: str) -> list[str]:
+    """``Nodes=`` of an update: a new list, or ``+``/``-`` tokens on the current one.
+
+    slurm://src/slurmctld/reservation.c#_get_update_node_bitmap: a first
+    token without a sign replaces the list; once signed, every token must
+    be; an unknown node fails the update.
+    """
+    tokens = _hostlist_tokens(node_list)
+    if not tokens or not tokens[0].startswith(("+", "-")):
+        return _resolve_nodes(node_list, "", False)[0]
+    known = set(cluster_model.all_nodes())
+    nodes = set(current)
+    for token in tokens:
+        if not token.startswith(("+", "-")):
+            raise ReservationError(ESLURM_INVALID_NODE_NAME)
+        names = cluster_model.expand_hostlist(token[1:])
+        if not names or any(n not in known for n in names):
+            raise ReservationError(ESLURM_INVALID_NODE_NAME)
+        nodes = nodes | set(names) if token[0] == "+" else nodes - set(names)
+    order = {n: i for i, n in enumerate(cluster_model.all_nodes())}
+    return sorted(nodes, key=order.__getitem__)
 
 
 def _resolve_nodes(node_list: str, partition: str, part_nodes: bool) -> tuple[list[str], str]:
@@ -641,11 +683,24 @@ def update_reservation(db: SlurmDatabase, desc: ReservationDesc, now: datetime) 
         raise ReservationError(ESLURM_INVALID_TIME_VALUE)
 
     if desc.node_list is not None:
-        nodes, extra = _resolve_nodes(desc.node_list, resv.partition, "PART_NODES" in resv.flags)
+        if {"REPLACE", "REPLACE_DOWN"} & set(resv.flags):
+            raise ReservationError(
+                ESLURM_NOT_SUPPORTED,
+                "Reservation can't be updated with Nodes option; it is incompatible with "
+                "REPLACE[_DOWN]",
+            )
+        if desc.node_list.upper() == "ALL":
+            nodes, extra = _resolve_nodes(
+                desc.node_list, resv.partition, "PART_NODES" in resv.flags
+            )
+        else:
+            nodes, extra = _update_nodes(resv.nodes, desc.node_list), ""
+            resv.flags = [f for f in resv.flags if f != "PART_NODES"]
         resv.nodes = nodes
         resv.flags = [f for f in resv.flags if f != "ALL_NODES"]
-        if extra:
-            resv.flags = order_flags([*resv.flags, extra])
+        if "SPEC_NODES" not in resv.flags:
+            resv.flags.append("SPEC_NODES")
+        resv.flags = order_flags([*resv.flags, extra] if extra else resv.flags)
     elif desc.node_cnt:
         start = resv.start_time or now
         end = resv.end_time or start + YEAR

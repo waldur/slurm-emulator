@@ -57,7 +57,8 @@ Intentional deviations (test fixture, not a scheduler):
 * No backfill planning and no priorities beyond submit order: every
   scheduling pass walks pending jobs FIFO and starts each one that fits now.
 * A node range (``nodes: "2-4"``) allocates the minimum; real Slurm may
-  grant up to the maximum when nodes are free.
+  grant up to the maximum when nodes are free, and a range is not checked
+  against the tasks at submit.
 * A job without ``time_limit`` is checked against a reservation for its
   emulated run length, not the partition MaxTime/a year
   (slurm://src/slurmctld/reservation.c#_get_job_duration), because the
@@ -495,6 +496,31 @@ def job_request(job: Job) -> JobRequest:
     per_node = min(math.ceil(total / nodes), NODE_CPUS)
     mem = job.memory_per_node or per_node * DEF_MEM_PER_CPU_MB
     return JobRequest(nodes, total, per_node, min(mem, NODE_MEM_MB))
+
+
+def request_fits(job: Job) -> bool:
+    """Whether any free cluster could ever run ``job``.
+
+    slurmctld test-schedules a submission and refuses one no node set can
+    satisfy -- more nodes than the partition has, more CPUs or memory per
+    node than a node has, or a fixed node count too small for its tasks --
+    with ``ESLURM_REQUESTED_NODE_CONFIG_UNAVAILABLE``
+    (slurm://src/slurmctld/job_mgr.c#job_allocate).
+    """
+    cpt = max(job.cpus_per_task or 1, 1)
+    part_nodes = len(partition_nodes(job.partition))
+    if cpt > NODE_CPUS or (job.memory_per_node or 0) > NODE_MEM_MB:
+        return False
+    if job.tasks_per_node and job.tasks_per_node * cpt > NODE_CPUS:
+        return False
+    nodes = max(job.node_count or 1, 1)
+    if job.tasks:
+        tasks_per_node = NODE_CPUS // cpt
+        needed = math.ceil(job.tasks / tasks_per_node)
+        if job.node_count and needed > job.node_count:
+            return False
+        nodes = max(nodes, needed)
+    return nodes <= part_nodes
 
 
 def _split(total: int, parts: int) -> list[int]:

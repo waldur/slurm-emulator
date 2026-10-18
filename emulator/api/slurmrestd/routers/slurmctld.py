@@ -58,6 +58,7 @@ from emulator.core.cluster_model import (
     expand_hostlist,
     job_may_access,
     node_views,
+    request_fits,
     sync_reservations,
 )
 from emulator.core.database import Job, SlurmDatabase
@@ -355,6 +356,13 @@ async def submit_job(
         gid=identity.gid if identity else None,
         group_name=identity.group if identity else "",
     )
+    if not request_fits(job):
+        errno = ESLURM_REQUESTED_NODE_CONFIG_UNAVAILABLE
+        return _respond(
+            request,
+            state,
+            errors=[slurm_error(strerror(errno), errno, "slurm_submit_batch_job()")],
+        )
     db.add_job(job)
     state.commit()
 
@@ -430,6 +438,8 @@ async def get_job(
 
 # slurm://slurm/slurm_errno.h#ESLURM_ACCESS_DENIED, slurm://slurm/slurm_errno.h#ESLURM_ALREADY_DONE
 ESLURM_ACCESS_DENIED = 2002
+# slurm://slurm/slurm_errno.h#ESLURM_REQUESTED_NODE_CONFIG_UNAVAILABLE
+ESLURM_REQUESTED_NODE_CONFIG_UNAVAILABLE = 2014
 ESLURM_ALREADY_DONE = 2021
 _SIGNAL_ERRORS = {
     ESLURM_ACCESS_DENIED: "Access/permission denied",
