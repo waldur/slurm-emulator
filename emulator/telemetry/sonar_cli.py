@@ -27,6 +27,7 @@ Timestamps are the wall clock, which the demo stack's emulator follows
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import sys
@@ -36,9 +37,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional, Protocol, TextIO
 
-from emulator.core import cluster_model
+from emulator.core import cluster_model, job_execution
 from emulator.core.database import SlurmDatabase
-from emulator.core.scheduler import expected_end
+from emulator.core.scheduler import advance_job_states, expected_end
+from emulator.core.time_engine import TimeEngine
 from emulator.telemetry import sonar
 
 STATE_FILE_NAME = "sonar-emulator.json"
@@ -328,6 +330,28 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _catch_up_running(database: SlurmDatabase) -> None:
+    """Take the running jobs from a caught-up copy of the state.
+
+    The emulator advances jobs only when something reads them, but a probe
+    on the node sees a running job whether or not anyone polls the
+    controller. The copy is advanced in memory without running batch
+    scripts and is never saved; finished jobs still come from the saved
+    accounting, so their exit codes are the ones the controller recorded.
+    """
+    live = copy.deepcopy(database)
+    saved = os.environ.get(job_execution.EXECUTE_ENV)
+    os.environ[job_execution.EXECUTE_ENV] = "0"
+    try:
+        advance_job_states(live, TimeEngine())
+    finally:
+        if saved is None:
+            os.environ.pop(job_execution.EXECUTE_ENV, None)
+        else:
+            os.environ[job_execution.EXECUTE_ENV] = saved
+    database.jobs = live.jobs
+
+
 def main(argv: Optional[list[str]] = None) -> None:
     args = _parser().parse_args(argv)
     state_path = Path(args.state_dir) / STATE_FILE_NAME
@@ -340,6 +364,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     while True:
         started = time.monotonic()
         database.load_state()
+        _catch_up_running(database)
         now = datetime.now(timezone.utc).replace(microsecond=0)
         stats = tick(
             sink, state, database, args.cluster, now, args.backfill_days, args.spacing, args.pause

@@ -531,3 +531,42 @@ def test_virtual_memory_stays_within_the_request():
         attrs = sonar.sample_attributes(CLUSTER, "node017", at, [run])
         total = sum(p["virtual_memory"] for p in attrs["jobs"][0]["processes"])
         assert total <= 125 * 1024 * 1024
+
+
+def test_running_job_is_seen_without_anyone_polling(state_env, monkeypatch):
+    """A probe sees a job run although no client has read it from the controller."""
+    from emulator.core.time_engine import TimeEngine  # noqa: PLC0415
+
+    monkeypatch.setenv("SLURM_EMULATOR_JOB_CLOCK", "time")
+    monkeypatch.setenv("SLURM_EMULATOR_JOB_RUN_DELAY", "60")
+    monkeypatch.setenv("SLURM_EMULATOR_JOB_RUN_DURATION", "3600")
+    monkeypatch.setenv("SLURM_EMULATOR_JOB_EXECUTE", "1")
+    start = datetime(2026, 10, 18, 9, 0, 0)
+    TimeEngine().set_time(start)
+    db = SlurmDatabase()
+    db.add_job(
+        Job(
+            job_id="7",
+            account="a",
+            user="alice",
+            state="PENDING",
+            partition="batch",
+            submit_time=start,
+            time_limit=120,
+        )
+    )
+    db.save_state()
+    TimeEngine().set_time(start + timedelta(minutes=10))
+
+    database = SlurmDatabase()
+    database.load_state()
+    assert database.jobs["7"].state == "PENDING"  # nothing advanced the file
+    sonar_cli._catch_up_running(database)
+    assert database.jobs["7"].state == "RUNNING"
+    stored = SlurmDatabase()
+    stored.load_state()
+    assert stored.jobs["7"].state == "PENDING"  # the probe never writes
+    assert database.usage_records == []
+    import os  # noqa: PLC0415
+
+    assert os.environ["SLURM_EMULATOR_JOB_EXECUTE"] == "1"
