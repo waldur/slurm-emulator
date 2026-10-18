@@ -12,7 +12,7 @@ Validates emulator parity with real Slurm (see docs/slurm-parity.md):
   blank (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_cluster_get_assocs).
 - ``modify account ... set parent=`` reparents the account-level
   association. A no-op change or a condition matching no account prints
-  "  Nothing modified" to stdout but exits 1 — the branch returns
+  " Modified account associations..." and "  Nothing modified" to stdout but exits 1 — the branch returns
   SLURM_ERROR (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account) and ``_modify_it()`` sets
   the global ``exit_code = 1`` on any non-SUCCESS error_code
   (slurm://src/sacctmgr/sacctmgr.c#_modify_it); a missing parent account is its own error with
@@ -121,7 +121,7 @@ class TestModifyAccountParent:
         out = em.handle_command(
             ["modify", "account", "where", "name=p-proj", "set", "parent=c-org"]
         )
-        assert out == "  Nothing modified"
+        assert out == " Modified account associations...\n  Nothing modified"
         # Real sacctmgr exits 1 here: the branch returns SLURM_ERROR
         # (slurm://src/sacctmgr/account_functions.c#sacctmgr_modify_account) and _modify_it() sets the global
         # exit_code on any non-SUCCESS error_code (slurm://src/sacctmgr/sacctmgr.c#_modify_it).
@@ -144,7 +144,7 @@ class TestModifyAccountParent:
         out = em.handle_command(
             ["modify", "account", "where", "name=p-ghost", "set", "parent=c-org"]
         )
-        assert out == "  Nothing modified"
+        assert out == " Modified account associations...\n  Nothing modified"
         assert em.exit_code == 1
 
     def test_where_name_filter_form_is_parsed(self, tmp_path):
@@ -199,22 +199,21 @@ class TestParentValueQuoteStripping:
         assert em.database.get_account("p-proj").parent == "c-new"
 
 
-class TestAddExistingAccountIsNotAnError:
-    """Re-adding an existing account must not set a non-zero exit code.
+class TestAddExistingAccount:
+    """Re-adding an existing account is SLURM_NO_CHANGE_IN_DATA.
 
-    Real sacctmgr reports SLURM_NO_CHANGE_IN_DATA and exits 0 in this case
-    (slurm://src/sacctmgr/account_functions.c#sacctmgr_add_account). Returning exit 1 here breaks idempotent
-    callers (e.g. the Waldur site agent's account provisioning), which is the
-    regression that the 0.5.2 exit-code work introduced.
+    slurmdbd answers ``Already existing account <a> on cluster <c>``
+    (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#"Already existing account"),
+    sacctmgr prints it on stdout and the command exits 1
+    (slurm://src/sacctmgr/account_functions.c#sacctmgr_add_account) -- what
+    real 26.05 does, recorded in tests/data/slurm_26.05_site_agent_cli.json.
     """
 
-    def test_readding_account_keeps_exit_code_zero(self, tmp_path):
+    def test_readding_account_reports_existing_and_exits_one(self, tmp_path):
         em = _emulator(tmp_path)
         out = em.handle_command(["add", "account", "c-org", "parent=root"])
-        # Exact SLURM_NO_CHANGE_IN_DATA shape: printf(" %s", slurm_strerror(rc))
-        # to stdout (slurm://src/sacctmgr/account_functions.c#sacctmgr_add_account, slurm://src/common/slurm_errno.c#SLURM_NO_CHANGE_IN_DATA).
-        assert out == " Data has not changed since time specified"
-        assert em.exit_code == 0
+        assert out == " Already existing account c-org on cluster default"
+        assert em.exit_code == 1
 
     def test_modify_parent_still_reports_failure(self, tmp_path):
         # Guard: the fix must not flatten the exit code for genuine failures.
@@ -279,7 +278,7 @@ class TestAccountNameCaseInsensitivity:
         out = em.handle_command(
             ["modify", "account", "where", "name=2026_00A", "set", "parent=C-ORG"]
         )
-        assert out == "  Nothing modified"
+        assert out == " Modified account associations...\n  Nothing modified"
         assert em.exit_code == 1
 
     def test_add_user_under_mixed_case_account(self, tmp_path):
@@ -295,6 +294,6 @@ class TestAccountNameCaseInsensitivity:
         em.handle_command(["add", "account", "2026_00a", "parent=c-org"])
         out = em.handle_command(["add", "account", "2026_00A", "parent=c-org"])
         # Case-insensitive uniqueness: the second add is a no-op, not a dup.
-        assert out == " Data has not changed since time specified"
-        assert em.exit_code == 0
+        assert out == " Already existing account 2026_00a on cluster default"
+        assert em.exit_code == 1
         assert sum(1 for a in em.database.list_accounts() if a.name == "2026_00a") == 1

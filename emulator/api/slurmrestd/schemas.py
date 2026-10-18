@@ -25,6 +25,7 @@ from emulator.commands.sacct import (
     _convert_exact,
 )
 from emulator.core import exit_status, job_execution
+from emulator.core.assoc_view import effective_assoc
 from emulator.core.cluster_model import (
     DEF_MEM_PER_CPU_MB,
     GPU_MEM_MB,
@@ -183,80 +184,6 @@ def _lineage(assoc: Association, account: Optional[Account]) -> str:
     return path
 
 
-def _row_values(
-    assoc: Association, account: Optional[Account]
-) -> tuple[dict[str, int], list[str], str]:
-    """The limits, QoS list and default QoS stored on this row itself.
-
-    The account-level row keeps them on the Account record (where sacctmgr
-    writes them), a user row on its Association.
-    """
-    if not assoc.user:
-        if account is None:
-            return {}, [], ""
-        return account.limits, [q for q in account.qos.split(",") if q], account.default_qos
-    return assoc.limits, list(assoc.qos_list), assoc.def_qos
-
-
-def _ancestors(
-    assoc: Association, account: Optional[Account], accounts: Optional[dict[str, Account]]
-) -> list[Account]:
-    """Account rows above this row, nearest first (the user row's own account first)."""
-    chain: list[Account] = []
-    current = account if assoc.user else None
-    if not assoc.user and account is not None and account.parent and accounts is not None:
-        current = accounts.get(account.parent)
-    while current is not None and current not in chain:
-        chain.append(current)
-        if not current.parent or accounts is None:
-            break
-        current = accounts.get(current.parent)
-    return chain
-
-
-# Limits a row without its own value takes from the rows above it; Grp*
-# limits and shares are the row's own only
-# (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_cluster_get_assocs).
-_INHERITED_TRES = ("MaxTRES", "MaxTRESPerNode", "MaxTRESMins", "MaxTRESRunMins")
-_INHERITED_SCALARS = (
-    "MaxJobs",
-    "MaxJobsAccrue",
-    "MaxSubmitJobs",
-    "MaxWall",
-    "Priority",
-    "MinPrioThresh",
-)
-
-
-def effective_assoc(
-    assoc: Association, account: Optional[Account], accounts: Optional[dict[str, Account]] = None
-) -> dict[str, Any]:
-    """The row as slurmdbd returns it: own values, inherited ones filled in."""
-    limits, qos_list, def_qos = _row_values(assoc, account)
-    chain = _ancestors(assoc, account, accounts)
-    tres = {
-        prefix: _limits_tres(limits, prefix)
-        for prefix in ("GrpTRES", "GrpTRESMins", "GrpTRESRunMins", *_INHERITED_TRES)
-    }
-    scalars: dict[str, Optional[int]] = {
-        key: limits.get(key)
-        for key in ("GrpJobs", "GrpJobsAccrue", "GrpSubmitJobs", "GrpWall", *_INHERITED_SCALARS)
-    }
-    for parent in chain:
-        for prefix in _INHERITED_TRES:
-            # slurmdb_combine_tres_strings: the nearest value per TRES wins.
-            for tres_type, count in _limits_tres(parent.limits, prefix).items():
-                tres[prefix].setdefault(tres_type, count)
-        for key in _INHERITED_SCALARS:
-            if scalars[key] is None and key in parent.limits:
-                scalars[key] = parent.limits[key]
-        if not qos_list:
-            qos_list = [q for q in parent.qos.split(",") if q]
-        if not def_qos:
-            def_qos = parent.default_qos
-    return {"tres": tres, "scalars": scalars, "qos": qos_list, "def_qos": def_qos}
-
-
 def _no_val(value: Optional[int]) -> dict[str, Any]:
     return uint_no_val(value) if value is not None else uint_no_val(infinite=True)
 
@@ -271,17 +198,18 @@ def assoc_to_dict(
     view = effective_assoc(assoc, account, accounts)
     tres = {key: tres_list_from_dict(values) for key, values in view["tres"].items()}
     scalars = view["scalars"]
-    if assoc.user:
-        shares = assoc.fairshare
-    else:
-        shares = account.fairshare if account else 1
+    shares = view["shares"]
     return {
         "accounting": [],
         "account": assoc.account,
         "user": assoc.user,
         "cluster": assoc.cluster,
         "partition": assoc.partition or "",
-        "parent_account": assoc.parent or "",
+        # Account rows name their parent, ``root`` for a top-level account;
+        # user rows leave it empty.
+        "parent_account": (
+            "" if assoc.user or assoc.account == "root" else (assoc.parent or "root")
+        ),
         "is_default": is_default,
         "lineage": _lineage(assoc, account),
         "qos": view["qos"],

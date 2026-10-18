@@ -34,7 +34,6 @@ from emulator.api.slurmrestd.schemas import (
     account_to_dict,
     assoc_to_dict,
     dbd_job_to_dict,
-    effective_assoc,
     qos_to_dict,
     tres_entry,
     tres_list_from_str,
@@ -46,6 +45,7 @@ from emulator.api.slurmrestd.unknown_fields import unknown_field_warnings
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacct import _Config as SacctConfig
 from emulator.commands.slurm_time import ParseTimeError, parse_time_spec
+from emulator.core.assoc_view import effective_assoc
 from emulator.core.database import QOS, Association, fold_account
 from emulator.core.scheduler import advance_job_states
 from emulator.core.tres import DYNAMIC_TRES_FIRST_ID

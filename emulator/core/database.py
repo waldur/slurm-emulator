@@ -417,6 +417,9 @@ class SlurmDatabase:
         )
 
         self._seed_root("default")
+        # slurmdbd creates the ``normal`` QoS when it builds its tables
+        # (slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#"Normal QOS default").
+        self.qos_list["normal"] = QOS(name="normal")
         self._apply_cluster_name_env()
 
     def _apply_cluster_name_env(self) -> None:
@@ -450,7 +453,9 @@ class SlurmDatabase:
         be refused under AccountingStorageEnforce=associations.
         """
         if "root" not in self.accounts:
-            self.add_account("root", "Root account", "system")
+            # Description and organization as slurmdbd writes them
+            # (slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#"default root account").
+            self.add_account("root", "default root account", "root")
         if "root" not in self.users:
             self.add_user("root", "root")
         for user in ("", "root"):
@@ -959,7 +964,7 @@ class SlurmDatabase:
         plus common HPC classes so accounts can be assigned meaningful QoS out
         of the box. Returns True if it seeded anything.
         """
-        if self.qos_list:
+        if set(self.qos_list) - {"normal"}:
             return False
         defaults = [
             QOS(name="normal", max_wall="7-00:00:00"),

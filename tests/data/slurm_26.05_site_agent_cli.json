@@ -1,0 +1,1871 @@
+{
+ "source": "Slurm 26.05 (26.05.6-0pre1) built from SchedMD/slurm, slurmctld + slurmdbd (MariaDB) in a fresh container: cluster demo, partitions debug=node[001-002] gpu=node[003-004], Linux users alice bob carol; commands run as root in order, argv exactly as the waldur-site-agent SLURM plugin sends it.",
+ "cases": [
+  {
+   "name": "sinfo -V",
+   "argv": [
+    "sinfo",
+    "-V"
+   ],
+   "expect": {
+    "stdout": "slurm 26.05.6-0pre1\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr --version",
+   "argv": [
+    "sacctmgr",
+    "--version"
+   ],
+   "expect": {
+    "stdout": "slurm 26.05.6-0pre1\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list tres",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "tres"
+   ],
+   "expect": {
+    "stdout": "cpu||1\nmem||2\nenergy||3\nnode||4\nbilling||5\nfs|disk|6\nvmem||7\npages||8\ngres|gpu|1001\ngres|gpumem|1002\ngres|gpuutil|1003\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list cluster format=cluster",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "cluster",
+    "format=cluster"
+   ],
+   "expect": {
+    "stdout": "demo\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list account cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "account",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "root|default root account|root\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr add account org_a description=\"Org A\" organization=\"org_a\" cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "add",
+    "account",
+    "org_a",
+    "description=\"Org A\"",
+    "organization=\"org_a\"",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Adding Account(s)\n  org_a\n Settings\n  Description     = org a\n  Organization    = org_a\n Associations =\n  C = demo       A = org_a               \n Settings\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr add account alloc_a description=\"Alloc A\" organization=\"org_a\" parent=\"org_a\" cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "add",
+    "account",
+    "alloc_a",
+    "description=\"Alloc A\"",
+    "organization=\"org_a\"",
+    "parent=\"org_a\"",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Adding Account(s)\n  alloc_a\n Settings\n  Description     = alloc a\n  Organization    = org_a\n Associations =\n  C = demo       A = alloc_a             \n Settings\n  Parent        = org_a\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr add account alloc_b description=\"Alloc B\" organization=\"org_a\" parent=\"org_a\" cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "add",
+    "account",
+    "alloc_b",
+    "description=\"Alloc B\"",
+    "organization=\"org_a\"",
+    "parent=\"org_a\"",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Adding Account(s)\n  alloc_b\n Settings\n  Description     = alloc b\n  Organization    = org_a\n Associations =\n  C = demo       A = alloc_b             \n Settings\n  Parent        = org_a\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr add account alloc_a description=\"Alloc A\" organization=\"org_a\" parent=\"org_a\" cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "add",
+    "account",
+    "alloc_a",
+    "description=\"Alloc A\"",
+    "organization=\"org_a\"",
+    "parent=\"org_a\"",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Already existing account alloc_a on cluster demo\n",
+    "stderr": "",
+    "exit": 1
+   }
+  },
+  {
+   "name": "sacctmgr show account alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "account",
+    "alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a|alloc a|org_a\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show account nope cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "account",
+    "nope",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list account cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "account",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a|alloc a|org_a\nalloc_b|alloc b|org_a\norg_a|org a|org_a\nroot|default root account|root\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show assoc account=alloc_a format=Account,ParentName,User -n -P cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "assoc",
+    "account=alloc_a",
+    "format=Account,ParentName,User",
+    "-n",
+    "-P",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a|org_a|\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account where name=alloc_b cluster=demo set parent=root",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "where",
+    "name=alloc_b",
+    "cluster=demo",
+    "set",
+    "parent=root"
+   ],
+   "expect": {
+    "stdout": " Modified account associations...\n  C = demo       A = alloc_b of org_a\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show assoc account=alloc_b format=Account,ParentName,User -n -P cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "assoc",
+    "account=alloc_b",
+    "format=Account,ParentName,User",
+    "-n",
+    "-P",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_b|root|\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account where name=alloc_b cluster=demo set parent=org_a",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "where",
+    "name=alloc_b",
+    "cluster=demo",
+    "set",
+    "parent=org_a"
+   ],
+   "expect": {
+    "stdout": " Modified account associations...\n  C = demo       A = alloc_b of root\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show assoc account=nope format=Account,ParentName,User -n -P cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "assoc",
+    "account=nope",
+    "format=Account,ParentName,User",
+    "-n",
+    "-P",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association where account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "association",
+    "where",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "demo|alloc_a|||1|||||||||||||normal||\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr add user alice account=alloc_a DefaultAccount=alloc_a Share=parent cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "add",
+    "user",
+    "alice",
+    "account=alloc_a",
+    "DefaultAccount=alloc_a",
+    "Share=parent",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Adding User(s)\n  alice\n Settings\n  Default Account = alloc_a\n Associations =\n  C = demo       A = alloc_a              U = alice    \n Non Default Settings\n  Fairshare     = parent\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr add user bob account=alloc_a Share=parent cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "add",
+    "user",
+    "bob",
+    "account=alloc_a",
+    "Share=parent",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Adding User(s)\n  bob\n Settings\n Associations =\n  C = demo       A = alloc_a              U = bob      \n Non Default Settings\n  Fairshare     = parent\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr add user alice account=alloc_a Share=parent cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "add",
+    "user",
+    "alice",
+    "account=alloc_a",
+    "Share=parent",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "Request didn't affect anything\nNothing added.\nMake sure the accounts requested here have been added to the system/cluster. (sacctmgr add account...)\n",
+    "stderr": "",
+    "exit": 1
+   }
+  },
+  {
+   "name": "sacctmgr add user alice account=alloc_b Partition=debug cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "add",
+    "user",
+    "alice",
+    "account=alloc_b",
+    "Partition=debug",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Associations =\n  C = demo       A = alloc_b              U = alice     P = debug\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr add user carol account=alloc_b DefaultAccount=alloc_b Partitions=debug,gpu Share=parent cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "add",
+    "user",
+    "carol",
+    "account=alloc_b",
+    "DefaultAccount=alloc_b",
+    "Partitions=debug,gpu",
+    "Share=parent",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Adding User(s)\n  carol\n Settings\n  Default Account = alloc_b\n Associations =\n  C = demo       A = alloc_b              U = carol     P = debug\n  C = demo       A = alloc_b              U = carol     P = gpu\n Non Default Settings\n  Fairshare     = parent\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association where user=alice account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "association",
+    "where",
+    "user=alice",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "demo|alloc_a|alice||parent|||||||||||||normal||\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association where user=nobody account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "association",
+    "where",
+    "user=nobody",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list associations format=account,user where account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "associations",
+    "format=account,user",
+    "where",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a|\nalloc_a|alice\nalloc_a|bob\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list associations format=account,user where account=alloc_b cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "associations",
+    "format=account,user",
+    "where",
+    "account=alloc_b",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_b|\nalloc_b|alice\nalloc_b|carol\nalloc_b|carol\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association where account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "association",
+    "where",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "demo|alloc_a|||1|||||||||||||normal||\ndemo|alloc_a|alice||parent|||||||||||||normal||\ndemo|alloc_a|bob||parent|||||||||||||normal||\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association where user=alice format=user,account cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "association",
+    "where",
+    "user=alice",
+    "format=user,account",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alice|alloc_a\nalice|alloc_b\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association where user=nobody format=user,account cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "association",
+    "where",
+    "user=nobody",
+    "format=user,account",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show user where name=alice format=user,defaultaccount cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "user",
+    "where",
+    "name=alice",
+    "format=user,defaultaccount",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alice|alloc_a\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show user where name=nobody format=user,defaultaccount cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "user",
+    "where",
+    "name=nobody",
+    "format=user,defaultaccount",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify user where name=alice cluster=demo set DefaultAccount=alloc_b",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "user",
+    "where",
+    "name=alice",
+    "cluster=demo",
+    "set",
+    "DefaultAccount=alloc_b"
+   ],
+   "expect": {
+    "stdout": " Modified users...\n  alice\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show user where name=alice format=user,defaultaccount cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "user",
+    "where",
+    "name=alice",
+    "format=user,defaultaccount",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alice|alloc_b\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account alloc_a cluster=demo set GrpTRESMins=cpu=1000,gres/gpu=10,mem=2000",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "alloc_a",
+    "cluster=demo",
+    "set",
+    "GrpTRESMins=cpu=1000,gres/gpu=10,mem=2000"
+   ],
+   "expect": {
+    "stdout": " Modified account associations...\n  C = demo       A = alloc_a of org_a\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association format=account,GrpTRESMins where accounts=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "show",
+    "association",
+    "format=account,GrpTRESMins",
+    "where",
+    "accounts=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a|cpu=1000,gres/gpu=10,mem=2000M\nalloc_a|\nalloc_a|\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list tres",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "tres"
+   ],
+   "expect": {
+    "stdout": "cpu||1\nmem||2\nenergy||3\nnode||4\nbilling||5\nfs|disk|6\nvmem||7\npages||8\ngres|gpu|1001\ngres|gpumem|1002\ngres|gpuutil|1003\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify user alice where account=alloc_a cluster=demo set MaxTRESMins=cpu=500,mem=-1,energy=-1,node=-1,billing=-",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "user",
+    "alice",
+    "where",
+    "account=alloc_a",
+    "cluster=demo",
+    "set",
+    "MaxTRESMins=cpu=500,mem=-1,energy=-1,node=-1,billing=-1,fs/disk=-1,vmem=-1,pages=-1,gres/gpu=-1,gres/gpumem=-1,gres/gpuutil=-1"
+   ],
+   "expect": {
+    "stdout": " Modified user associations...\n  C = demo       A = alloc_a              U = alice    \n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association where accounts=alloc_a format=Account,MaxTRESMins,User cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "show",
+    "association",
+    "where",
+    "accounts=alloc_a",
+    "format=Account,MaxTRESMins,User",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a||\nalloc_a|cpu=500|alice\nalloc_a||bob\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account alloc_b cluster=demo set GrpTRES=cpu=64",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "alloc_b",
+    "cluster=demo",
+    "set",
+    "GrpTRES=cpu=64"
+   ],
+   "expect": {
+    "stdout": " Modified account associations...\n  C = demo       A = alloc_b of org_a\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account alloc_b cluster=demo set GrpTRES=gres/gpu=2",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "alloc_b",
+    "cluster=demo",
+    "set",
+    "GrpTRES=gres/gpu=2"
+   ],
+   "expect": {
+    "stdout": " Modified account associations...\n  C = demo       A = alloc_b of org_a\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account alloc_b cluster=demo set MaxTRES=cpu=32",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "alloc_b",
+    "cluster=demo",
+    "set",
+    "MaxTRES=cpu=32"
+   ],
+   "expect": {
+    "stdout": " Modified account associations...\n  C = demo       A = alloc_b of org_a\n  C = demo       A = alloc_b              U = alice     P = debug\n  C = demo       A = alloc_b              U = carol     P = debug\n  C = demo       A = alloc_b              U = carol     P = gpu\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list account format=account,grptres,grptresmin,maxtres,maxtresmin where account=alloc_b cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "account",
+    "format=account,grptres,grptresmin,maxtres,maxtresmin",
+    "where",
+    "account=alloc_b",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_b||||\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account alloc_a cluster=demo set fairshare=10",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "alloc_a",
+    "cluster=demo",
+    "set",
+    "fairshare=10"
+   ],
+   "expect": {
+    "stdout": " Modified account associations...\n  C = demo       A = alloc_a of org_a\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list account format=account,fairshare where account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "account",
+    "format=account,fairshare",
+    "where",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a|\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account alloc_a cluster=demo set GrpSubmitJobs=50",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "alloc_a",
+    "cluster=demo",
+    "set",
+    "GrpSubmitJobs=50"
+   ],
+   "expect": {
+    "stdout": " Modified account associations...\n  C = demo       A = alloc_a of org_a\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list account format=account,grptres,grptresmin,maxtres,maxtresmin where account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "account",
+    "format=account,grptres,grptresmin,maxtres,maxtresmin",
+    "where",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a||||\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show qos q_slow",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "qos",
+    "q_slow"
+   ],
+   "expect": {
+    "stdout": "",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr add qos q_slow set flags=['DenyOnLimit']",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "add",
+    "qos",
+    "q_slow",
+    "set",
+    "flags=['DenyOnLimit']"
+   ],
+   "expect": {
+    "stdout": " Unknown QOS flag used in:\n  '['DenyOnLimit']'\n Valid QOS flags are\n  'DenyOnLimit,EnforceUsageThreshold,PartitionMinNodes,PartitionMaxNodes,PartitionTimeLimit,RequiresReservation,OverPartQOS,NoReserve,NoDecay,Relative,UsageFactorSafe'\n",
+    "stderr": "",
+    "exit": 1
+   }
+  },
+  {
+   "name": "sacctmgr show qos q_slow",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "qos",
+    "q_slow"
+   ],
+   "expect": {
+    "stdout": "",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr add qos q_slow",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "add",
+    "qos",
+    "q_slow"
+   ],
+   "expect": {
+    "stdout": " Adding QOS(s)\n  q_slow\n Settings\n  Description    = q_slow\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify qos q_slow set GrpTRESMins=cpu=6000,gres/gpu=60",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "qos",
+    "q_slow",
+    "set",
+    "GrpTRESMins=cpu=6000,gres/gpu=60"
+   ],
+   "expect": {
+    "stdout": " Modified qos...\n  q_slow\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show qos q_slow format=Name,GrpTRESMins",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "show",
+    "qos",
+    "q_slow",
+    "format=Name,GrpTRESMins"
+   ],
+   "expect": {
+    "stdout": "q_slow|cpu=6000,gres/gpu=60\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show qos nope format=Name,GrpTRESMins",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "show",
+    "qos",
+    "nope",
+    "format=Name,GrpTRESMins"
+   ],
+   "expect": {
+    "stdout": "",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list associations format=account,qos where account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "associations",
+    "format=account,qos",
+    "where",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a|normal\nalloc_a|normal\nalloc_a|normal\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list associations format=account,defaultqos where account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "associations",
+    "format=account,defaultqos",
+    "where",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a|\nalloc_a|\nalloc_a|\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account cluster=demo set qos+=q_slow where account=alloc_a",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "cluster=demo",
+    "set",
+    "qos+=q_slow",
+    "where",
+    "account=alloc_a"
+   ],
+   "expect": {
+    "stdout": " Modified account associations...\n  C = demo       A = alloc_a of org_a\n  C = demo       A = alloc_a              U = alice    \n  C = demo       A = alloc_a              U = bob      \n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list associations format=account,qos where account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "associations",
+    "format=account,qos",
+    "where",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a|normal,q_slow\nalloc_a|normal,q_slow\nalloc_a|normal,q_slow\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account cluster=demo set defaultqos=q_slow where account=alloc_a",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "cluster=demo",
+    "set",
+    "defaultqos=q_slow",
+    "where",
+    "account=alloc_a"
+   ],
+   "expect": {
+    "stdout": " Modified account associations...\n  C = demo       A = alloc_a of org_a\n  C = demo       A = alloc_a              U = alice    \n  C = demo       A = alloc_a              U = bob      \n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list associations format=account,defaultqos where account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "associations",
+    "format=account,defaultqos",
+    "where",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a|q_slow\nalloc_a|q_slow\nalloc_a|q_slow\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account alloc_b cluster=demo set qos=normal,q_slow",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "alloc_b",
+    "cluster=demo",
+    "set",
+    "qos=normal,q_slow"
+   ],
+   "expect": {
+    "stdout": " Modified account associations...\n  C = demo       A = alloc_b of org_a\n  C = demo       A = alloc_b              U = alice     P = debug\n  C = demo       A = alloc_b              U = carol     P = debug\n  C = demo       A = alloc_b              U = carol     P = gpu\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account alloc_b cluster=demo set qos=q_slow defaultqos=q_slow",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "alloc_b",
+    "cluster=demo",
+    "set",
+    "qos=q_slow",
+    "defaultqos=q_slow"
+   ],
+   "expect": {
+    "stdout": " Modified account associations...\n  C = demo       A = alloc_b of org_a\n  C = demo       A = alloc_b              U = alice     P = debug\n  C = demo       A = alloc_b              U = carol     P = debug\n  C = demo       A = alloc_b              U = carol     P = gpu\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list associations format=account,qos where account=alloc_b cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "associations",
+    "format=account,qos",
+    "where",
+    "account=alloc_b",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_b|q_slow\nalloc_b|q_slow\nalloc_b|q_slow\nalloc_b|q_slow\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list associations format=account,defaultqos where account=alloc_b cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "associations",
+    "format=account,defaultqos",
+    "where",
+    "account=alloc_b",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_b|q_slow\nalloc_b|q_slow\nalloc_b|q_slow\nalloc_b|q_slow\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr add user bob account=alloc_b Partitions=debug QosLevel=normal,q_slow DefaultQOS=normal Share=parent cluster=dem",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "add",
+    "user",
+    "bob",
+    "account=alloc_b",
+    "Partitions=debug",
+    "QosLevel=normal,q_slow",
+    "DefaultQOS=normal",
+    "Share=parent",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Associations =\n  C = demo       A = alloc_b              U = bob       P = debug\n Non Default Settings\n  Fairshare     = parent\n  QOS           = normal,q_slow\n  DefQOS        = normal\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list associations format=account,user where account=alloc_b cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "associations",
+    "format=account,user",
+    "where",
+    "account=alloc_b",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_b|\nalloc_b|alice\nalloc_b|bob\nalloc_b|carol\nalloc_b|carol\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify qos q_slow set RawUsage=0",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "qos",
+    "q_slow",
+    "set",
+    "RawUsage=0"
+   ],
+   "expect": {
+    "stdout": "No cluster specified, resetting on local cluster demo\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify account alloc_a cluster=demo set RawUsage=0",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "account",
+    "alloc_a",
+    "cluster=demo",
+    "set",
+    "RawUsage=0"
+   ],
+   "expect": {
+    "stdout": "",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association where user=bob format=user,account cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "association",
+    "where",
+    "user=bob",
+    "format=user,account",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "bob|alloc_a\nbob|alloc_b\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show user where name=bob format=user,defaultaccount cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "user",
+    "where",
+    "name=bob",
+    "format=user,defaultaccount",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "bob|alloc_a\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify user where name=bob cluster=demo set DefaultAccount=alloc_b",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "user",
+    "where",
+    "name=bob",
+    "cluster=demo",
+    "set",
+    "DefaultAccount=alloc_b"
+   ],
+   "expect": {
+    "stdout": " Modified users...\n  bob\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr remove user where name=bob and account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "remove",
+    "user",
+    "where",
+    "name=bob",
+    "and",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Deleting user associations...\n  C = demo       A = alloc_a    U = bob      \n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association where user=bob format=user,account cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "association",
+    "where",
+    "user=bob",
+    "format=user,account",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "bob|alloc_b\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show user where name=bob format=user,defaultaccount cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "user",
+    "where",
+    "name=bob",
+    "format=user,defaultaccount",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "bob|alloc_b\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr remove user where name=bob and account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "remove",
+    "user",
+    "where",
+    "name=bob",
+    "and",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Nothing deleted\n",
+    "stderr": "",
+    "exit": 1
+   }
+  },
+  {
+   "name": "sacctmgr list associations format=account,user where account=alloc_a cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "associations",
+    "format=account,user",
+    "where",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a|\nalloc_a|alice\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list associations format=account,user where account=alloc_b cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "associations",
+    "format=account,user",
+    "where",
+    "account=alloc_b",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_b|\nalloc_b|alice\nalloc_b|bob\nalloc_b|carol\nalloc_b|carol\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show user where name=alice format=user,defaultaccount cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "user",
+    "where",
+    "name=alice",
+    "format=user,defaultaccount",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alice|alloc_b\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association where user=alice format=user,account cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "association",
+    "where",
+    "user=alice",
+    "format=user,account",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alice|alloc_a\nalice|alloc_b\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr modify user where name=alice cluster=demo set DefaultAccount=alloc_a",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "modify",
+    "user",
+    "where",
+    "name=alice",
+    "cluster=demo",
+    "set",
+    "DefaultAccount=alloc_a"
+   ],
+   "expect": {
+    "stdout": " Modified users...\n  alice\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show user where name=bob format=user,defaultaccount cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "user",
+    "where",
+    "name=bob",
+    "format=user,defaultaccount",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "bob|alloc_b\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association where user=bob format=user,account cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "association",
+    "where",
+    "user=bob",
+    "format=user,account",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "bob|alloc_b\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show user where name=carol format=user,defaultaccount cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "user",
+    "where",
+    "name=carol",
+    "format=user,defaultaccount",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "carol|alloc_b\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr show association where user=carol format=user,account cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "association",
+    "where",
+    "user=carol",
+    "format=user,account",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "carol|alloc_b\ncarol|alloc_b\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr remove user where account=alloc_b cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "remove",
+    "user",
+    "where",
+    "account=alloc_b",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Deleting user associations...\n  C = demo       A = alloc_b    U = alice     P = debug\n  C = demo       A = alloc_b    U = bob       P = debug\n  C = demo       A = alloc_b    U = carol     P = debug\n  C = demo       A = alloc_b    U = carol     P = gpu\n Deleting users (No Associations)...\n  bob\n  carol\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr list associations format=account,user where account=alloc_b cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "associations",
+    "format=account,user",
+    "where",
+    "account=alloc_b",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_b|\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr remove user where name=carol cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "remove",
+    "user",
+    "where",
+    "name=carol",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Nothing deleted\n",
+    "stderr": "",
+    "exit": 1
+   }
+  },
+  {
+   "name": "sacctmgr remove account where name=alloc_b cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "remove",
+    "account",
+    "where",
+    "name=alloc_b",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Deleting account associations...\n  C = demo       A = alloc_b of org_a\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "sacctmgr remove account where name=alloc_b cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "remove",
+    "account",
+    "where",
+    "name=alloc_b",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": " Nothing deleted\n",
+    "stderr": "",
+    "exit": 1
+   }
+  },
+  {
+   "name": "sacctmgr remove qos where name=q_slow",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "remove",
+    "qos",
+    "where",
+    "name=q_slow"
+   ],
+   "expect": {
+    "stdout": "",
+    "stderr": " Associations listed below have these as their Default QOS.\n  DefQOS = q_slow     C = demo       A = alloc_a             \n Please either remove the qos' listed above from list and resubmit,\n or change the default qos to remove the qos.\n Changes Discarded\n",
+    "exit": 1
+   }
+  },
+  {
+   "name": "sacctmgr list account cluster=demo",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "account",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a|alloc a|org_a\nalloc_b|alloc b|org_a\norg_a|org a|org_a\nroot|default root account|root\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "list account withassoc fairshare/limits",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "account",
+    "withassoc",
+    "format=account,user,fairshare,grptres,grptresmins,maxtres,maxtresmins",
+    "where",
+    "account=alloc_a",
+    "cluster=demo"
+   ],
+   "expect": {
+    "stdout": "alloc_a||10||cpu=1000,gres/gpu=10,mem=2000M||\nalloc_a|alice|parent||||cpu=500\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "show qos list",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "show",
+    "qos",
+    "format=name"
+   ],
+   "expect": {
+    "stdout": "normal\nq_slow\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "remove qos missing",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "remove",
+    "qos",
+    "where",
+    "name=nope"
+   ],
+   "expect": {
+    "stdout": "  Nothing deleted\n",
+    "stderr": "",
+    "exit": 1
+   }
+  },
+  {
+   "name": "list account sorted",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "account",
+    "format=account,descr,org"
+   ],
+   "expect": {
+    "stdout": "alloc_a|alloc a|org_a\nalloc_b|alloc b|org_a\norg_a|org a|org_a\nroot|default root account|root\n",
+    "stderr": "",
+    "exit": 0
+   }
+  },
+  {
+   "name": "list clusters",
+   "argv": [
+    "sacctmgr",
+    "--parsable2",
+    "--noheader",
+    "--immediate",
+    "list",
+    "cluster",
+    "format=cluster"
+   ],
+   "expect": {
+    "stdout": "demo\n",
+    "stderr": "",
+    "exit": 0
+   }
+  }
+ ]
+}
