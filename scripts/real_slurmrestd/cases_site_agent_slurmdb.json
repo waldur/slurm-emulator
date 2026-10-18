@@ -1,0 +1,1088 @@
+[
+ {
+  "name": "add accounts",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/accounts_association/",
+  "body": {
+   "association_condition": {
+    "accounts": [
+     "e_a1",
+     "e_a2"
+    ],
+    "clusters": [
+     "demo"
+    ]
+   },
+   "account": {
+    "description": "e test",
+    "organization": "e_org"
+   }
+  }
+ },
+ {
+  "name": "account rows",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a1&cluster=demo",
+  "pick": [
+   "associations.*.account",
+   "associations.*.user",
+   "associations.*.partition",
+   "associations.*.qos",
+   "associations.*.default.qos",
+   "associations.*.shares_raw",
+   "associations.*.max.tres.total",
+   "associations.*.max.tres.group.minutes",
+   "associations.*.max.tres.per.job",
+   "associations.*.max.tres.minutes.per.job",
+   "associations.*.max.jobs.per.submitted",
+   "associations.*.is_default"
+  ]
+ },
+ {
+  "name": "users_association without user",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users_association/",
+  "body": {
+   "association_condition": {
+    "users": [
+     "e_u1"
+    ],
+    "accounts": [
+     "e_a1"
+    ],
+    "clusters": [
+     "demo"
+    ]
+   }
+  }
+ },
+ {
+  "name": "users_association user={}",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users_association/",
+  "body": {
+   "association_condition": {
+    "users": [
+     "e_u1"
+    ],
+    "accounts": [
+     "e_a1"
+    ],
+    "clusters": [
+     "demo"
+    ]
+   },
+   "user": {}
+  }
+ },
+ {
+  "name": "users_association again",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users_association/",
+  "body": {
+   "association_condition": {
+    "users": [
+     "e_u1"
+    ],
+    "accounts": [
+     "e_a1"
+    ],
+    "clusters": [
+     "demo"
+    ]
+   },
+   "user": {}
+  }
+ },
+ {
+  "name": "users_association default.account (nested)",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users_association/",
+  "body": {
+   "association_condition": {
+    "users": [
+     "e_u2"
+    ],
+    "accounts": [
+     "e_a1",
+     "e_a2"
+    ],
+    "clusters": [
+     "demo"
+    ]
+   },
+   "user": {
+    "default": {
+     "account": "e_a2"
+    }
+   }
+  }
+ },
+ {
+  "name": "users_association defaultaccount",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users_association/",
+  "body": {
+   "association_condition": {
+    "users": [
+     "e_u3"
+    ],
+    "accounts": [
+     "e_a1",
+     "e_a2"
+    ],
+    "clusters": [
+     "demo"
+    ]
+   },
+   "user": {
+    "defaultaccount": "e_a2"
+   }
+  }
+ },
+ {
+  "name": "users_association qoslevel string",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users_association/",
+  "body": {
+   "association_condition": {
+    "users": [
+     "e_u4"
+    ],
+    "accounts": [
+     "e_a1"
+    ],
+    "clusters": [
+     "demo"
+    ],
+    "partitions": [
+     "debug"
+    ],
+    "association": {
+     "qoslevel": "normal",
+     "defaultqos": "normal"
+    }
+   },
+   "user": {}
+  }
+ },
+ {
+  "name": "users_association qoslevel list",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users_association/",
+  "body": {
+   "association_condition": {
+    "users": [
+     "e_u5"
+    ],
+    "accounts": [
+     "e_a1"
+    ],
+    "clusters": [
+     "demo"
+    ],
+    "partitions": [
+     "debug"
+    ],
+    "association": {
+     "qoslevel": [
+      "normal"
+     ],
+     "defaultqos": "normal"
+    }
+   },
+   "user": {}
+  }
+ },
+ {
+  "name": "users_association fairshare parent",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users_association/",
+  "body": {
+   "association_condition": {
+    "users": [
+     "e_u6"
+    ],
+    "accounts": [
+     "e_a2"
+    ],
+    "clusters": [
+     "demo"
+    ],
+    "association": {
+     "fairshare": 2147483647
+    }
+   },
+   "user": {}
+  }
+ },
+ {
+  "name": "e_a1 rows",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a1&cluster=demo",
+  "pick": [
+   "associations.*.account",
+   "associations.*.user",
+   "associations.*.partition",
+   "associations.*.qos",
+   "associations.*.default.qos",
+   "associations.*.shares_raw",
+   "associations.*.max.tres.total",
+   "associations.*.max.tres.group.minutes",
+   "associations.*.max.tres.per.job",
+   "associations.*.max.tres.minutes.per.job",
+   "associations.*.max.jobs.per.submitted",
+   "associations.*.is_default"
+  ]
+ },
+ {
+  "name": "user e_u2",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/user/e_u2",
+  "pick": [
+   "users.*.name",
+   "users.*.default.account",
+   "users.*.associations"
+  ]
+ },
+ {
+  "name": "user e_u2 with_assocs",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/user/e_u2?with_assocs=true",
+  "pick": [
+   "users.*.name",
+   "users.*.default.account",
+   "users.*.associations.*.account"
+  ]
+ },
+ {
+  "name": "user e_u3",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/user/e_u3",
+  "pick": [
+   "users.*.name",
+   "users.*.default.account",
+   "users.*.associations"
+  ]
+ },
+ {
+  "name": "user e_u3 with_assocs",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/user/e_u3?with_assocs=true",
+  "pick": [
+   "users.*.name",
+   "users.*.default.account",
+   "users.*.associations.*.account"
+  ]
+ },
+ {
+  "name": "users default e_a2 with_assocs",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/users/?with_assocs=true&default_account=e_a2",
+  "pick": [
+   "users.*.name"
+  ]
+ },
+ {
+  "name": "set user default",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users/",
+  "body": {
+   "users": [
+    {
+     "name": "e_u2",
+     "default": {
+      "account": "e_a1"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "user e_u2 after set (with_assocs)",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/user/e_u2?with_assocs=true",
+  "pick": [
+   "users.*.default.account"
+  ]
+ },
+ {
+  "name": "set user defaultaccount flat",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users/",
+  "body": {
+   "users": [
+    {
+     "name": "e_u2",
+     "defaultaccount": "e_a2"
+    }
+   ]
+  }
+ },
+ {
+  "name": "user e_u2 after flat (with_assocs)",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/user/e_u2?with_assocs=true",
+  "pick": [
+   "users.*.default.account"
+  ]
+ },
+ {
+  "name": "assoc grp minutes + max per job",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/associations/",
+  "body": {
+   "associations": [
+    {
+     "account": "e_a1",
+     "cluster": "demo",
+     "user": "",
+     "max": {
+      "tres": {
+       "group": {
+        "minutes": [
+         {
+          "type": "cpu",
+          "count": 1000
+         }
+        ]
+       },
+       "per": {
+        "job": [
+         {
+          "type": "cpu",
+          "count": 32
+         }
+        ]
+       }
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "after limits",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a1&cluster=demo",
+  "pick": [
+   "associations.*.account",
+   "associations.*.user",
+   "associations.*.partition",
+   "associations.*.qos",
+   "associations.*.default.qos",
+   "associations.*.shares_raw",
+   "associations.*.max.tres.total",
+   "associations.*.max.tres.group.minutes",
+   "associations.*.max.tres.per.job",
+   "associations.*.max.tres.minutes.per.job",
+   "associations.*.max.jobs.per.submitted",
+   "associations.*.is_default"
+  ]
+ },
+ {
+  "name": "user= selects user rows only",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a1&user=&cluster=demo",
+  "pick": [
+   "associations.*.user",
+   "associations.*.max.tres.per.job",
+   "associations.*.max.tres.group.minutes"
+  ]
+ },
+ {
+  "name": "assoc shares only",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/associations/",
+  "body": {
+   "associations": [
+    {
+     "account": "e_a1",
+     "cluster": "demo",
+     "user": "",
+     "shares_raw": 7
+    }
+   ]
+  }
+ },
+ {
+  "name": "after shares",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a1&cluster=demo",
+  "pick": [
+   "associations.*.account",
+   "associations.*.user",
+   "associations.*.partition",
+   "associations.*.qos",
+   "associations.*.default.qos",
+   "associations.*.shares_raw",
+   "associations.*.max.tres.total",
+   "associations.*.max.tres.group.minutes",
+   "associations.*.max.tres.per.job",
+   "associations.*.max.tres.minutes.per.job",
+   "associations.*.max.jobs.per.submitted",
+   "associations.*.is_default"
+  ]
+ },
+ {
+  "name": "assoc grp total only",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/associations/",
+  "body": {
+   "associations": [
+    {
+     "account": "e_a1",
+     "cluster": "demo",
+     "user": "",
+     "max": {
+      "tres": {
+       "total": [
+        {
+         "type": "cpu",
+         "count": 64
+        },
+        {
+         "type": "gres",
+         "name": "gpu",
+         "count": 2
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "assoc max per job add",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/associations/",
+  "body": {
+   "associations": [
+    {
+     "account": "e_a1",
+     "cluster": "demo",
+     "user": "",
+     "max": {
+      "tres": {
+       "total": [
+        {
+         "type": "cpu",
+         "count": 64
+        },
+        {
+         "type": "gres",
+         "name": "gpu",
+         "count": 2
+        }
+       ],
+       "per": {
+        "job": [
+         {
+          "type": "cpu",
+          "count": 16
+         }
+        ]
+       }
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "after tres",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a1&cluster=demo",
+  "pick": [
+   "associations.*.account",
+   "associations.*.user",
+   "associations.*.partition",
+   "associations.*.qos",
+   "associations.*.default.qos",
+   "associations.*.shares_raw",
+   "associations.*.max.tres.total",
+   "associations.*.max.tres.group.minutes",
+   "associations.*.max.tres.per.job",
+   "associations.*.max.tres.minutes.per.job",
+   "associations.*.max.jobs.per.submitted",
+   "associations.*.is_default"
+  ]
+ },
+ {
+  "name": "assoc submit jobs",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/associations/",
+  "body": {
+   "associations": [
+    {
+     "account": "e_a1",
+     "cluster": "demo",
+     "user": "",
+     "max": {
+      "jobs": {
+       "per": {
+        "submitted": 50
+       }
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "after submit",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a1&cluster=demo",
+  "pick": [
+   "associations.*.account",
+   "associations.*.user",
+   "associations.*.partition",
+   "associations.*.qos",
+   "associations.*.default.qos",
+   "associations.*.shares_raw",
+   "associations.*.max.tres.total",
+   "associations.*.max.tres.group.minutes",
+   "associations.*.max.tres.per.job",
+   "associations.*.max.tres.minutes.per.job",
+   "associations.*.max.jobs.per.submitted",
+   "associations.*.is_default"
+  ]
+ },
+ {
+  "name": "user assoc limits upsert",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/associations/",
+  "body": {
+   "associations": [
+    {
+     "account": "e_a1",
+     "cluster": "demo",
+     "user": "e_u1",
+     "max": {
+      "tres": {
+       "group": {
+        "minutes": [
+         {
+          "type": "cpu",
+          "count": 500
+         }
+        ]
+       }
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "user rows",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a1&user=e_u1&cluster=demo",
+  "pick": [
+   "associations.*.account",
+   "associations.*.user",
+   "associations.*.partition",
+   "associations.*.qos",
+   "associations.*.default.qos",
+   "associations.*.shares_raw",
+   "associations.*.max.tres.total",
+   "associations.*.max.tres.group.minutes",
+   "associations.*.max.tres.per.job",
+   "associations.*.max.tres.minutes.per.job",
+   "associations.*.max.jobs.per.submitted",
+   "associations.*.is_default"
+  ]
+ },
+ {
+  "name": "assoc upsert creates row",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/associations/",
+  "body": {
+   "associations": [
+    {
+     "account": "e_a2",
+     "cluster": "demo",
+     "user": "e_u7",
+     "shares_raw": 3
+    }
+   ]
+  }
+ },
+ {
+  "name": "created row",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a2&user=e_u7&cluster=demo",
+  "pick": [
+   "associations.*.user",
+   "associations.*.shares_raw",
+   "associations.*.qos",
+   "associations.*.is_default"
+  ]
+ },
+ {
+  "name": "user e_u7 with_assocs",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/user/e_u7?with_assocs=true",
+  "pick": [
+   "users.*.default.account"
+  ]
+ },
+ {
+  "name": "qos list on account",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/associations/",
+  "body": {
+   "associations": [
+    {
+     "account": "e_a1",
+     "cluster": "demo",
+     "user": "",
+     "qos": [
+      "normal",
+      "e_q1"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "name": "add qos e_q1",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/qos/",
+  "body": {
+   "qos": [
+    {
+     "name": "e_q1",
+     "limits": {
+      "max": {
+       "tres": {
+        "group": {
+         "minutes": [
+          {
+           "type": "cpu",
+           "count": 100
+          }
+         ]
+        }
+       }
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "qos e_q1",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/qos/e_q1",
+  "pick": [
+   "qos.*.name",
+   "qos.*.flags",
+   "qos.*.limits.max.tres.total",
+   "qos.*.limits.max.tres.minutes.total",
+   "qos.*.limits.max.tres.minutes.per.job"
+  ]
+ },
+ {
+  "name": "qos minutes total",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/qos/",
+  "body": {
+   "qos": [
+    {
+     "name": "e_q1",
+     "limits": {
+      "max": {
+       "tres": {
+        "minutes": {
+         "total": [
+          {
+           "type": "cpu",
+           "count": 6000
+          }
+         ]
+        }
+       }
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "qos e_q1 after",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/qos/e_q1",
+  "pick": [
+   "qos.*.name",
+   "qos.*.flags",
+   "qos.*.limits.max.tres.total",
+   "qos.*.limits.max.tres.minutes.total",
+   "qos.*.limits.max.tres.minutes.per.job"
+  ]
+ },
+ {
+  "name": "qos total keeps minutes?",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/qos/",
+  "body": {
+   "qos": [
+    {
+     "name": "e_q1",
+     "limits": {
+      "max": {
+       "tres": {
+        "total": [
+         {
+          "type": "cpu",
+          "count": 128
+         }
+        ]
+       }
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "qos e_q1 after total",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/qos/e_q1",
+  "pick": [
+   "qos.*.name",
+   "qos.*.flags",
+   "qos.*.limits.max.tres.total",
+   "qos.*.limits.max.tres.minutes.total",
+   "qos.*.limits.max.tres.minutes.per.job"
+  ]
+ },
+ {
+  "name": "add qos again",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/qos/",
+  "body": {
+   "qos": [
+    {
+     "name": "e_q1"
+    }
+   ]
+  }
+ },
+ {
+  "name": "qos e_q1 after re-add",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/qos/e_q1",
+  "pick": [
+   "qos.*.limits.max.tres.total",
+   "qos.*.limits.max.tres.minutes.total"
+  ]
+ },
+ {
+  "name": "qos list on account (q exists)",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/associations/",
+  "body": {
+   "associations": [
+    {
+     "account": "e_a1",
+     "cluster": "demo",
+     "user": "",
+     "qos": [
+      "normal",
+      "e_q1"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "name": "default qos on account",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/associations/",
+  "body": {
+   "associations": [
+    {
+     "account": "e_a1",
+     "cluster": "demo",
+     "user": "",
+     "default": {
+      "qos": "e_q1"
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "rows after qos",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a1&cluster=demo",
+  "pick": [
+   "associations.*.account",
+   "associations.*.user",
+   "associations.*.partition",
+   "associations.*.qos",
+   "associations.*.default.qos",
+   "associations.*.shares_raw",
+   "associations.*.max.tres.total",
+   "associations.*.max.tres.group.minutes",
+   "associations.*.max.tres.per.job",
+   "associations.*.max.tres.minutes.per.job",
+   "associations.*.max.jobs.per.submitted",
+   "associations.*.is_default"
+  ]
+ },
+ {
+  "name": "tres",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/tres/",
+  "pick": [
+   "TRES.*.type",
+   "TRES.*.name",
+   "TRES.*.id"
+  ]
+ },
+ {
+  "name": "delete users csv",
+  "method": "DELETE",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a2&user=e_u2%2Ce_u3%2Ce_u6&cluster=demo",
+  "pick": [
+   "removed_associations"
+  ]
+ },
+ {
+  "name": "e_a2 rows after",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a2&cluster=demo",
+  "pick": [
+   "associations.*.user"
+  ]
+ },
+ {
+  "name": "delete missing user assoc",
+  "method": "DELETE",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a2&user=e_u6&cluster=demo",
+  "pick": [
+   "removed_associations"
+  ]
+ },
+ {
+  "name": "delete missing user assoc again",
+  "method": "DELETE",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a2&user=e_u6&cluster=demo",
+  "pick": [
+   "removed_associations"
+  ]
+ },
+ {
+  "name": "delete users csv (no defaults)",
+  "method": "DELETE",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a2&user=e_u2%2Ce_u7&cluster=demo",
+  "pick": [
+   "removed_associations"
+  ]
+ },
+ {
+  "name": "delete missing user",
+  "method": "DELETE",
+  "path": "/slurmdb/v0.0.45/user/e_nobody",
+  "pick": [
+   "removed_users"
+  ]
+ },
+ {
+  "name": "delete qos e_q1 (default)",
+  "method": "DELETE",
+  "path": "/slurmdb/v0.0.45/qos/e_q1",
+  "pick": [
+   "removed_qos"
+  ]
+ },
+ {
+  "name": "add account again",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/accounts_association/",
+  "body": {
+   "association_condition": {
+    "accounts": [
+     "e_a1"
+    ],
+    "clusters": [
+     "demo"
+    ]
+   },
+   "account": {
+    "description": "e test",
+    "organization": "e_org"
+   }
+  }
+ },
+ {
+  "name": "literal comma in query",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a1&user=e_u1,e_u5&cluster=demo"
+ },
+ {
+  "name": "encoded comma in query",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_a1&user=e_u1%2Ce_u5&cluster=demo",
+  "pick": [
+   "associations.*.user"
+  ]
+ },
+ {
+  "name": "delete missing qos",
+  "method": "DELETE",
+  "path": "/slurmdb/v0.0.45/qos/e_nope",
+  "pick": [
+   "removed_qos"
+  ]
+ },
+ {
+  "name": "get missing user",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/user/e_nobody",
+  "pick": [
+   "users"
+  ]
+ },
+ {
+  "name": "delete account e_a2",
+  "method": "DELETE",
+  "path": "/slurmdb/v0.0.45/account/e_a2",
+  "pick": [
+   "removed_accounts"
+  ]
+ },
+ {
+  "name": "delete account e_a2 again",
+  "method": "DELETE",
+  "path": "/slurmdb/v0.0.45/account/e_a2",
+  "pick": [
+   "removed_accounts"
+  ]
+ },
+ {
+  "name": "get missing account",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/account/e_nope",
+  "pick": [
+   "accounts"
+  ]
+ },
+ {
+  "name": "get missing qos",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/qos/e_nope",
+  "pick": [
+   "qos"
+  ]
+ },
+ {
+  "name": "list qos by missing name",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/qos/?name=e_nope"
+ },
+ {
+  "name": "get missing cluster",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/cluster/e_nope",
+  "pick": [
+   "clusters"
+  ]
+ },
+ {
+  "name": "associations of missing account",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/associations/?account=e_nope",
+  "pick": [
+   "associations"
+  ]
+ },
+ {
+  "name": "assoc under missing account",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/associations/",
+  "body": {
+   "associations": [
+    {
+     "account": "e_zz",
+     "cluster": "demo",
+     "user": "e_u1"
+    }
+   ]
+  }
+ },
+ {
+  "name": "assoc without user",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/associations/",
+  "body": {
+   "associations": [
+    {
+     "account": "e_a1",
+     "cluster": "demo"
+    }
+   ]
+  }
+ },
+ {
+  "name": "users_association without condition",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users_association/",
+  "body": {
+   "user": {}
+  }
+ },
+ {
+  "name": "users_association without users",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users_association/",
+  "body": {
+   "association_condition": {
+    "accounts": [
+     "e_a1"
+    ]
+   },
+   "user": {}
+  }
+ },
+ {
+  "name": "users_association missing account",
+  "method": "POST",
+  "path": "/slurmdb/v0.0.45/users_association/",
+  "body": {
+   "association_condition": {
+    "users": [
+     "e_u8"
+    ],
+    "accounts": [
+     "e_missing"
+    ],
+    "clusters": [
+     "demo"
+    ]
+   },
+   "user": {}
+  }
+ },
+ {
+  "name": "user with_assocs=false",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/user/e_u3?with_assocs=false",
+  "pick": [
+   "users.*.default.account",
+   "users.*.associations"
+  ]
+ },
+ {
+  "name": "user with_assocs bare",
+  "method": "GET",
+  "path": "/slurmdb/v0.0.45/user/e_u3?with_assocs",
+  "pick": [
+   "users.*.default.account",
+   "users.*.associations.*.account"
+  ]
+ }
+]

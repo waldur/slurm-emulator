@@ -363,7 +363,8 @@ class TestDefaultAssociationInvariant:
         assert resp.status_code == http_status_for(7009)
         err = resp.json()["errors"][0]
         assert err["error_number"] == 7009
-        assert err["description"] == "You can not remove the default account of a user"
+        assert err["error"] == "You can not remove the default account of a user"
+        assert err["description"] == "slurmdb_associations_remove failed"
         for acct in ("proj-b", "proj-a"):
             resp = restd.delete(
                 f"/slurmdb/{V}/associations/",

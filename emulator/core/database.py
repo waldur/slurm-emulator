@@ -147,6 +147,10 @@ class Association:
     # Empty qos_list means "inherit the account/parent QOS".
     qos_list: list[str] = field(default_factory=list)
     def_qos: str = ""
+    # Fairshare of a user row (slurmdb_assoc_rec_t.shares_raw, 1 when unset —
+    # slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_cluster_get_assocs);
+    # the account-level row keeps its share on the Account record.
+    fairshare: int = 1
 
     def __post_init__(self) -> None:
         """Fold the account and parent account names to lower case.
@@ -936,6 +940,16 @@ class SlurmDatabase:
             jobs = [j for j in jobs if j.user == user]
 
         return jobs
+
+    def qos_known(self, name: str) -> bool:
+        """Whether ``name`` resolves to a QoS.
+
+        slurmdbd creates ``normal`` when it first starts
+        (slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#"'normal'"),
+        and accounts default to it; the emulator's QoS table leaves that row
+        implicit until something defines it, so it resolves here regardless.
+        """
+        return name in self.qos_list or name == "normal"
 
     def bootstrap_default_qos(self) -> bool:
         """Seed a standard set of usable QoS classes when none are defined.

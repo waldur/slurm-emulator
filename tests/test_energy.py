@@ -420,6 +420,8 @@ class TestReviewFixes:
             f"{t['type']}/{t['name']}" if t["name"] else t["type"]: t["id"]
             for t in resp.json()["TRES"]
         }
+        # slurmrestd also lists slurmdbd's deleted id-1000 placeholder.
+        assert rest.pop("dynamic_offset") == 1000
         assert rest == {k.lower(): v for k, v in cli.items()}
 
     def test_sshare_energy_is_joules_over_sixty(self, env):

@@ -30,8 +30,9 @@ class TestAssocToDictGrant:
         account = Account(name="proj1", description="p", organization="o", qos="normal")
         assoc = Association(account="proj1", user="alice")
         rendered = schemas.assoc_to_dict(assoc, account)
-        # No explicit grant: the user row shows no QoS of its own.
-        assert rendered["qos"] == []
+        # No grant of its own: slurmdbd fills in the parent's list
+        # (slurm://src/plugins/accounting_storage/mysql/as_mysql_assoc.c#_cluster_get_assocs).
+        assert rendered["qos"] == ["normal"]
 
 
 class TestAssocQosRestRoundTrip:
@@ -40,6 +41,12 @@ class TestAssocQosRestRoundTrip:
             f"/slurmdb/{V}/accounts/",
             headers=auth_headers,
             json={"accounts": [{"name": name, "description": name, "organization": "org1"}]},
+        )
+        # QOS names in an association are resolved while parsing, so they must exist.
+        restd.post(
+            f"/slurmdb/{V}/qos/",
+            headers=auth_headers,
+            json={"qos": [{"name": "boost"}, {"name": "gp_debug"}]},
         )
 
     def _user_assoc(self, restd, auth_headers, user="alice", name="proj1"):

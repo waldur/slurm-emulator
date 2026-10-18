@@ -55,6 +55,15 @@ ESLURM_RESERVATION_INVALID = 2053
 __all__ = ["ESLURM_INVALID_ACCOUNT", "ESLURM_USER_ID_UNKNOWN"]
 # slurm://slurm/slurm_errno.h#ESLURM_NO_REMOVE_DEFAULT_QOS
 ESLURM_NO_REMOVE_DEFAULT_QOS = 7011
+# slurm://slurm/slurm_errno.h#ESLURM_NO_REMOVE_DEFAULT_ACCOUNT
+ESLURM_NO_REMOVE_DEFAULT_ACCOUNT = 7009
+# slurm://slurm/slurm_errno.h#ESLURM_INVALID_QOS
+ESLURM_INVALID_QOS = 2066
+# slurm://slurm/slurm_errno.h#ESLURM_DATA_PATH_NOT_FOUND
+ESLURM_DATA_PATH_NOT_FOUND = 9200
+# SLURM_ERROR: a failure without a more specific errno, e.g. a query string
+# the url-encoded serializer refuses.
+SLURM_ERROR = -1
 ESLURM_REST_INVALID_QUERY = 9000
 # slurm://slurm/slurm_errno.h#ESLURM_DATA_CONV_FAILED
 ESLURM_DATA_CONV_FAILED = 9202
@@ -74,6 +83,10 @@ _STRERROR = {
         "This request would make it so some associations would not have access "
         "to their default qos."
     ),
+    ESLURM_NO_REMOVE_DEFAULT_ACCOUNT: "You can not remove the default account of a user",
+    ESLURM_INVALID_QOS: "Invalid qos specification",
+    ESLURM_DATA_PATH_NOT_FOUND: "Unable to resolve path",
+    SLURM_ERROR: "Unspecified error",
     ESLURM_USER_ID_UNKNOWN: "Unable to resolve user ID to user name",
     ESLURM_INVALID_ACCOUNT: "Invalid account or account/partition combination specified",
     ESLURM_RESERVATION_INVALID: "Requested reservation is invalid",
