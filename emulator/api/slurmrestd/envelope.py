@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from emulator.core import reservations
 from emulator.core.accounting import ESLURM_INVALID_ACCOUNT, ESLURM_USER_ID_UNKNOWN
-from emulator.slurm_version import current
+from emulator.slurm_version import at_least, current
 
 
 def api_version() -> str:
@@ -44,7 +44,11 @@ ESLURM_RESERVATION_INVALID = 2053
 # ESLURM_USER_ID_UNKNOWN / ESLURM_INVALID_ACCOUNT come from emulator.core.accounting
 # (the admission logic that raises them) and are re-exported here.
 __all__ = ["ESLURM_INVALID_ACCOUNT", "ESLURM_USER_ID_UNKNOWN"]
+# slurm://slurm/slurm_errno.h#ESLURM_NO_REMOVE_DEFAULT_QOS
+ESLURM_NO_REMOVE_DEFAULT_QOS = 7011
 ESLURM_REST_INVALID_QUERY = 9000
+# slurm://slurm/slurm_errno.h#ESLURM_DATA_CONV_FAILED
+ESLURM_DATA_CONV_FAILED = 9202
 ESLURM_REST_FAIL_PARSING = 9001
 ESLURM_REST_EMPTY_RESULT = 9003
 ESLURM_REST_UNKNOWN_URL = 9006
@@ -54,7 +58,13 @@ ESLURM_REST_BAD_REQUEST = 9009
 
 # slurm_strerror() texts (slurm://src/common/slurm_errno.c#ESLURM_REST_INVALID_QUERY).
 _STRERROR = {
+    0: "No error",
+    ESLURM_DATA_CONV_FAILED: "Unable to convert Data type",
     ESLURM_INVALID_JOB_ID: "Invalid job id specified",
+    ESLURM_NO_REMOVE_DEFAULT_QOS: (
+        "This request would make it so some associations would not have access "
+        "to their default qos."
+    ),
     ESLURM_USER_ID_UNKNOWN: "Unable to resolve user ID to user name",
     ESLURM_INVALID_ACCOUNT: "Invalid account or account/partition combination specified",
     ESLURM_RESERVATION_INVALID: "Requested reservation is invalid",
@@ -76,16 +86,41 @@ _STRERROR = {
     **reservations.STRERROR,
 }
 
-# http_status_from_error() subset (slurm://src/common/http.c#http_status_from_error@25.11+,
-# called from slurm://src/slurmrestd/operations.c#http_status_from_error@25.11+).
+# The HTTP status a handler's error code becomes. 25.11 moved the mapping into
+# http_status_from_error() (slurm://src/common/http.c#http_status_from_error@25.11+,
+# called from slurm://src/slurmrestd/operations.c#_operations_router_reject@25.11+);
+# 26.05 added a fallback that answers 422 for every slurmctld/slurmdbd errno.
+# Before 25.11 the router chose among a few codes itself
+# (slurm://src/slurmrestd/operations.c#_call_handler@25.05,24.11). Anything
+# unmapped is 500.
+ESLURM_REST_INVALID_JOBS_DESC = 9002
+ESLURM_DB_CONNECTION = 7000
+ESLURM_NO_RPC_STATS = 7013
+ESLURM_INVALID_SLUID = 2185
+ESLURM_INVALID_PARTITION_NAME = 2000
 _HTTP_STATUS = {
     ESLURM_INVALID_JOB_ID: 404,
-    ESLURM_REST_INVALID_QUERY: 400,
+    ESLURM_REST_INVALID_QUERY: 422,
     ESLURM_REST_FAIL_PARSING: 400,
+    ESLURM_REST_INVALID_JOBS_DESC: 400,
     ESLURM_REST_BAD_REQUEST: 400,
     ESLURM_REST_UNKNOWN_URL: 404,
     ESLURM_REST_UNKNOWN_URL_METHOD: 405,
     ESLURM_REST_AUTH_FAIL: 401,
+}
+# Router-level rejections (unknown URL, method, auth) answer these codes in
+# every version.
+_ROUTER_STATUS = {
+    ESLURM_REST_UNKNOWN_URL: 404,
+    ESLURM_REST_UNKNOWN_URL_METHOD: 405,
+    ESLURM_REST_AUTH_FAIL: 401,
+}
+_HTTP_STATUS_BEFORE_25_11 = {
+    ESLURM_REST_INVALID_QUERY: 422,
+    ESLURM_REST_FAIL_PARSING: 400,
+    ESLURM_REST_INVALID_JOBS_DESC: 400,
+    ESLURM_INVALID_JOB_ID: 404,
+    ESLURM_DB_CONNECTION: 502,
 }
 
 
@@ -119,12 +154,18 @@ def strerror(error_number: int) -> str:
 
 
 def http_status_for(error_number: int) -> int:
+    """HTTP status of a response whose first error is ``error_number``."""
+    if error_number in _ROUTER_STATUS:
+        return _ROUTER_STATUS[error_number]
+    if not at_least("25.11"):
+        return _HTTP_STATUS_BEFORE_25_11.get(error_number, 500)
     if error_number in _HTTP_STATUS:
         return _HTTP_STATUS[error_number]
-    if 2000 <= error_number <= 7999:
-        # slurmctld/slurmdbd validation errors (ESLURM_INVALID_PARTITION_NAME
-        # .. ESLURM_INVALID_SLUID, incl. ESLURM_USER_ID_UNKNOWN) → 422
-        # Unprocessable Content.
+    if at_least("26.05") and (
+        ESLURM_INVALID_PARTITION_NAME <= error_number <= ESLURM_INVALID_SLUID
+        or ESLURM_DB_CONNECTION <= error_number <= ESLURM_NO_RPC_STATS
+    ):
+        # A slurmctld/slurmdbd errno: the query was well formed but refused.
         return 422
     return 500
 
@@ -187,7 +228,10 @@ def make_response(
     body["meta"] = build_meta(request, plugin, cluster)
     body["errors"] = list(errors or [])
     body["warnings"] = list(warnings or [])
-    status = 200 if not errors else http_status_for(errors[0]["error_number"])
+    # The first error with a number decides the status; an error without one
+    # (number 0) leaves the request successful (slurm://src/slurmrestd/openapi.c#openapi_resp_error).
+    first = next((e["error_number"] for e in body["errors"] if e.get("error_number")), 0)
+    status = http_status_for(first) if first else 200
     return JSONResponse(status_code=status, content=body)
 
 

@@ -344,9 +344,26 @@ class TestReservations:
         set_time(T0 + timedelta(hours=10))
         again = restd.get(f"/slurm/{V}/reservation/maint", headers=auth_headers).json()
         assert again["reservations"][0]["start_time"] == maint["start_time"]
-        assert restd.get(f"/slurm/{V}/reservation/nope", headers=auth_headers).json()[
-            "reservations"
-        ] == []
+        # Names match case-insensitively; an unknown one is an error
+        # (slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#"Unable to find reservation").
+        upper = restd.get(f"/slurm/{V}/reservation/MAINT", headers=auth_headers).json()
+        assert upper["reservations"][0]["name"] == "maint"
+        missing = restd.get(f"/slurm/{V}/reservation/nope", headers=auth_headers)
+        assert missing.status_code == 422 and "reservations" not in missing.json()
+        assert missing.json()["errors"][0]["description"] == "Unable to find reservation nope"
+
+    def test_single_reservation_with_none_in_the_system(self, restd, auth_headers, sim):
+        resp = restd.get(f"/slurm/{V}/reservation/nope", headers=auth_headers)
+        body = resp.json()
+        assert resp.status_code == 200 and "reservations" not in body
+        assert body["errors"] == [
+            {
+                "description": "Unable to query reservations",
+                "error_number": 0,
+                "error": "No error",
+                "source": "slurm_load_reservations()",
+            }
+        ]
 
     def test_maint_blocks_jobs_whose_limit_overlaps(self, restd, auth_headers, sim, monkeypatch):
         monkeypatch.setenv(cluster_model.RESERVATIONS_ENV, "maint:ALL:+3h:2h:MAINT")

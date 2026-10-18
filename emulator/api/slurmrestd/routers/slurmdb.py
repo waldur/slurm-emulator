@@ -14,6 +14,8 @@ from fastapi import APIRouter, Depends, Request
 
 from emulator.api.slurmrestd.auth import slurmrestd_auth
 from emulator.api.slurmrestd.envelope import (
+    ESLURM_DATA_CONV_FAILED,
+    ESLURM_NO_REMOVE_DEFAULT_QOS,
     ESLURM_REST_INVALID_QUERY,
     SLURMDBD_PLUGIN,
     SlurmdbRequestError,
@@ -35,6 +37,7 @@ from emulator.api.slurmrestd.schemas import (
 from emulator.api.slurmrestd.state import RequestState, StateDep
 from emulator.commands.sacct import SacctEmulator
 from emulator.commands.sacct import _Config as SacctConfig
+from emulator.commands.slurm_time import ParseTimeError, parse_time_spec
 from emulator.core.database import QOS, Association, DefaultAssociationError, fold_account
 from emulator.core.scheduler import advance_job_states
 from emulator.slurm_version import at_least
@@ -753,6 +756,7 @@ def _upsert_association(state: RequestState, entry: dict[str, Any]) -> bool:
             + "\nThis request would make it so some associations would not have access to"
             " their default qos.",
             state.cluster,
+            ESLURM_NO_REMOVE_DEFAULT_QOS,
         )
     return True
 
@@ -1006,11 +1010,11 @@ async def delete_qos(
 # --- jobs (accounting view, one job per usage record) ---
 
 
-def _parse_query_time(value: str, sacct: SacctEmulator):
-    if value.isdigit():
+def _parse_query_time(value: str, now: datetime) -> datetime:
+    if value.strip().lstrip("-").isdigit():
         # Naive local time, consistent with the emulator's naive clock.
         return datetime.fromtimestamp(int(value))  # noqa: DTZ006
-    return sacct._parse_time_inner(value)
+    return parse_time_spec(value, now)
 
 
 @router.get("/jobs/")
@@ -1033,13 +1037,37 @@ async def get_jobs(
         cfg.users = users.split(",")
     if cluster:
         cfg.clusters = cluster.split(",")
-    try:
-        if start_time:
-            cfg.start_time = _parse_query_time(start_time, sacct)
-        if end_time:
-            cfg.end_time = _parse_query_time(end_time, sacct)
-    except (ValueError, IndexError):
-        return _bad_request(request, state, "Invalid time specification")
+    # JOB_CONDITION parses start_time/end_time as TIMESTAMP: parse_time(str, 0)
+    # (slurm://src/plugins/data_parser/v0.0.45/parsers.c#_parse_timestamp@26.05+).
+    # A failure is the parser's ESLURM_DATA_CONV_FAILED, then the handler's
+    # rejection (slurm://src/slurmrestd/plugins/openapi/slurmdbd/jobs.c#op_handler_jobs);
+    # the first error decides the status.
+    for field, value in (("start_time", start_time), ("end_time", end_time)):
+        if not value:
+            continue
+        try:
+            parsed = _parse_query_time(value, state.time_engine.get_current_time())
+        except ParseTimeError:
+            return _respond(
+                request,
+                state,
+                errors=[
+                    slurm_error(
+                        f"Parsing of {value} for timestamp failed",
+                        ESLURM_DATA_CONV_FAILED,
+                        f"#/{field}",
+                    ),
+                    slurm_error(
+                        "Rejecting request. Failure parsing query parameters",
+                        ESLURM_REST_INVALID_QUERY,
+                        "op_handler_jobs",
+                    ),
+                ],
+            )
+        if field == "start_time":
+            cfg.start_time = parsed
+        else:
+            cfg.end_time = parsed
 
     records = sacct._get_filtered_records(cfg)
     payload = [dbd_job_to_dict(r) for r in records]

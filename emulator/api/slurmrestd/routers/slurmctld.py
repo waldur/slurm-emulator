@@ -39,6 +39,7 @@ from emulator.api.slurmrestd.envelope import (
     make_response,
     slurm_error,
     slurm_release,
+    strerror,
     validate_version,
 )
 from emulator.api.slurmrestd.schemas import (
@@ -53,11 +54,17 @@ from emulator.api.slurmrestd.schemas import (
 from emulator.api.slurmrestd.state import StateDep
 from emulator.commands.slurm_time import ParseTimeError, parse_time_spec
 from emulator.core.accounting import admit_job
-from emulator.core.cluster_model import expand_hostlist, node_views, sync_reservations
+from emulator.core.cluster_model import (
+    expand_hostlist,
+    job_may_access,
+    node_views,
+    sync_reservations,
+)
 from emulator.core.database import Job, SlurmDatabase
 from emulator.core.reservations import (
     DURATION_INFINITE,
     ESLURM_NODES_BUSY,
+    ESLURM_RESERVATION_ACCESS,
     ReservationDesc,
     ReservationDescError,
     ReservationError,
@@ -276,22 +283,32 @@ async def submit_job(
     identity = admission.identity
     account = admission.account
 
-    # An unknown reservation is refused at submit
-    # (slurm://src/common/slurm_errno.c#ESLURM_RESERVATION_INVALID).
+    # An unknown reservation, or one the job may not use, is refused at submit
+    # (slurm://src/slurmctld/reservation.c#validate_job_resv,
+    # slurm://src/slurmctld/reservation.c#_valid_job_access_resv).
     reservation = str(job_desc.get("reservation") or "")
     sync_reservations(db, job_clock_now(state.time_engine))
-    if reservation and reservation not in db.reservations:
-        return _respond(
-            request,
-            state,
-            errors=[
-                slurm_error(
-                    "Requested reservation is invalid",
-                    ESLURM_RESERVATION_INVALID,
-                    "slurm_submit_batch_job()",
-                )
-            ],
+    if reservation:
+        resv = db.reservations.get(reservation)
+        probe = Job(
+            job_id="0",
+            account=account,
+            user=user,
+            state="PENDING",
+            uid=identity.uid if identity else None,
+            group_name=identity.group if identity else "",
         )
+        errno = (
+            ESLURM_RESERVATION_INVALID
+            if resv is None
+            else (None if job_may_access(db, resv, probe) else ESLURM_RESERVATION_ACCESS)
+        )
+        if errno is not None:
+            return _respond(
+                request,
+                state,
+                errors=[slurm_error(strerror(errno), errno, "slurm_submit_batch_job()")],
+            )
 
     jid = db.allocate_job_id()
     job = Job(
@@ -595,13 +612,45 @@ async def get_reservation(
     request: Request,
     state: StateDep,
 ):
-    matched = [reservation_to_dict(r) for r in _reservations(state) if r.name == reservation_name]
-    warnings = [] if matched else [found_nothing_warning("slurm_load_reservations()", request)]
+    """slurm://src/slurmrestd/plugins/openapi/slurmctld/reservations.c#"Unable to find reservation".
+
+    The name matches case-insensitively. With no reservation in the system
+    the handler reports "Unable to query reservations" without an error
+    number (HTTP 200); an unknown name is ``ESLURM_REST_INVALID_QUERY``.
+    Neither dumps a ``reservations`` list.
+    """
+    records = _reservations(state)
+    if not records:
+        return _respond(
+            request,
+            state,
+            errors=[
+                {
+                    "description": "Unable to query reservations",
+                    "error_number": 0,
+                    "error": strerror(0),
+                    "source": "slurm_load_reservations()",
+                }
+            ],
+        )
+    found = next((r for r in records if r.name.lower() == reservation_name.lower()), None)
+    if found is None:
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    f"Unable to find reservation {reservation_name}",
+                    ESLURM_REST_INVALID_QUERY,
+                    # __func__ of the handler that reports it.
+                    "_get_single_reservation" if at_least("25.05") else "op_handler_reservation",
+                )
+            ],
+        )
     return _respond(
         request,
         state,
-        {"reservations": matched, "last_update": uint_no_val(state.now_ts())},
-        warnings=warnings,
+        {"reservations": [reservation_to_dict(found)], "last_update": uint_no_val(state.now_ts())},
     )
 
 

@@ -18,6 +18,7 @@ from datetime import datetime
 
 import pytest
 
+from emulator.api.slurmrestd.envelope import http_status_for
 from emulator.api.slurmrestd.envelope import ESLURM_USER_ID_UNKNOWN
 from emulator.api.ssh import server
 from emulator.commands.dispatcher import SlurmEmulator
@@ -148,9 +149,9 @@ class TestRestSubmit:
 
     def test_unresolvable_user_is_rejected(self, restd, auth_headers, nss_on):
         resp = _submit(restd, auth_headers, "ghost")
-        # ESLURM_USER_ID_UNKNOWN sits in the slurmctld range → 422
-        # (slurm://src/common/http.c#http_status_from_error@25.11+).
-        assert resp.status_code == 422
+        # ESLURM_USER_ID_UNKNOWN sits in the slurmctld range: 422 from 26.05
+        # (slurm://src/common/http.c#http_status_from_error@25.11+), 500 before.
+        assert resp.status_code == http_status_for(ESLURM_USER_ID_UNKNOWN)
         err = resp.json()["errors"][0]
         assert err["description"] == "Unable to resolve user: ghost"
         assert err["error_number"] == ESLURM_USER_ID_UNKNOWN

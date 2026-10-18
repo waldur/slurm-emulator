@@ -28,6 +28,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from emulator.api.slurmrestd.envelope import http_status_for
 from emulator.commands import dispatcher
 from emulator.commands.scontrol import ScontrolEmulator, _ParseError, parse_resv_flags
 from emulator.core import cluster_model, reservations
@@ -228,7 +229,7 @@ class TestRestErrors:
         desc.update(change)
         resp = post_resv(restd, auth_headers, **{k: v for k, v in desc.items() if v is not None})
         err = resp.json()["errors"][0]
-        assert resp.status_code == 422
+        assert resp.status_code == http_status_for(2053)
         assert (err["error_number"], err["source"], err["description"]) == (
             2053,
             "validate_resv_create_desc",
@@ -249,7 +250,7 @@ class TestRestErrors:
         desc.update(change)
         resp = post_resv(restd, auth_headers, **{k: v for k, v in desc.items() if v is not None})
         err = resp.json()["errors"][0]
-        assert resp.status_code == 422
+        assert resp.status_code == http_status_for(errno)
         assert err["error_number"] == errno and err["source"] == "slurm_create_reservation"
         assert err["description"] == "Error creating reservation  waldur-maint-1"
         assert err["error"] == reservations.strerror(errno)
@@ -276,12 +277,13 @@ class TestRestErrors:
     def test_empty_body(self, restd, auth_headers, sim):
         resp = restd.post(f"/slurm/{V}/reservation", headers=auth_headers)
         err = resp.json()["errors"][0]
-        assert resp.status_code == 400
+        # ESLURM_REST_INVALID_QUERY is 422 in every version.
+        assert resp.status_code == 422
         assert err["description"] == "unexpected empty query for reservation creation"
 
     def test_unknown_flag_fails_parsing(self, restd, auth_headers, sim):
         resp = post_resv(restd, auth_headers, **maint(flags=["MAINT", "BOGUS"]))
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert resp.json()["errors"][0]["description"] == (
             "Rejecting request. Failure parsing parameters"
         )
@@ -420,7 +422,7 @@ class TestRestBulk:
             },
         )
         body = resp.json()
-        assert resp.status_code == 422 and "reservations" not in body
+        assert resp.status_code == http_status_for(2053) and "reservations" not in body
         assert body["errors"][0]["source"] == "validate_resv_create_desc"
         assert set(stored()) == {"a"}
 
@@ -460,7 +462,7 @@ class TestRestDelete:
     def test_unknown(self, restd, auth_headers, sim):
         resp = restd.delete(f"/slurm/{V}/reservation/nope", headers=auth_headers)
         err = resp.json()["errors"][0]
-        assert resp.status_code == 422
+        assert resp.status_code == http_status_for(2053)
         assert (err["error_number"], err["description"], err["source"]) == (
             2053,
             "Error deleting reservation nope",

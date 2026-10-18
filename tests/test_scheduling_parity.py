@@ -115,12 +115,26 @@ class TestReservationAccess:
         job = Job(job_id="1", account="a", user="alice", state="PENDING")
         assert not cluster_model.job_may_access(SlurmDatabase(), resv, job)
 
-    def test_job_outside_the_reservation_waits(self, restd, auth_headers, sim, monkeypatch):
+    def test_submit_outside_the_reservation_is_refused(self, restd, auth_headers, sim,
+                                                       monkeypatch):
         monkeypatch.setenv(cluster_model.RESERVATIONS_ENV, "train:debug:now:4h::users=alice")
+        body = restd.post(
+            f"/slurm/{V}/job/submit",
+            headers=as_user(auth_headers, "bob"),
+            json={"job": {"name": "x", "partition": "debug", "reservation": "train"}},
+        ).json()
+        assert body["errors"][0]["error_number"] == 2052
+        assert body["errors"][0]["description"] == "Access denied to requested reservation"
+
+    def test_access_withdrawn_after_submit_keeps_job_waiting(
+        self, restd, auth_headers, sim, monkeypatch
+    ):
+        monkeypatch.setenv(cluster_model.RESERVATIONS_ENV, "train:debug:+1h:4h::users=alice")
         jid = submit(
-            restd, as_user(auth_headers, "bob"), name="x", partition="debug", reservation="train"
+            restd, as_user(auth_headers, "alice"), name="x", partition="debug", reservation="train"
         )
-        set_time(T0 + timedelta(minutes=5))
+        monkeypatch.setenv(cluster_model.RESERVATIONS_ENV, "train:debug:+1h:4h::users=carol")
+        set_time(T0 + timedelta(hours=1, minutes=5))
         assert ctld_jobs(restd, auth_headers)[jid]["state_reason"] == "Reservation"
 
 
