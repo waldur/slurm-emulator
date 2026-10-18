@@ -72,10 +72,10 @@ from emulator.core.reservations import (
     create_reservation,
     delete_reservation,
     order_flags,
+    rest_flag_names,
     update_reservation,
     validate_create_desc,
 )
-from emulator.core.reservations import FLAG_NAMES as RESV_FLAG_NAMES
 from emulator.core.reservations import find as find_reservation
 from emulator.core.scheduler import advance_job_states, job_clock_now
 from emulator.slurm_version import at_least
@@ -784,7 +784,7 @@ def _desc_flags(value: object) -> Optional[list[str]]:
     flags = []
     for item in items:
         name = str(item).strip().upper()
-        if name not in RESV_FLAG_NAMES:
+        if name not in rest_flag_names():
             raise _DescParseError(item)
         flags.append(name)
     return flags or None

@@ -337,6 +337,9 @@ class Reservation:
     accounts: str = ""
     spec: str = ""
     origin: str = "env"
+    # slurm://slurm/slurm.h#reserve_info_t.resv_id -- the controller's suffix
+    # counter at creation (0 for env-configured ones).
+    resv_id: int = 0
     groups: str = ""
     comment: str = ""
     duration: Optional[int] = None
@@ -383,6 +386,9 @@ class SlurmDatabase:
         self.reservation_anchor: Optional[datetime] = None
         # How far the lazy scheduler has simulated (emulator/core/scheduler.py).
         self.sched_cursor: Optional[datetime] = None
+        # slurmctld's reservation id / name-suffix counter
+        # (slurm://src/slurmctld/reservation.c#top_suffix).
+        self.resv_top_suffix = 0
         # Static TRES in id order (slurm://src/common/slurmdb_defs.h#TRES_ENERGY:
         # cpu=1, mem=2, energy=3, node=4, billing=5, fs/disk=6, vmem=7,
         # pages=8 -- slurmdbd creates all of them) then the dynamic ones of
@@ -993,6 +999,7 @@ class SlurmDatabase:
             },
             "reservation_anchor": _iso(self.reservation_anchor),
             "sched_cursor": _iso(self.sched_cursor),
+            "resv_top_suffix": self.resv_top_suffix,
         }
 
         try:
@@ -1136,6 +1143,10 @@ class SlurmDatabase:
                     )
                 self.reservation_anchor = _from_iso(state.get("reservation_anchor"))
                 self.sched_cursor = _from_iso(state.get("sched_cursor"))
+                self.resv_top_suffix = max(
+                    [int(state.get("resv_top_suffix", 0))]
+                    + [r.resv_id for r in self.reservations.values()]
+                )
 
                 # Pre-0.10 state files have no root user / root user association.
                 for cluster in self.clusters:

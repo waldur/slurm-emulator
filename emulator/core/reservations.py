@@ -84,6 +84,7 @@ ESLURM_INVALID_NODE_NAME = 2018
 ESLURM_RESERVATION_ACCESS = 2052
 ESLURM_RESERVATION_INVALID = 2053
 ESLURM_INVALID_TIME_VALUE = 2054
+ESLURM_NOT_SUPPORTED = 2036
 ESLURM_RESERVATION_BUSY = 2055
 ESLURM_RESERVATION_OVERLAP = 2058
 ESLURM_RESERVATION_EMPTY = 2080
@@ -100,6 +101,7 @@ STRERROR = {
     ESLURM_RESERVATION_ACCESS: "Access denied to requested reservation",
     ESLURM_RESERVATION_INVALID: "Requested reservation is invalid",
     ESLURM_INVALID_TIME_VALUE: "Invalid time specified",
+    ESLURM_NOT_SUPPORTED: "Requested operation not supported on this system",
     ESLURM_RESERVATION_BUSY: "Requested reservation is in use",
     ESLURM_RESERVATION_OVERLAP: "Requested reservation overlaps with another reservation",
     ESLURM_RESERVATION_EMPTY: "Reservation request lacks users, groups or accounts",
@@ -133,6 +135,18 @@ FLAG_NAMES = (
     "NO_MAGNETIC", "SKIP", "HOURLY", "NO_HOURLY", "USER_DELETE", "FORCE_START",
     "NO_USER_DELETE", "REOCCURRING", "TRES_PER_NODE",
 )  # fmt: skip
+
+# Added to RESERVATION_FLAGS in 25.11's data_parser
+# (slurm://src/plugins/data_parser/v0.0.45/parsers.c#RESERVATION_FLAGS@26.05+).
+_FLAGS_SINCE_25_11 = {"NO_ANY_NODES", "REPLACE_DOWN", "NO_MAGNETIC", "FORCE_START", "TRES_PER_NODE"}
+
+
+def rest_flag_names() -> tuple[str, ...]:
+    """The RESERVATION_FLAGS names the active release's data_parser knows."""
+    if at_least("25.11"):
+        return FLAG_NAMES
+    return tuple(f for f in FLAG_NAMES if f not in _FLAGS_SINCE_25_11)
+
 
 # Order scontrol prints them in (slurm://src/common/slurm_protocol_defs.c#reservation_flags_string).
 FLAG_STRING_ORDER = (
@@ -408,17 +422,24 @@ def _check_access(db: SlurmDatabase, users: str, accounts: str) -> None:
                 raise ReservationError(ESLURM_USER_ID_MISSING)
 
 
+MAX_RESV_COUNT = 9999
+
+
+def _generate_resv_id(db: SlurmDatabase) -> int:
+    """slurm://src/slurmctld/reservation.c#_generate_resv_id: next free counter value."""
+    used = {r.resv_id for r in db.reservations.values()}
+    for _ in range(MAX_RESV_COUNT):
+        db.resv_top_suffix = 1 if db.resv_top_suffix >= MAX_RESV_COUNT else db.resv_top_suffix + 1
+        if db.resv_top_suffix not in used:
+            return db.resv_top_suffix
+    raise ReservationError(ESLURM_RESERVATION_INVALID)
+
+
 def _generate_name(db: SlurmDatabase, desc: ReservationDesc) -> str:
-    """slurm://src/slurmctld/reservation.c#_generate_resv_name."""
+    """slurm://src/slurmctld/reservation.c#_generate_resv_name: ``<first account|user|group>_<id>``."""
     key = desc.accounts or desc.users or desc.groups or "resv"
-    key = key.lstrip("-").split(",", 1)[0]
-    suffix = 1
-    while f"{key}_{suffix}" in db.reservations:
-        suffix += 1
-    return f"{key}_{suffix}"
-
-
-# --- create / update / delete ---
+    key = key.removeprefix("-").split(",", 1)[0]
+    return f"{key}_{db.resv_top_suffix}"
 
 
 def create_reservation(db: SlurmDatabase, desc: ReservationDesc, now: datetime) -> Reservation:
@@ -483,12 +504,18 @@ def create_reservation(db: SlurmDatabase, desc: ReservationDesc, now: datetime) 
     else:
         nodes = []
 
+    # Every create draws a new id, named or not; a generated name already
+    # taken draws another (slurm://src/slurmctld/reservation.c#create_resv).
+    resv_id = _generate_resv_id(db)
     if desc.name:
         if desc.name in db.reservations:
             raise ReservationError(ESLURM_RESERVATION_NAME_DUP)
         name = desc.name
     else:
         name = _generate_name(db, desc)
+        while name in db.reservations:
+            resv_id = _generate_resv_id(db)
+            name = _generate_name(db, desc)
 
     resv = Reservation(
         name=name,
@@ -500,12 +527,41 @@ def create_reservation(db: SlurmDatabase, desc: ReservationDesc, now: datetime) 
         users=",".join(_split_list(desc.users or "")),
         accounts=",".join(_split_list(desc.accounts or "")),
         origin="api",
+        resv_id=resv_id,
         groups=",".join(_split_list(desc.groups or "")),
         comment=desc.comment or "",
         duration=None if desc.end_time is not None else desc.duration,
     )
     db.reservations[name] = resv
     return resv
+
+
+_REPLACE_MSG = (
+    "Reservation can't be updated with REPLACE or REPLACE_DOWN flags; they should be "
+    "updated on a NodeCnt reservation"
+)
+_REPLACE_MAINT_MSG = (
+    "REPLACE and REPLACE_DOWN flags cannot be used with STATIC_ALLOC or MAINT flags"
+)
+
+
+def _check_update_flags(resv: Reservation, requested: list[str]) -> None:
+    """Flag changes update_resv refuses (slurm://src/slurmctld/reservation.c#update_resv).
+
+    REPLACE[_DOWN] only on a NodeCnt reservation without STATIC/MAINT, and
+    STATIC/MAINT not on a REPLACE one (``ESLURM_NOT_SUPPORTED``); TIME_FLOAT
+    cannot be set afterwards (``ESLURM_INVALID_TIME_VALUE``).
+    """
+    wanted = set(requested)
+    if wanted & {"REPLACE", "REPLACE_DOWN"}:
+        if "SPEC_NODES" in resv.flags:
+            raise ReservationError(ESLURM_NOT_SUPPORTED, _REPLACE_MSG)
+        if {"STATIC", "MAINT"} & set(resv.flags):
+            raise ReservationError(ESLURM_NOT_SUPPORTED, _REPLACE_MAINT_MSG)
+    if wanted & {"STATIC", "MAINT"} and {"REPLACE", "REPLACE_DOWN"} & set(resv.flags):
+        raise ReservationError(ESLURM_NOT_SUPPORTED, _REPLACE_MAINT_MSG)
+    if "TIME_FLOAT" in wanted:
+        raise ReservationError(ESLURM_INVALID_TIME_VALUE)
 
 
 def _update_flags(current: list[str], requested: list[str]) -> list[str]:
@@ -530,6 +586,7 @@ def update_reservation(db: SlurmDatabase, desc: ReservationDesc, now: datetime) 
     slack = timedelta(seconds=60)
 
     if desc.flags is not None:
+        _check_update_flags(current, desc.flags)
         resv.flags = _update_flags(resv.flags, desc.flags)
     if desc.partition is not None:
         if desc.partition == "":

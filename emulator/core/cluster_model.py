@@ -790,14 +790,15 @@ def node_views(database: SlurmDatabase, at: datetime) -> dict[str, NodeView]:
         if override is not None:
             reason = override[1]
             state = ["DOWN"] if override[0] == "DOWN" else [base, "DRAIN"]
-        resv_name = ""
-        for resv in active:
-            if node in resv.nodes:
-                resv_name = resv.name
-                state.append("RESERVED")
-                if "MAINT" in resv.flags:
-                    state.append("MAINTENANCE")
-                break
+        # Every active reservation flags its nodes RESERVED (and MAINTENANCE
+        # for a MAINT one); the node names the last of them in list order
+        # (slurm://src/slurmctld/reservation.c#_set_nodes_flags).
+        covering = [r for r in active if node in r.nodes]
+        resv_name = covering[-1].name if covering else ""
+        if covering:
+            state.append("RESERVED")
+            if any("MAINT" in r.flags for r in covering):
+                state.append("MAINTENANCE")
 
         jitter = 1.0 + (_noise(node, load_window, "jitter") - 0.5) * 0.08
         if use.background:

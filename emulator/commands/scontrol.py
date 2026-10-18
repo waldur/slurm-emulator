@@ -70,7 +70,7 @@ from emulator.slurm_version import at_least, current
 
 # (name, minimum prefix, flag, NO_ flag) in parse order
 # (slurm://src/common/proc_args.c#parse_resv_flags). ``None`` NO_ flag = the
-# ``-`` form is not accepted; "new_only" flags only without +/-.
+# ``-`` form is not accepted (``+`` is); "new_only" flags only without +/-.
 _FLAG_TABLE = (
     ("Maintenance", 3, "MAINT", "NO_MAINT"),
     ("Overlap", 1, "OVERLAP", None),
@@ -89,8 +89,8 @@ _FLAG_TABLE = (
     ("promiscuous", 2, "MAGNETIC", "NO_MAGNETIC"),
     ("PURGE_COMP", 2, "PURGE_COMP", "NO_PURGE_COMP"),
     ("Time_Float", 1, "TIME_FLOAT", "new_only"),
-    ("Replace", 1, "REPLACE", "new_only"),
-    ("Replace_Down", 8, "REPLACE_DOWN", "new_only"),
+    ("Replace", 1, "REPLACE", None),
+    ("Replace_Down", 8, "REPLACE_DOWN", None),
     ("NO_HOLD_JOBS_AFTER_END", 1, "NO_HOLD_JOBS_AFTER_END", None),
     ("User_Delete", 1, "USER_DELETE", "NO_USER_DELETE"),
     ("Force_Start", 1, "FORCE_START", "new_only"),
@@ -137,6 +137,8 @@ def parse_resv_flags(text: str, msg: str) -> list[str]:
         for name, minimum, flag, no_flag in _FLAG_TABLE:
             if not _tag_is(token, name, minimum):
                 continue
+            if flag == "FORCE_START" and not at_least("25.05"):
+                continue  # slurm://src/common/proc_args.c#"Force_Start"@25.05+
             if no_flag is None and op == "-":
                 continue
             if no_flag == "new_only" and op:

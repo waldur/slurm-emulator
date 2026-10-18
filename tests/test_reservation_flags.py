@@ -1,0 +1,88 @@
+"""Reservation flag rules and generated names.
+
+* slurm://src/common/proc_args.c#parse_resv_flags: ``+Replace`` is allowed,
+  ``-Replace`` is not; Force_Start exists from 25.05.
+* slurm://src/slurmctld/reservation.c#update_resv: REPLACE only on NodeCnt
+  reservations without MAINT/STATIC; TIME_FLOAT cannot be set later.
+* slurm://src/slurmctld/reservation.c#_generate_resv_name: the suffix is the
+  controller's reservation counter.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from emulator.commands.scontrol import _ParseError, parse_resv_flags
+from emulator.core import reservations
+from emulator.core.database import SlurmDatabase
+from emulator.core.reservations import ReservationDesc, ReservationError
+from emulator.slurm_version import at_least
+from tests.test_cluster_model import T0
+
+
+def test_plus_replace_parses():
+    assert parse_resv_flags("+Replace", "x") == ["REPLACE"]
+    with pytest.raises(_ParseError):
+        parse_resv_flags("-Replace", "x")
+
+
+def test_force_start_from_25_05():
+    if at_least("25.05"):
+        assert parse_resv_flags("Force_Start", "x") == ["FORCE_START"]
+    else:
+        with pytest.raises(_ParseError):
+            parse_resv_flags("Force_Start", "x")
+
+
+def _create(db, **extra):
+    desc = ReservationDesc(start_time=T0, duration=60, users="root", **extra)
+    return reservations.create_reservation(db, desc, T0)
+
+
+def test_replace_refused_on_node_list_reservation(state_env):
+    db = SlurmDatabase()
+    _create(db, name="r", node_list="node001")
+    with pytest.raises(ReservationError) as info:
+        reservations.update_reservation(db, ReservationDesc(name="r", flags=["REPLACE"]), T0)
+    assert info.value.errno == reservations.ESLURM_NOT_SUPPORTED
+
+
+def test_replace_refused_with_maint(state_env):
+    db = SlurmDatabase()
+    _create(db, name="r", node_cnt=1, flags=["MAINT"])
+    with pytest.raises(ReservationError) as info:
+        reservations.update_reservation(db, ReservationDesc(name="r", flags=["REPLACE"]), T0)
+    assert info.value.errno == reservations.ESLURM_NOT_SUPPORTED
+
+
+def test_time_float_cannot_be_set_later(state_env):
+    db = SlurmDatabase()
+    _create(db, name="r", node_list="node001")
+    with pytest.raises(ReservationError) as info:
+        reservations.update_reservation(db, ReservationDesc(name="r", flags=["TIME_FLOAT"]), T0)
+    assert info.value.errno == reservations.ESLURM_INVALID_TIME_VALUE
+
+
+def test_generated_names_follow_the_global_counter(state_env):
+    db = SlurmDatabase()
+    _create(db, name="named", node_list="node001")
+    generated = _create(db, node_list="node002")
+    # The named reservation drew id 1, so the next generated name is root_2.
+    assert generated.name == "root_2" and generated.resv_id == 2
+
+
+def test_overlapping_reservations_flag_nodes(state_env):
+    from emulator.core import cluster_model  # noqa: PLC0415
+    from emulator.core.database import Reservation  # noqa: PLC0415
+
+    db = SlurmDatabase()
+    end = T0.replace(hour=12)
+    db.reservations["maint"] = Reservation(
+        name="maint", nodes=["node001"], start_time=T0, end_time=end, flags=["MAINT"]
+    )
+    db.reservations["other"] = Reservation(
+        name="other", nodes=["node001"], start_time=T0, end_time=end, flags=["OVERLAP"]
+    )
+    view = cluster_model.node_views(db, T0.replace(hour=10))["node001"]
+    assert view.state == ["IDLE", "RESERVED", "MAINTENANCE"]
+    assert view.reservation == "other"
