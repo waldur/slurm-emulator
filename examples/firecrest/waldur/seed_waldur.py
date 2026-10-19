@@ -78,8 +78,11 @@ IdentityProvider.objects.update_or_create(
         "extra_scope": "",
     },
 )
-config.FIRECREST_ALLOWED_API_URLS = FIRECREST_URL
-config.SLURM_MONITOR_ALLOWED_API_URLS = MONITOR_URL
+# "|audience": Waldur exchanges the user's token for one issued for that
+# client (Keycloak client and optional scope of the same name, created by
+# keycloak-setup) before calling the endpoint.
+config.FIRECREST_ALLOWED_API_URLS = f"{FIRECREST_URL}|firecrest"
+config.SLURM_MONITOR_ALLOWED_API_URLS = f"{MONITOR_URL}|slurm-monitor"
 if os.environ.get("HOMEPORT_URL"):
     # Where the OIDC login returns to (one-time code exchanged by homeport).
     config.HOMEPORT_URL = os.environ["HOMEPORT_URL"]

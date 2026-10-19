@@ -15,6 +15,9 @@ auth:
     publicCerts:
       - "http://keycloak:8080/auth/realms/kcrealm/protocol/openid-connect/certs"
     usernameClaim: "preferred_username"
+    # Only tokens issued for FirecREST (firecrest-patches/0002): Waldur sends
+    # one it got by token exchange, never the user's sign-in token.
+    audience: ["firecrest"]
 
 # The emulator's SSH plane accepts any key; the static-key loader only needs
 # an entry per user. The health checker signs in as Keycloak's service

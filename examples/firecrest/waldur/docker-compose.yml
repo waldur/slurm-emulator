@@ -83,7 +83,7 @@ services:
       retries: 20
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.0.7
+    image: quay.io/keycloak/keycloak:26.7.5
     env_file: ../ui/keycloak/keycloak.env
     environment:
       KC_HOSTNAME: "${KC_PUBLIC_URL:-http://localhost:${KC_PORT:-8080}/auth}"
@@ -100,9 +100,13 @@ services:
       retries: 60
 
   # One-shot: the people (alice, bob) and the confidential client Waldur
-  # signs users in with.
+  # signs users in with. FirecREST and slurm-monitor accept only tokens
+  # issued for them (aud=firecrest / slurm-monitor), never a sign-in token:
+  # Waldur exchanges the user's token for one (standard token exchange,
+  # Keycloak >= 26.2), asking for the optional client scope of the same name
+  # whose audience mapper grants that audience.
   keycloak-setup:
-    image: quay.io/keycloak/keycloak:26.0.7
+    image: quay.io/keycloak/keycloak:26.7.5
     restart: "no"
     depends_on:
       keycloak:
@@ -125,12 +129,30 @@ services:
         $$kc create clients -r kcrealm -s clientId=waldur -s enabled=true -s publicClient=false \
           -s secret=$$WALDUR_CLIENT_SECRET -s standardFlowEnabled=true -s directAccessGrantsEnabled=true \
           -s 'redirectUris=["*"]' -s 'webOrigins=["*"]' || echo "client waldur exists"
+        id=$$($$kc get clients -r kcrealm -q clientId=waldur --fields id --format csv --noquotes)
         if [ -n "$$WALDUR_PUBLIC_URL" ]; then
-          id=$$($$kc get clients -r kcrealm -q clientId=waldur --fields id --format csv --noquotes)
           $$kc update clients/$$id -r kcrealm \
             -s "redirectUris=[\"*\",\"$$WALDUR_PUBLIC_URL/*\"]" \
             -s "webOrigins=[\"*\",\"$$WALDUR_PUBLIC_URL\"]"
         fi
+        $$kc update clients/$$id -r kcrealm -s 'attributes."standard.token.exchange.enabled"=true'
+        for aud in firecrest slurm-monitor; do
+          $$kc create clients -r kcrealm -s clientId=$$aud -s enabled=true -s publicClient=false \
+            -s standardFlowEnabled=false -s directAccessGrantsEnabled=false || echo "client $$aud exists"
+          sid=
+          for row in $$($$kc get client-scopes -r kcrealm --fields id,name --format csv --noquotes); do
+            if [ "$${row#*,}" = "$$aud" ]; then sid="$${row%%,*}"; fi
+          done
+          if [ -z "$$sid" ]; then
+            sid=$$($$kc create client-scopes -r kcrealm -i -s name=$$aud -s protocol=openid-connect \
+              -s 'attributes."include.in.token.scope"=false')
+            $$kc create client-scopes/$$sid/protocol-mappers/models -r kcrealm \
+              -s name=$$aud-audience -s protocol=openid-connect -s protocolMapper=oidc-audience-mapper \
+              -s "config.\"included.client.audience\"=$$aud" \
+              -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=false'
+          fi
+          $$kc update clients/$$id/optional-client-scopes/$$sid -r kcrealm
+        done
 
   firecrest:
     build:
@@ -245,7 +267,8 @@ services:
   # REST API (/api/v2) over the same database, for Waldur. Bearer tokens are
   # checked against Keycloak: the issuer is the public realm URL (what the
   # users' tokens carry), the keys come over the compose network
-  # (patches/0001). Users see their own jobs; realm role "admin" sees all.
+  # (patches/0001), the audience must be slurm-monitor (patches/0003). Users
+  # see their own jobs; realm role "admin" sees all.
   slurm-monitor-api:
     image: slurm-monitor:hpc-workspace-poc
     restart: unless-stopped
@@ -258,6 +281,9 @@ services:
       SLURM_MONITOR_OAUTH_URL: "${KC_PUBLIC_URL:-http://localhost:${KC_PORT:-8080}/auth}"
       SLURM_MONITOR_OAUTH_REALM: kcrealm
       SLURM_MONITOR_OAUTH_JWKS: http://keycloak:8080/auth/realms/kcrealm/protocol/openid-connect/certs
+      # Only tokens issued for slurm-monitor (patches/0003), which Waldur
+      # gets by token exchange; a sign-in token (aud=account) is refused.
+      SLURM_MONITOR_OAUTH_AUDIENCE: slurm-monitor
     command: ["restapi", "--host", "0.0.0.0", "--port", "12000"]
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${SLURM_MONITOR_PORT:-12000}:12000"

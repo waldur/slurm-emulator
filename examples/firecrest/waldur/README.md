@@ -87,6 +87,20 @@ before building it (each once; a patch that no longer applies stops it).
   issued for `localhost` validate inside the compose network.
 - Mastermind only sends tokens to URLs in the `FIRECREST_ALLOWED_API_URLS`
   setting; the seed sets it to this stack's FireCREST.
+- FireCREST and slurm-monitor accept only tokens issued for them
+  (`aud=firecrest` / `aud=slurm-monitor`; `firecrest-patches/0002`,
+  `slurm-monitor/patches/0003`), so a user's sign-in token is refused there.
+  Waldur exchanges it for one (Keycloak standard token exchange, which needs
+  Keycloak 26.2 or later): the seed's allowlist entries end in `|firecrest`
+  and `|slurm-monitor`, and `keycloak-setup` creates those clients, an
+  optional client scope of the same name with the audience mapper, and turns
+  on token exchange for the `waldur` client. This needs mastermind with
+  waldur/waldur-mastermind#791.
+- Moving an existing stack from Keycloak 26.0.7 to 26.7.5 recreates the
+  container. In dev mode Keycloak keeps its data inside the container, so
+  alice and bob get new user ids (`sub`). Waldur matches users by `sub`, so
+  either reseed Waldur's users, or keep the old image for a stack whose
+  Waldur users must survive.
 - `SLURM_EMULATOR_JOB_EXECUTE=1` makes the emulator run each batch script
   (inside its container) when the emulated run ends: output files appear in
   `/home/<user>`, and a failing script ends the job FAILED with its exit code.
