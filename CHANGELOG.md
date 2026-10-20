@@ -4,6 +4,11 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.10] - 2026-10-20
+
+### Added
+- Add `SLURM_EMULATOR_ACCOUNTING_STORAGE_TRES` so a deployment can list extra tracked TRES (slurm.conf `AccountingStorageTRES`); sacctmgr refuses limits on TRES that are not tracked
+
 ## [0.9.9] - 2026-10-20
 
 ### Added

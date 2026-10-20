@@ -5,8 +5,8 @@ description: |
   emulation and an optional SSH filesystem plane, for demos and integration testing
   without a real SLURM cluster.
 type: application
-version: 0.9.9
-appVersion: "0.9.9"
+version: 0.9.10
+appVersion: "0.9.10"
 keywords:
   - slurm
   - emulator
