@@ -32,13 +32,13 @@ def test_running_and_pending_rows(restd, auth_headers, sim):
     assert run["Start"] == "2026-10-17T09:01:00" and run["End"] == "Unknown"
     assert run["Elapsed"] == "00:10:00"
     assert (run["NNodes"], run["AllocNodes"], run["NodeList"]) == ("4", "4", "node[001-004]")
-    assert run["AllocCPUS"] == "256" and run["AllocTRES"].startswith("cpu=256,")
+    assert run["AllocCPUS"] == "256" and "cpu=256," in run["AllocTRES"]
     pend = rows[str(pending)]
     assert pend["State"] == "PENDING"
     assert (pend["Start"], pend["End"], pend["Elapsed"]) == ("Unknown", "Unknown", "00:00:00")
     assert (pend["NNodes"], pend["AllocNodes"], pend["NodeList"]) == ("2", "0", "None assigned")
     assert pend["AllocCPUS"] == "0" and pend["AllocTRES"] == ""
-    assert pend["ReqTRES"] == "cpu=2,mem=16G,node=2,billing=2"
+    assert pend["ReqTRES"] == "billing=2,cpu=2,mem=16G,node=2"
 
 
 def test_window_in_the_past_leaves_them_out(restd, auth_headers, sim):

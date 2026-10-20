@@ -65,7 +65,7 @@ class TestTresFormatting:
         job_id, tres_field = lines[0].split("|")
         assert job_id == "1"  # numeric JobID assigned by the database
         # 3200 CPU-hours / 50 node-hours = 64 cpus; 25600/50 = 512G; 200/50 = 4
-        assert tres_field == "cpu=64,mem=512G,node=1,billing=64,gres/gpu=4"
+        assert tres_field == "billing=64,cpu=64,gres/gpu=4,mem=512G,node=1"
         assert "node-hours" not in result
 
     def test_tres_string_standard_node_when_no_usage(self):
@@ -90,7 +90,7 @@ class TestTresFormatting:
         lines = result.strip().split("\n")
         assert len(lines) == 1
         tres_field = lines[0].split("|")[1]
-        assert tres_field == "cpu=64,mem=512G,node=1,billing=64,gres/gpu=4"
+        assert tres_field == "billing=64,cpu=64,gres/gpu=4,mem=512G,node=1"
 
     def test_tres_string_with_mixed_tres_types(self):
         """Test TRES string with various TRES types."""
@@ -120,7 +120,7 @@ class TestTresFormatting:
         assert "node-hours" not in tres_field
         # 100 GPU-hours over 25 node-hours = 4 GPUs.
         assert "gres/gpu=4" in tres_field
-        assert tres_field.startswith("cpu=64,mem=512G,node=1,billing=64")
+        assert tres_field.startswith("billing=64,cpu=64,")
 
     def test_usage_simulator_tres_consistency(self):
         """Test that usage simulator generates consistent TRES data."""

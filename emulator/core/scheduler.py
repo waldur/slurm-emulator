@@ -43,8 +43,8 @@ from typing import Optional
 
 from emulator.core import cluster_model, exit_status, job_execution
 from emulator.core.database import Job, SlurmDatabase, UsageRecord
+from emulator.core.energy import energy_joules
 from emulator.core.time_engine import TimeEngine
-from emulator.core.usage_simulator import standard_node_raw_tres
 
 
 def _clock_mode() -> str:
@@ -342,7 +342,7 @@ def advance_job_states(database: SlurmDatabase, time_engine: TimeEngine) -> bool
                             failed_parts.add(job.partition)
                             unavailable.update(cluster_model.partition_nodes(job.partition))
                     continue
-                cluster_model.allocate(job, placement.nodes)
+                cluster_model.allocate(job, placement.nodes, usage)
                 job.state = "RUNNING"
                 job.state_reason = "None"
                 job.state_description = ""
@@ -413,6 +413,8 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
     alloc_cpus = job.alloc_cpus or req.total_cpus
     mem_per_node = req.mem_per_node
     cpu_eff, mem_frac = cluster_model.job_efficiency(job)
+    tres_req = cluster_model.job_tres_counts(job, allocated=False)
+    tres_alloc = cluster_model.job_tres_counts(job, allocated=True) if started else {}
 
     database.usage_records.append(
         UsageRecord(
@@ -422,9 +424,7 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
             billing_units=node_hours,
             timestamp=sim_now,
             period=_period_for(sim_now),
-            # Jobs run on standard nodes (no GRES model yet): the same
-            # CPU/Mem/GPU breakdown and power-model energy as injected usage.
-            raw_tres=standard_node_raw_tres(node_hours, job.partition),
+            raw_tres=_allocated_raw_tres(tres_alloc, elapsed, node_hours, job.partition),
             cluster=job.cluster,
             partition=job.partition,
             job_id=jid,
@@ -459,6 +459,28 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
                 [start, end or int(job.end_time.timestamp())]
                 for start, end in job.suspend_intervals
             ],
+            tres_req=tres_req,
+            tres_alloc=tres_alloc,
         )
     )
     return True
+
+
+def _allocated_raw_tres(
+    tres_alloc: dict[str, int], elapsed: float, node_hours: float, partition: str
+) -> dict[str, int]:
+    """Usage of a finished run: what it was allocated times how long it ran.
+
+    ``<count>-hours`` (Mem in GB) as on injected usage, so sshare/sreport
+    weigh a job by its allocation -- the rollup's TRES-seconds
+    (slurm://src/plugins/accounting_storage/mysql/as_mysql_rollup.c#as_mysql_hourly_rollup).
+    """
+    hours = elapsed / 3600.0
+    gpu_hours = hours * tres_alloc.get("gres/gpu", 0)
+    return {
+        "node-hours": int(node_hours),
+        "CPU": int(hours * tres_alloc.get("cpu", 0)),
+        "Mem": int(hours * tres_alloc.get("mem", 0) / 1024),
+        "GRES/gpu": int(gpu_hours),
+        "energy": energy_joules(node_hours, gpu_hours, partition),
+    }

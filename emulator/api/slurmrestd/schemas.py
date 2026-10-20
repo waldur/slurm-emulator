@@ -23,7 +23,7 @@ from emulator.commands.sacct import (
     SacctEmulator,
     _convert_exact,
 )
-from emulator.core import exit_status, job_execution
+from emulator.core import exit_status, gres, job_execution
 from emulator.core.assoc_view import effective_assoc
 from emulator.core.cluster_model import (
     DEF_MEM_PER_CPU_MB,
@@ -32,6 +32,7 @@ from emulator.core.cluster_model import (
     compress_hostlist,
     expand_hostlist,
     job_request,
+    job_tres_counts,
     partition_has_gpus,
     synthetic_gpu_use,
 )
@@ -50,16 +51,15 @@ from emulator.core.time_engine import TimeEngine
 from emulator.core.tres import DYNAMIC_TRES_FIRST_ID, STATIC_TRES_IDS, tres_id
 from emulator.slurm_version import at_least
 
+
 # Canonical TRES ids as initialized by slurmdbd (emulator/core/tres.py);
 # dynamic ids are resolved against the database's TRES list when one is given.
 # gres/gpumem and gres/gpuutil exist where AccountingStorageTRES lists them
 # (slurm://src/interfaces/gpu.c#gpu_get_tres_pos), as in the database's list.
-_TRES_IDS = {
-    **STATIC_TRES_IDS,
-    "gres/gpu": DYNAMIC_TRES_FIRST_ID,
-    "gres/gpumem": DYNAMIC_TRES_FIRST_ID + 1,
-    "gres/gpuutil": DYNAMIC_TRES_FIRST_ID + 2,
-}
+def _tres_ids() -> dict[str, int]:
+    """TRES name -> id: the static ones, then the GPU TRES from 1001 in creation order."""
+    dynamic = {name: DYNAMIC_TRES_FIRST_ID + i for i, name in enumerate(gres.gpu_tres_names())}
+    return {**STATIC_TRES_IDS, **dynamic}
 
 
 def uint_no_val(number: Optional[int] = None, infinite: bool = False) -> dict[str, Any]:
@@ -79,7 +79,7 @@ def tres_entry(
     if tres_types is not None:
         tid = tres_id(tres_type, tres_types)
     else:
-        tid = _TRES_IDS.get(tres_type.lower(), 0)
+        tid = _tres_ids().get(tres_type.lower(), 0)
     return {
         "type": base_type,
         "name": name,
@@ -89,8 +89,9 @@ def tres_entry(
 
 
 def tres_list_from_dict(values: dict[str, int]) -> list[dict[str, Any]]:
-    ordered = [t for t in _TRES_IDS if t in values]
-    extras = [t for t in sorted(values) if t not in _TRES_IDS]
+    ids = _tres_ids()
+    ordered = sorted((t for t in values if t in ids), key=ids.__getitem__)
+    extras = [t for t in sorted(values) if t not in ids]
     return [tres_entry(t, values[t]) for t in ordered + extras]
 
 
@@ -362,14 +363,20 @@ def _step_usage(record: UsageRecord, cpu: dict[str, Any]) -> tuple[dict[str, int
         usage["energy"] = int(record.raw_tres["energy"])
     usage.update({"fs/disk": 0, "vmem": int(record.max_rss_bytes), "pages": 0})
     last, peak = dict(usage), dict(usage)
-    if partition_has_gpus(record.partition):
+    # The GPUs the run held (records from before records stored their TRES:
+    # every GPU of a GPU partition's node).
+    if record.tres_req:
+        gpus = record.tres_alloc.get("gres/gpu", 0)
+    else:
+        gpus = _NODE_GPUS if partition_has_gpus(record.partition) else 0
+    if gpus:
         util, mem_fraction = synthetic_gpu_use(record.job_id)
-        gpumem = int(mem_fraction * GPU_MEM_MB * _NODE_GPUS) * 1024 * 1024
-        last.update({"gres/gpumem": gpumem, "gres/gpuutil": round(util * 100 * _NODE_GPUS)})
+        gpumem = int(mem_fraction * GPU_MEM_MB * gpus) * 1024 * 1024
+        last.update({"gres/gpumem": gpumem, "gres/gpuutil": round(util * 100 * gpus)})
         peak.update(
             {
                 "gres/gpumem": gpumem,
-                "gres/gpuutil": min(round(util * 110 * _NODE_GPUS), 100 * _NODE_GPUS),
+                "gres/gpuutil": min(round(util * 110 * gpus), 100 * gpus),
             }
         )
     return last, peak
@@ -510,22 +517,8 @@ def dbd_job_to_dict(
         running = active.state in ("RUNNING", "SUSPENDED") and bool(active.node_list)
         nodes = len(active.node_list) if running else 0
         node_list = record.node_list
-        cpus = (active.alloc_cpus or request.total_cpus) if running else 0
-        requested = {
-            "cpu": request.total_cpus,
-            "mem": request.mem_per_node * request.node_count,
-            "node": request.node_count,
-            "billing": request.total_cpus,
-        }
-        allocated = (
-            {"cpu": cpus, "mem": request.mem_per_node * nodes, "node": nodes, "billing": cpus}
-            if running
-            else {}
-        )
-        if partition_has_gpus(record.partition):
-            requested["gres/gpu"] = _NODE_GPUS * request.node_count
-            if running:
-                allocated["gres/gpu"] = _NODE_GPUS * nodes
+        requested = job_tres_counts(active, allocated=False)
+        allocated = job_tres_counts(active, allocated=True) if running else {}
         zero = {"seconds": 0, "microseconds": 0}
         cpu = {"system": zero, "user": dict(zero), "total": dict(zero)}
         limit = uint_no_val(active.time_limit, infinite=active.time_limit is None)
@@ -554,6 +547,9 @@ def dbd_job_to_dict(
             requested["gres/gpu"] = _NODE_GPUS * max(nodes, 1)
             if nodes:
                 allocated["gres/gpu"] = _NODE_GPUS * nodes
+        if record.tres_req:
+            # What the record stores; the above is for records from before it did.
+            requested, allocated = dict(record.tres_req), dict(record.tres_alloc)
         # Consumed energy (joules) sits in the job's allocated TRES, where
         # sacct's ConsumedEnergyRaw reads it
         # (slurm://src/sacct/print.c#PRINT_CONSUMED_ENERGY_RAW).
@@ -732,6 +728,13 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
             "nodes": {"count": node_count, "list": nodes, "allocation": []},
             "cpus": total_cpus,
         },
+        # The GRES request as given, the TRES strings in TRES-id order and the
+        # GPU devices per node (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_INFO@26.05+).
+        "tres_per_job": job.tres_per_job,
+        "tres_per_node": job.tres_per_node,
+        "tres_req_str": _ctld_tres(job, allocated=False),
+        "tres_alloc_str": _ctld_tres(job, allocated=True) if job.node_list else "",
+        "gres_detail": _gres_detail(job),
         # None -> UNLIMITED (infinite), matching a job with no --time.
         "time_limit": uint_no_val(time_limit, infinite=(time_limit is None)),
         "submit_time": ts(job.submit_time),
@@ -759,6 +762,38 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         ),
         "current_working_directory": job.working_directory or f"/home/{job.user}",
     }
+
+
+def _ctld_tres(job: Job, allocated: bool) -> str:
+    from emulator.commands.scontrol_info import job_tres  # noqa: PLC0415 - cycle
+
+    return job_tres(job, allocated)
+
+
+def _index_ranges(indices: list[int]) -> str:
+    """``[0, 1, 3]`` -> ``0-1,3``, as a bitmap prints."""
+    ranges: list[str] = []
+    for index in sorted(indices):
+        if ranges and int(ranges[-1].split("-")[-1]) == index - 1:
+            ranges[-1] = f"{ranges[-1].split('-')[0]}-{index}"
+        else:
+            ranges.append(str(index))
+    return ",".join(ranges)
+
+
+def _gres_detail(job: Job) -> list[str]:
+    """``gpu[:type]:N(IDX:...)`` per allocated node (slurm://src/stepmgr/gres_stepmgr.c#gres_stepmgr_job_build_details)."""
+    from emulator.core.cluster_model import node_gpu_type  # noqa: PLC0415
+
+    detail = []
+    for node in job.node_list or []:
+        indices = job.gpu_indices.get(node, [])
+        if not indices:
+            continue
+        gpu_type = node_gpu_type(node)
+        name = f"gpu:{gpu_type}" if gpu_type else "gpu"
+        detail.append(f"{name}:{len(indices)}(IDX:{_index_ranges(indices)})")
+    return detail
 
 
 # Cluster topology. Defaults to debug* node[001-004], compute node[005-100]
@@ -900,15 +935,35 @@ def node_to_dict(name: str, now_ts: int, view: Optional[NodeView] = None) -> dic
     (MB, UINT64_NO_VAL; unset for a DOWN node that does not report) and
     ``tres_used``. Without it the node is idle, as before.
     """
+    from emulator.core.cluster_model import (  # noqa: PLC0415
+        node_gpu_type,
+        node_gpus,
+        node_threads_per_core,
+    )
+
     mem_mb = _NODE_MEM_GB * 1024
     if view is None:
         view = NodeView(state=["IDLE"], free_mem=mem_mb)
+    gpus, gpu_type = node_gpus(name), node_gpu_type(name)
+    threads = node_threads_per_core(name)
+    gpu_name = f"gpu:{gpu_type}" if gpu_type else "gpu"
+
+    def gpu_tres(count: int) -> str:
+        typed = f",gres/gpu:{gpu_type}={count}" if gpu_type else ""
+        return f",gres/gpu={count}{typed}"
+
     tres_used = ""
     if view.alloc_cpus:
         mem_used = view.alloc_memory
         tres_used = f"cpu={view.alloc_cpus},mem={_mem_str(mem_used)}"
         if view.gpus_used:
-            tres_used += f",gres/gpu={view.gpus_used}"
+            tres_used += gpu_tres(view.gpus_used)
+    # gres_used names the device indices of a typed GRES only, as a 25.11
+    # cluster printed ``gpu:h200:4(IDX:0-3)`` next to ``gpu:2``
+    # (slurm://src/interfaces/gres.c#gres_get_node_used).
+    gres_used = f"{gpu_name}:{view.gpus_used}"
+    if gpu_type and view.gpu_indices:
+        gres_used += f"(IDX:{_index_ranges(view.gpu_indices)})"
     return {
         "name": name,
         "hostname": name,
@@ -925,21 +980,21 @@ def node_to_dict(name: str, now_ts: int, view: Optional[NodeView] = None) -> dic
         "free_mem": uint_no_val(view.free_mem),
         "real_memory": mem_mb,
         "sockets": 2,
-        "cores": _NODE_CPUS // 2,
-        "threads": 1,
+        "cores": _NODE_CPUS // 2 // threads,
+        "threads": threads,
         "boards": 1,
         "partitions": [p for p, _ in PARTITION_RANGES.items() if name in _node_names(p)],
         "features": [],
         "active_features": [],
-        "gres": f"gpu:{_NODE_GPUS}",
-        "gres_used": f"gpu:{view.gpus_used}",
+        "gres": f"{gpu_name}:{gpus}" if gpus else "",
+        "gres_used": gres_used if gpus else "",
         "boot_time": uint_no_val(now_ts),
         "last_busy": uint_no_val(now_ts),
         "slurmd_start_time": uint_no_val(now_ts),
         # PARSER_ARRAY(NODE) serializes weight as UINT32 (a plain int).
         "weight": 1,
-        "tres": f"cpu={_NODE_CPUS},mem={_mem_str(mem_mb)},billing={_NODE_CPUS},"
-        f"gres/gpu={_NODE_GPUS}",
+        "tres": f"cpu={_NODE_CPUS},mem={_mem_str(mem_mb)},billing={_NODE_CPUS}"
+        + (gpu_tres(gpus) if gpus else ""),
         "tres_used": tres_used,
         "reason": view.reason,
         "reservation": view.reservation,

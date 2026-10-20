@@ -159,9 +159,14 @@ class JobRun:
     time_limit: Optional[int] = None  # minutes
     exit_code: Optional[int] = None
     environment: dict[str, str] = field(default_factory=dict, hash=False, compare=False)
+    # GPUs the run was allocated per node; None for records from before
+    # records stored their TRES, which hold every GPU of a GPU partition's node.
+    allocated_gpus_per_node: Optional[int] = field(default=None, hash=False, compare=False)
 
     @property
     def gpus_per_node(self) -> int:
+        if self.allocated_gpus_per_node is not None:
+            return self.allocated_gpus_per_node
         return NODE_GPUS if partition_has_gpus(self.partition) else 0
 
     def cpus_on(self, node: str) -> int:
@@ -204,6 +209,9 @@ def run_from_record(record: UsageRecord) -> Optional[JobRun]:
         submit_time=utc(record.submit_time) if record.submit_time else None,
         time_limit=record.time_limit,
         exit_code=record.exit_code if record.exit_code is not None else 0,
+        allocated_gpus_per_node=record.tres_alloc.get("gres/gpu", 0) // max(len(nodes), 1)
+        if record.tres_req
+        else None,
     )
 
 
@@ -228,6 +236,7 @@ def run_from_job(job: Job) -> Optional[JobRun]:
         submit_time=utc(job.submit_time) if job.submit_time else None,
         time_limit=job.time_limit,
         environment=dict(job.environment or {}),
+        allocated_gpus_per_node=max((len(i) for i in job.gpu_indices.values()), default=0),
     )
 
 

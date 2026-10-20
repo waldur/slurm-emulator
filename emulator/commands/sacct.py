@@ -21,9 +21,11 @@ Output formatting and exit codes mirror real Slurm 26.05:
   ``emulator/core/jobacct.py``. Rows are ordered by submit time, then job id
   (slurm://src/sacct/options.c#_sort_desc_submit_time); ``Suspended`` is the
   suspended time the query reports;
-* one job row per usage record: numeric JobID from the database,
-  standard TRES string (``cpu=...,mem=...G,node=1,billing=...``) in
-  TRES-id order — the emulator-internal ``node-hours`` key is not
+* one job row per usage record: numeric JobID from the database;
+  ReqTRES/AllocTRES are what the record stores (the standard node's rates
+  for injected usage), as ``name=count`` entries sorted as strings
+  (``billing=...,cpu=...,gres/gpu:h200=1,gres/gpu=1,mem=...,node=...``,
+  ``_sacct_tres``) — the emulator-internal ``node-hours`` key is not
   exposed;
 * ``ConsumedEnergyRaw`` is the job's ``energy`` TRES in joules
   (``slurmdb_find_tres_count_in_string(job->tres_alloc_str, TRES_ENERGY)``,
@@ -110,6 +112,7 @@ _REGISTRY: list[FieldSpec] = [
     FieldSpec("NNodes", 8, truncate=False),
     FieldSpec("NodeList", 15),
     FieldSpec("Partition", 10),
+    FieldSpec("ReqCPUS", 8, truncate=False),
     FieldSpec("ReqMem", 10),
     FieldSpec("ReqTRES", 10),
     FieldSpec("Start", 19),
@@ -462,13 +465,17 @@ class SacctEmulator:
             # Still in the controller: unset times print "Unknown"
             # (slurm://src/common/parse_time.c#slurm_make_time_str); CPU time
             # and MaxRSS only arrive when steps end.
-            from emulator.commands.scontrol_info import job_tres  # noqa: PLC0415
+            from emulator.core.cluster_model import job_tres_counts  # noqa: PLC0415
 
             nnodes = record.node_count
             node_list = record.node_list
             alloc_cpus = record.alloc_cpus
-            req_tres = job_tres(active, allocated=False)
-            alloc_tres = job_tres(active, allocated=True) if record.start_time else ""
+            req_tres = _sacct_tres(job_tres_counts(active, allocated=False), config.noconvert)
+            alloc_tres = (
+                _sacct_tres(job_tres_counts(active, allocated=True), config.noconvert)
+                if record.start_time
+                else ""
+            )
             req_mem_mb = record.req_mem_mb * max(nnodes, 1)
             req_mem = str(req_mem_mb) + "M" if config.noconvert else _convert_exact(req_mem_mb, 2)
             limit = _mins2time_str(record.time_limit) if record.time_limit else "UNLIMITED"
@@ -538,6 +545,8 @@ class SacctEmulator:
             "MaxRSS": max_rss,
             "NNodes": str(nnodes),
             "NodeList": node_list,
+            # slurm://src/sacct/print.c#PRINT_REQ_CPUS: the job's req_cpus.
+            "ReqCPUS": _count(req_tres, "cpu"),
             "ReqMem": req_mem,
             "ReqTRES": req_tres,
             "Start": start.strftime(fmt) if start else "Unknown",
@@ -560,18 +569,23 @@ class SacctEmulator:
         }
 
     def _explicit_tres(self, record: UsageRecord, allocated: bool, noconvert: bool) -> str:
-        """ReqTRES / AllocTRES of a real run, in TRES-id order."""
+        """ReqTRES / AllocTRES of a real run: what the record stores.
+
+        Records from before records stored their TRES derive them from the
+        standard node, GPU partitions with every GPU of their nodes.
+        """
+        stored = record.tres_alloc if allocated else record.tres_req
+        if stored or (allocated and record.tres_req):
+            return _sacct_tres(stored, noconvert)
         nodes = record.node_count
         if allocated and not nodes:
             return ""
         nodes = max(nodes, 1)
         cpus = record.alloc_cpus or _NODE_CPUS * nodes
-        mem_mb = record.req_mem_mb * nodes
-        mem = f"{mem_mb}M" if noconvert else _convert_exact(mem_mb, 2)
-        parts = [f"cpu={cpus}", f"mem={mem}", f"node={nodes}", f"billing={cpus}"]
+        counts = {"cpu": cpus, "mem": record.req_mem_mb * nodes, "node": nodes, "billing": cpus}
         if partition_has_gpus(record.partition):
-            parts.append(f"gres/gpu={_NODE_GPUS * nodes}")
-        return ",".join(parts)
+            counts["gres/gpu"] = _NODE_GPUS * nodes
+        return _sacct_tres(counts, noconvert)
 
     def _cpu_rate(self, record: UsageRecord) -> int:
         return self._rate(record, "CPU", _NODE_CPUS)
@@ -596,20 +610,49 @@ class SacctEmulator:
         return round(value / record.node_hours)
 
     def _tres_string(self, record: UsageRecord, noconvert: bool) -> str:
-        """Standard Slurm TRES string in TRES-id order.
+        """TRES of injected usage: the standard node's per-hour rates.
 
-        cpu=1, mem=2, node=4, billing=5, gres/* after — matching
-        slurmdb_make_tres_string_from_simple. The emulator-internal
-        ``node-hours`` raw_tres key is intentionally not exposed.
+        The emulator-internal ``node-hours`` raw_tres key is intentionally
+        not exposed.
         """
         cpus = self._cpu_rate(record)
-        mem_gb = self._rate(record, "Mem", _NODE_MEM_GB)
+        counts = {
+            "cpu": cpus,
+            "mem": self._rate(record, "Mem", _NODE_MEM_GB) * 1024,
+            "node": 1,
+            "billing": cpus,
+        }
         gpus = self._rate(record, "GRES/gpu", _NODE_GPUS)
-        mem = f"{mem_gb * 1024}M" if noconvert else f"{mem_gb}G"
-        parts = [f"cpu={cpus}", f"mem={mem}", "node=1", f"billing={cpus}"]
         if gpus:
-            parts.append(f"gres/gpu={gpus}")
-        return ",".join(parts)
+            counts["gres/gpu"] = gpus
+        return _sacct_tres(counts, noconvert)
+
+
+def _count(tres: str, name: str) -> str:
+    """The ``name=`` count of a sacct TRES string ("0" without one)."""
+    for entry in tres.split(","):
+        key, _, value = entry.partition("=")
+        if key == name:
+            return value
+    return "0"
+
+
+def _sacct_tres(counts: dict[str, int], noconvert: bool) -> str:
+    """A TRES string as sacct prints it: ``name=count`` entries sorted as strings.
+
+    slurmdb_make_tres_string_from_simple without TRES_STR_FLAG_SORT_ID sorts
+    the entries with slurm_sort_char_list_asc, so ``gres/gpu:h200=1`` comes
+    before ``gres/gpu=1`` (slurm://src/common/slurmdb_defs.c#slurmdb_make_tres_string_from_simple).
+    Memory prints in MB with ``--noconvert``, else scaled.
+    """
+    entries = []
+    for name, count in counts.items():
+        if name == "mem":
+            value = f"{count}M" if noconvert else _convert_exact(count, 2)
+        else:
+            value = str(count)
+        entries.append(f"{name}={value}")
+    return ",".join(sorted(entries))
 
 
 def _from_epoch(value: int) -> Optional[datetime]:

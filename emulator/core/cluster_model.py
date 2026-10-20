@@ -67,8 +67,14 @@ Intentional deviations (test fixture, not a scheduler):
 * ``SLURM_EMULATOR_BACKGROUND_LOAD`` occupies whole nodes on behalf of other
   tenants without any job rows -- a real cluster would list those jobs.
   The busy set is deterministic and rotates every 15 minutes of job-clock time.
-* GPUs are charged (``gres/gpu`` TRES) only to jobs in partitions whose
-  name contains ``gpu`` (``partition_has_gpus``); there is no GRES model.
+* **GPUs and cores** (``emulator/core/gres.py``): the nodes of GPU
+  partitions carry ``NODE_GPUS`` GPUs, typed or not. A job gets GPUs only
+  when it asks for them (``--gres``/``--gpus``) or takes whole nodes, and
+  the lowest free device indices on each node. CPUs are handed out in whole
+  cores (``CR_Core_Memory``), so with two threads per core a 1-CPU job holds
+  2 CPUs, and memory without ``--mem`` is ``DefMemPerCPU`` per allocated CPU
+  (slurm://src/plugins/select/cons_tres/job_test.c#_job_test,
+  slurm://src/stepmgr/gres_stepmgr.c#gres_stepmgr_job_alloc).
 * CPU load, free memory, CPU time and MaxRSS are synthetic: each job gets a
   deterministic CPU efficiency and memory fraction from its id
   (``synthetic_efficiency``), overridable per job through its environment.
@@ -86,12 +92,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional
 
+from emulator.core import gres
 from emulator.core.database import Job, Reservation, SlurmDatabase
+from emulator.core.gres import NODE_GPUS
 
 # Standard node (matches usage_simulator / sacct / schemas).
 NODE_CPUS = 64
 NODE_MEM_MB = 512 * 1024
-NODE_GPUS = 4
 GPU_MEM_MB = 96 * 1024
 DEF_MEM_PER_CPU_MB = NODE_MEM_MB // NODE_CPUS
 # Memory the OS itself holds on an idle node (for ``free_mem``).
@@ -481,21 +488,72 @@ class JobRequest:
 
 
 def job_request(job: Job) -> JobRequest:
-    """Turn the job_desc fields into a per-node CPU/memory requirement."""
+    """Turn the job_desc fields into a per-node CPU/memory requirement.
+
+    This is what the job asks for (ReqTRES); whole nodes for an exclusive job
+    and whole cores are what it is given (``alloc_cpus_per_node``).
+    """
     nodes = max(job.node_count or 1, 1)
     cpt = max(job.cpus_per_task or 1, 1)
     if job.tasks:
         total = job.tasks * cpt
     elif job.tasks_per_node:
         total = job.tasks_per_node * nodes * cpt
-    elif job.exclusive:
-        total = nodes * NODE_CPUS  # whole nodes
     else:
         total = nodes * cpt  # one task per node
     nodes = max(nodes, math.ceil(total / NODE_CPUS))
     per_node = min(math.ceil(total / nodes), NODE_CPUS)
     mem = job.memory_per_node or per_node * DEF_MEM_PER_CPU_MB
     return JobRequest(nodes, total, per_node, min(mem, NODE_MEM_MB))
+
+
+def gpu_request(job: Job) -> Optional[gres.GpuRequest]:
+    """The job's ``--gres`` (per node) or ``--gpus`` (per job) GPU request."""
+    return gres.parse_gpu_request(job.tres_per_node) or gres.parse_gpu_request(
+        job.tres_per_job, per_job=True
+    )
+
+
+def _node_partition(node: str) -> str:
+    """The first partition ``node`` belongs to (its slurm.conf node line)."""
+    for partition in partition_ranges():
+        if node in partition_nodes(partition):
+            return partition
+    return ""
+
+
+def node_gpu_type(node: str) -> str:
+    return gres.partition_gpu_type(_node_partition(node))
+
+
+def node_gpus(node: str) -> int:
+    return NODE_GPUS if _has_gpus(node) else 0
+
+
+def node_threads_per_core(node: str) -> int:
+    return gres.partition_threads_per_core(_node_partition(node))
+
+
+def gpus_wanted(job: Job, nodes: int) -> list[int]:
+    """GPUs the job asks for on each of ``nodes`` nodes.
+
+    An exclusive job's GPUs are not asked for: it gets whatever its nodes have.
+    """
+    request = gpu_request(job)
+    if request is None:
+        return [0] * nodes
+    if request.per_job:
+        return _split(request.count, nodes)
+    return [request.count] * nodes
+
+
+def alloc_cpus_per_node(job: Job, node: str) -> int:
+    """CPUs ``job`` holds on ``node``: whole nodes when exclusive, else whole cores."""
+    if job.exclusive:
+        return NODE_CPUS
+    threads = gres.partition_threads_per_core(_node_partition(node))
+    per_node = job_request(job).cpus_per_node
+    return min(math.ceil(per_node / threads) * threads, NODE_CPUS)
 
 
 def request_fits(job: Job) -> bool:
@@ -511,6 +569,17 @@ def request_fits(job: Job) -> bool:
     part_nodes = len(partition_nodes(job.partition))
     if cpt > NODE_CPUS or (job.memory_per_node or 0) > NODE_MEM_MB:
         return False
+    request = gpu_request(job)
+    if request is not None:
+        # GPUs of the asked-for type, and no more per node than a node has.
+        capable = [
+            n
+            for n in partition_nodes(job.partition)
+            if node_gpus(n) and (not request.gpu_type or node_gpu_type(n) == request.gpu_type)
+        ]
+        per_node = request.count if not request.per_job else 1
+        if not capable or per_node > NODE_GPUS:
+            return False
     if job.tasks_per_node and job.tasks_per_node * cpt > NODE_CPUS:
         return False
     nodes = max(job.node_count or 1, 1)
@@ -605,6 +674,7 @@ class NodeUse:
     mem: int = 0
     background: bool = False
     jobs: list[tuple[Job, int, int]] = field(default_factory=list)
+    gpu_indices: set[int] = field(default_factory=set)
 
 
 def job_node_shares(job: Job) -> list[tuple[str, int, int]]:
@@ -614,6 +684,61 @@ def job_node_shares(job: Job) -> list[tuple[str, int, int]]:
         return []
     shares = _split(job.alloc_cpus or len(nodes) * NODE_CPUS, len(nodes))
     return [(n, c, job_mem_per_node(job, c)) for n, c in zip(nodes, shares)]
+
+
+def job_tres_counts(job: Job, allocated: bool) -> dict[str, int]:
+    """ReqTRES or AllocTRES of a job, by TRES name (mem in MB).
+
+    A GPU request counts ``gres/gpu`` and, when it names a type, that type
+    too; an allocation counts ``gres/gpu`` and the type of the nodes the
+    GPUs came from -- both when the type is tracked
+    (slurm://src/stepmgr/gres_stepmgr.c#_set_type_tres_cnt).
+    """
+    req = job_request(job)
+    if not allocated:
+        counts = {
+            "cpu": req.total_cpus,
+            "mem": req.mem_per_node * req.node_count,
+            "node": req.node_count,
+            "billing": req.total_cpus,
+        }
+        request = gpu_request(job)
+        if request is not None:
+            total = request.count if request.per_job else request.count * req.node_count
+            counts["gres/gpu"] = total
+            if request.gpu_type:
+                counts[f"gres/gpu:{request.gpu_type}"] = total
+        return counts
+    shares = job_node_shares(job)
+    if not shares:
+        # Started without a node list (pre-allocation state files): whole
+        # standard nodes, GPUs where the partition has them, as before.
+        nodes = max(job.node_count or 1, 1)
+        counts = {
+            "cpu": nodes * NODE_CPUS,
+            "mem": nodes * NODE_MEM_MB,
+            "node": nodes,
+            "billing": nodes * NODE_CPUS,
+        }
+        if partition_has_gpus(job.partition):
+            counts["gres/gpu"] = nodes * NODE_GPUS
+        return counts
+    cpus = sum(c for _n, c, _m in shares)
+    counts = {
+        "cpu": cpus,
+        "mem": sum(m for _n, _c, m in shares),
+        "node": len(shares),
+        "billing": cpus,
+    }
+    for node, _cpus, _mem in shares:
+        held = len(job.gpu_indices.get(node, []))
+        if not held:
+            continue
+        counts["gres/gpu"] = counts.get("gres/gpu", 0) + held
+        gpu_type = node_gpu_type(node)
+        if gpu_type:
+            counts[f"gres/gpu:{gpu_type}"] = counts.get(f"gres/gpu:{gpu_type}", 0) + held
+    return counts
 
 
 def occupancy(
@@ -634,6 +759,7 @@ def occupancy(
             use.cpus += cpus
             use.mem += mem
             use.jobs.append((job, cpus, mem))
+            use.gpu_indices.update(job.gpu_indices.get(node, []))
 
     fractions = background_fractions()
     if fractions:
@@ -753,6 +879,8 @@ def try_allocate(
             blocked.update(resv.nodes)
         pool = [n for n in pool if n not in blocked]
 
+    request = gpu_request(job)
+    want_gpus = max(gpus_wanted(job, req.node_count) or [0])
     free: list[str] = []
     for node in pool:
         if node in overrides or (unavailable and node in unavailable):
@@ -760,8 +888,15 @@ def try_allocate(
         use = usage.get(node) or NodeUse()
         if use.background:
             continue
-        if NODE_CPUS - use.cpus < req.cpus_per_node or NODE_MEM_MB - use.mem < req.mem_per_node:
+        cpus = alloc_cpus_per_node(job, node)
+        mem = job_mem_per_node(job, cpus)
+        if NODE_CPUS - use.cpus < cpus or NODE_MEM_MB - use.mem < mem:
             continue
+        if want_gpus:
+            if request is not None and request.gpu_type and node_gpu_type(node) != request.gpu_type:
+                continue
+            if node_gpus(node) - len(use.gpu_indices) < want_gpus:
+                continue
         free.append(node)
 
     if len(free) >= req.node_count:
@@ -769,12 +904,23 @@ def try_allocate(
     return Placement(None, "Resources")
 
 
-def allocate(job: Job, nodes: list[str]) -> None:
-    """Record the allocation on the job (node list + CPUs)."""
-    req = job_request(job)
+def allocate(job: Job, nodes: list[str], usage: Optional[dict[str, NodeUse]] = None) -> None:
+    """Record the allocation on the job: node list, CPUs and GPU device indices.
+
+    Each node hands out its lowest free GPU indices, as gres_stepmgr picks
+    the first free bits (slurm://src/stepmgr/gres_stepmgr.c#gres_stepmgr_job_alloc).
+    """
     job.node_list = list(nodes)
     job.node_count = len(nodes)
-    job.alloc_cpus = req.total_cpus
+    job.alloc_cpus = sum(alloc_cpus_per_node(job, node) for node in nodes)
+    job.gpu_indices = {}
+    for node, count in zip(nodes, gpus_wanted(job, len(nodes))):
+        if job.exclusive:
+            count = node_gpus(node)  # whole nodes, every GPU on them
+        if not count:
+            continue
+        taken = (usage or {}).get(node, NodeUse()).gpu_indices
+        job.gpu_indices[node] = [i for i in range(node_gpus(node)) if i not in taken][:count]
 
 
 # --- node view ---
@@ -794,6 +940,7 @@ class NodeView:
     free_mem: Optional[int] = None
     reservation: str = ""
     gpus_used: int = 0
+    gpu_indices: list[int] = field(default_factory=list)
 
 
 def node_views(database: SlurmDatabase, at: datetime) -> dict[str, NodeView]:
@@ -851,18 +998,15 @@ def node_views(database: SlurmDatabase, at: datetime) -> dict[str, NodeView]:
             cpu_load=0 if down else round(load * jitter * 100),
             free_mem=None if down else max(int(NODE_MEM_MB - used_mem), 0),
             reservation=resv_name,
-            gpus_used=NODE_GPUS if use.cpus and _has_gpus(node) else 0,
+            gpus_used=len(use.gpu_indices),
+            gpu_indices=sorted(use.gpu_indices),
         )
     return views
 
 
 def partition_has_gpus(partition: str) -> bool:
-    """Whether jobs in ``partition`` are charged GPUs.
-
-    Every node advertises ``gpu:4`` (the standard node), but only partitions
-    named like ``gpu`` hand them out, so CPU jobs carry no ``gres/gpu`` TRES.
-    """
-    return "gpu" in (partition or "").lower()
+    """Whether the nodes of ``partition`` carry GPUs (``emulator/core/gres.py``)."""
+    return gres.partition_has_gpus(partition)
 
 
 def _has_gpus(node: str) -> bool:

@@ -425,6 +425,17 @@ so they also appear in the accounting (`/slurmdb` / `sacct`) view. Configurable 
   offsets resolved once and kept in the state file). Synthetic CPU efficiency / memory fraction
   per job (deterministic from the id; `SLURM_EMULATOR_CPU_EFFICIENCY` / `SLURM_EMULATOR_MEM_FRACTION`
   in the job environment) feed node load, slurmdb `time.total` and the batch step's MaxRSS
+- GPUs and cores (`emulator/core/gres.py`): `SLURM_EMULATOR_GPU_TYPES` (`gpu=h200,debug`) names
+  the partitions whose nodes carry 4 GPUs and their type (none after a bare name; unset = partitions
+  named like `gpu`, untyped); a type is also tracked as `gres/gpu:<type>` TRES.
+  `SLURM_EMULATOR_THREADS_PER_CORE` (`gpu=2`) hands out whole cores there. A job gets GPUs only
+  for `tres_per_node`/`tres_per_job` (sbatch `--gres`/`--gpus`) or `shared: ["none"]`, the lowest
+  free device indices (`gres_detail`); ReqTRES is the request, AllocTRES the allocation, and
+  sacct prints both sorted by name. Checked against a real 25.11.7 run in
+  `tests/test_gres_golden.py` (`scripts/agent_parity/usage/`)
+- Accounting reads (`emulator/core/jobacct.py`): sacct `--truncate`/`-D` and slurmrestd job-condition
+  flags (`skip_steps`, `show_duplicates`, `disable_truncate_usage_time`) follow slurmdbd;
+  `scontrol suspend|resume|requeue` (`tests/test_jobacct_golden.py`)
 - `SLURM_EMULATOR_TIME_FOLLOW_WALL` = `1` makes the simulated clock the wall clock (no time
   travel) — for live demo stacks whose clients query accounting in real time
 - `SLURM_EMULATOR_NSS` = `1` resolves user names through the OS NSS (`emulator/core/nss.py`;

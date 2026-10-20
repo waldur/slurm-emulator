@@ -267,5 +267,6 @@ class TestSiteAgentPath:
                 "--parsable2",
             ]
         )
-        assert out == "proj-a|cpu=64,mem=512G,node=1,billing=64,gres/gpu=4|02:00:00|alice"
+        # sacct sorts TRES entries as strings (slurm://src/common/slurmdb_defs.c#slurmdb_make_tres_string_from_simple).
+        assert out == "proj-a|billing=64,cpu=64,gres/gpu=4,mem=512G,node=1|02:00:00|alice"
         assert sacct.exit_code == 0
