@@ -73,6 +73,12 @@ def gpu_tres_names() -> list[str]:
     ``gres/gpu`` and its typed counterparts first, then what the GPU plugin
     adds for it (slurm://src/interfaces/gpu.c#gpu_get_tres_pos) -- the order
     a 25.11 cluster gave them ids 1001.. in.
+
+    Intentional deviation: the ids follow the current configuration, so
+    adding a GPU type to an existing state moves ``gres/gpumem`` and
+    ``gres/gpuutil`` up by one; slurmdbd keeps existing ids and appends new
+    TRES at the next free one. Configure GPU types before creating limits
+    by id.
     """
     return ["gres/gpu", *(f"gres/gpu:{t}" for t in gpu_types()), "gres/gpumem", "gres/gpuutil"]
 
@@ -91,13 +97,21 @@ class GpuRequest:
     per_job: bool = False
 
 
-_GRES_RE = re.compile(r"^(?:gres/|gres:)?gpu(?::(?P<type>[^:=]+))?[:=](?P<count>\d+)$")
+_GRES_RE = re.compile(r"^(?:gres/|gres:)?gpu(?::(?P<type>[^:=\d][^:=]*))?(?:[:=](?P<count>\d+))?$")
 
 
 def parse_gpu_request(tres: str, per_job: bool = False) -> Optional[GpuRequest]:
-    """``gres/gpu:2``, ``gres/gpu:h200:2`` (also ``gpu:2``) -> a GPU request."""
+    """``gres/gpu:2``, ``gres/gpu:h200:2``, ``gpu`` (one GPU) -> a GPU request.
+
+    A GRES without a count asks for one, as a 25.11 cluster recorded
+    ``--gres=gpu`` and ``--gres=gpu:h200`` with gres/gpu=1
+    (slurm://src/interfaces/gres.c#gres_job_state_validate).
+    """
     for item in (tres or "").split(","):
         match = _GRES_RE.match(item.strip())
-        if match and int(match["count"]) > 0:
-            return GpuRequest(int(match["count"]), match["type"] or "", per_job)
+        if not match:
+            continue
+        count = int(match["count"]) if match["count"] is not None else 1
+        if count > 0:
+            return GpuRequest(count, match["type"] or "", per_job)
     return None

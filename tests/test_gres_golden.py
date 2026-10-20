@@ -158,3 +158,162 @@ def test_sbatch_gpu_options_become_job_desc_tres():
     assert _sbatch_gpus(["-G", "1"]) == {"tres_per_job": "gres/gpu:1"}
     assert _sbatch_gpus(["--gpus=h200:1"]) == {"tres_per_job": "gres/gpu:h200:1"}
     assert _sbatch_gpus(["-p", "gpu"]) == {}
+
+
+@pytest.fixture
+def gpu_cluster(restd, auth_headers, state_env, monkeypatch):
+    """The cluster-gres/ layout, on the simulated clock."""
+    monkeypatch.setenv("SLURM_EMULATOR_JOB_CLOCK", "time")
+    monkeypatch.setenv("SLURM_EMULATOR_JOB_RUN_DELAY", "1")
+    monkeypatch.setenv("SLURM_EMULATOR_ACCOUNTING_ENFORCE", "none")
+    monkeypatch.setenv("SLURM_EMULATOR_GPU_TYPES", "debug,gpu=h200")
+    monkeypatch.setenv("SLURM_EMULATOR_THREADS_PER_CORE", "gpu=2")
+    for name in ("SLURM_EMULATOR_JOB_EXECUTE", "SLURM_EMULATOR_TIME_FOLLOW_WALL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(schemas, "PARTITION_RANGES", {"debug": (1, 2), "gpu": (3, 4)})
+    set_time(T0)
+
+    def run(**fields):
+        body = restd.post(
+            f"/slurm/{V}/job/submit",
+            headers=auth_headers,
+            json={"job": {"account": "acc1", "time_limit": 60, **fields}},
+        ).json()
+        return body
+
+    return run
+
+
+def _ctld(restd, auth_headers, job_id):
+    return restd.get(f"/slurm/{V}/job/{job_id}", headers=auth_headers).json()["jobs"][0]
+
+
+def test_a_gres_without_count_is_one_gpu(gpu_cluster, restd, auth_headers):
+    """``--gres=gpu`` and ``--gres=gpu:h200`` ask for one GPU: the 25.11.7 cluster
+    recorded ReqTRES gres/gpu=1 and gres/gpu:h200=1,gres/gpu=1 for them
+    (slurm://src/interfaces/gres.c#gres_job_state_validate)."""
+    bare = gpu_cluster(name="bare", partition="gpu", tasks=1, tres_per_node="gres/gpu")["job_id"]
+    typed = gpu_cluster(name="t", partition="gpu", tasks=1, tres_per_node="gres/gpu:h200")["job_id"]
+    set_time(T0 + timedelta(seconds=4))
+    assert _ctld(restd, auth_headers, bare)["tres_req_str"].endswith(",gres/gpu=1")
+    assert _ctld(restd, auth_headers, typed)["tres_req_str"].endswith(",gres/gpu=1,gres/gpu:h200=1")
+
+
+def test_more_gpus_than_a_node_has_waits_like_real_slurm(gpu_cluster, restd, auth_headers):
+    """``-n1 --gpus=8`` on 4-GPU nodes: the 25.11.7 cluster accepted it and kept it
+    PENDING with Resources, and the job behind it waited with Priority."""
+    big = gpu_cluster(name="big", partition="gpu", tasks=1, tres_per_job="gres/gpu:8")
+    behind = gpu_cluster(name="b", partition="gpu", tasks=1, tres_per_node="gres/gpu:1")
+    assert big["errors"] == [] and behind["errors"] == []
+    set_time(T0 + timedelta(seconds=4))
+    job = _ctld(restd, auth_headers, big["job_id"])
+    assert (job["job_state"], job["state_reason"]) == (["PENDING"], "Resources")
+    assert _ctld(restd, auth_headers, behind["job_id"])["state_reason"] == "Priority"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"partition": "gpu", "tasks": 1, "tres_per_node": "gres/gpu:5"},
+        {"partition": "debug", "tasks": 1, "tres_per_node": "gres/gpu:h200:1"},
+    ],
+)
+def test_impossible_gpu_requests_are_refused_at_submit(gpu_cluster, fields):
+    """More GPUs per node than a node has, or a type the partition lacks: the
+    25.11.7 cluster answered "Requested node configuration is not available"
+    (slurm://src/slurmctld/job_mgr.c#job_allocate)."""
+    body = gpu_cluster(name="x", **fields)
+    assert body["errors"][0]["error_number"] == 2014
+
+
+def test_a_gpu_job_needs_as_many_gpu_nodes_as_it_asks_for(gpu_cluster, monkeypatch):
+    """Two h200 nodes cannot hold a 3-node h200 job, as two nodes cannot hold a
+    3-node partition request."""
+    monkeypatch.setattr(schemas, "PARTITION_RANGES", {"mixed": (1, 4), "gpu": (3, 4)})
+    body = gpu_cluster(name="x", partition="mixed", nodes="3", tres_per_node="gres/gpu:h200:1")
+    assert body["errors"][0]["error_number"] == 2014
+
+
+def test_hardware_belongs_to_the_node_not_the_first_partition(gpu_cluster, monkeypatch):
+    """A node in a CPU and a GPU partition keeps its GPUs, type and threads."""
+    from emulator.core import cluster_model  # noqa: PLC0415
+
+    monkeypatch.setattr(schemas, "PARTITION_RANGES", {"all": (1, 4), "gpu": (3, 4)})
+    assert cluster_model.node_hardware("node003") == cluster_model.NodeHardware(4, "h200", 2)
+    assert cluster_model.node_hardware("node001") == cluster_model.NodeHardware(0, "", 1)
+
+
+def test_a_short_run_still_counts_its_cpu_and_gpu_hours(gpu_cluster, restd, auth_headers):
+    """A 45-minute run with 2 CPUs and 1 GPU is 1.5 CPU-hours and 0.75 GPU-hours."""
+    job_id = gpu_cluster(
+        name="short",
+        partition="gpu",
+        tasks=1,
+        tres_per_node="gres/gpu:1",
+        environment=["SLURM_EMULATOR_RUN_SECONDS=2700"],
+    )["job_id"]
+    set_time(T0 + timedelta(hours=1))
+    restd.get(f"/slurm/{V}/jobs/", headers=auth_headers)
+    db = SlurmDatabase()
+    db.load_state()
+    (record,) = [r for r in db.usage_records if r.job_id == job_id]
+    assert record.raw_tres["CPU"] == pytest.approx(1.5)
+    assert record.raw_tres["GRES/gpu"] == pytest.approx(0.75)
+
+
+def test_sshare_sums_fractional_hours_before_rounding():
+    from emulator.commands.sshare import _aggregate_raw_tres_minutes  # noqa: PLC0415
+    from emulator.core.database import UsageRecord  # noqa: PLC0415
+
+    records = [
+        UsageRecord(
+            account="a",
+            user="u",
+            node_hours=0.0,
+            billing_units=0.0,
+            timestamp=T0,
+            period="",
+            raw_tres={"CPU": 0.5},
+        )
+        for _ in range(3)
+    ]
+    assert _aggregate_raw_tres_minutes(records)["cpu"] == 90
+
+
+def test_requeue_frees_the_gpu_devices(gpu_cluster, restd, auth_headers):
+    job_id = gpu_cluster(name="r", partition="gpu", tasks=1, tres_per_node="gres/gpu:2")["job_id"]
+    set_time(T0 + timedelta(seconds=4))
+    assert _ctld(restd, auth_headers, job_id)["gres_detail"] == ["gpu:h200:2(IDX:0-1)"]
+    emulator = ScontrolEmulator(SlurmDatabase(), TimeEngine())
+    emulator.handle_command(["requeue", str(job_id)])
+    db = SlurmDatabase()
+    db.load_state()
+    assert db.jobs[str(job_id)].gpu_indices == {}
+
+
+def test_sonar_cards_are_the_jobs_devices():
+    """Telemetry samples the devices slurmctld gave the job (gres_detail IDX)."""
+    from emulator.telemetry.sonar import JobRun  # noqa: PLC0415
+
+    run = JobRun(
+        job_id=1,
+        user="u",
+        account="a",
+        partition="gpu",
+        job_name="j",
+        state="RUNNING",
+        nodes=("node003", "node004"),
+        alloc_cpus=4,
+        mem_per_node_mb=1024,
+        start_time=T0,
+        gpu_indices={"node003": (2, 3), "node004": (0,)},
+    )
+    assert run.gpu_cards("node003") == [2, 3]
+    assert run.gpu_total == 3
+
+
+def test_an_empty_sbatch_argument_is_not_a_gres():
+    from emulator.api.ssh.server import _sbatch_gpus  # noqa: PLC0415
+
+    assert _sbatch_gpus(["--comment", "", "-p", "gpu", "job.sh"]) == {}
+    assert _sbatch_gpus(["--gres", "gpu:1", "job.sh"]) == {"tres_per_node": "gres/gpu:1"}

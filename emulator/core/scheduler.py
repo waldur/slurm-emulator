@@ -198,6 +198,7 @@ def requeue_job(
     job.start_time = job.end_time = None
     job.node_list = []
     job.alloc_cpus = 0
+    job.gpu_indices = {}
     job.exit_code = None
     job.requid = None
     job.suspend_intervals = []
@@ -461,6 +462,7 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
             ],
             tres_req=tres_req,
             tres_alloc=tres_alloc,
+            gpu_indices={node: list(i) for node, i in job.gpu_indices.items()},
         )
     )
     return True
@@ -468,19 +470,20 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
 
 def _allocated_raw_tres(
     tres_alloc: dict[str, int], elapsed: float, node_hours: float, partition: str
-) -> dict[str, int]:
+) -> dict[str, float]:
     """Usage of a finished run: what it was allocated times how long it ran.
 
     ``<count>-hours`` (Mem in GB) as on injected usage, so sshare/sreport
     weigh a job by its allocation -- the rollup's TRES-seconds
     (slurm://src/plugins/accounting_storage/mysql/as_mysql_rollup.c#as_mysql_hourly_rollup).
     """
+    # Fractional hours: a 45-minute 1-CPU run is 0.75 CPU-hours, not 0.
     hours = elapsed / 3600.0
     gpu_hours = hours * tres_alloc.get("gres/gpu", 0)
     return {
         "node-hours": int(node_hours),
-        "CPU": int(hours * tres_alloc.get("cpu", 0)),
-        "Mem": int(hours * tres_alloc.get("mem", 0) / 1024),
-        "GRES/gpu": int(gpu_hours),
+        "CPU": round(hours * tres_alloc.get("cpu", 0), 6),
+        "Mem": round(hours * tres_alloc.get("mem", 0) / 1024, 6),
+        "GRES/gpu": round(gpu_hours, 6),
         "energy": energy_joules(node_hours, gpu_hours, partition),
     }

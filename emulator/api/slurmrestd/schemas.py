@@ -554,7 +554,7 @@ def dbd_job_to_dict(
         # sacct's ConsumedEnergyRaw reads it
         # (slurm://src/sacct/print.c#PRINT_CONSUMED_ENERGY_RAW).
         if nodes and record.raw_tres.get("energy"):
-            allocated["energy"] = record.raw_tres["energy"]
+            allocated["energy"] = int(record.raw_tres["energy"])
         total = record.cpu_time_seconds
         system = total * 0.04
         cpu = {

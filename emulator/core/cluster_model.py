@@ -84,6 +84,7 @@ Intentional deviations (test fixture, not a scheduler):
 
 from __future__ import annotations
 
+import functools
 import math
 import os
 import random
@@ -514,24 +515,60 @@ def gpu_request(job: Job) -> Optional[gres.GpuRequest]:
     )
 
 
-def _node_partition(node: str) -> str:
-    """The first partition ``node`` belongs to (its slurm.conf node line)."""
-    for partition in partition_ranges():
-        if node in partition_nodes(partition):
-            return partition
-    return ""
+@dataclass(frozen=True)
+class NodeHardware:
+    """What a node's slurm.conf line would say: GPUs, their type, threads per core."""
+
+    gpus: int = 0
+    gpu_type: str = ""
+    threads_per_core: int = 1
+
+
+@functools.lru_cache(maxsize=16)
+def _hardware_map(
+    ranges: tuple[tuple[str, tuple[int, int]], ...], gpu_env: str, threads_env: str
+) -> dict[str, NodeHardware]:
+    """Every node's hardware, from the partitions it is in.
+
+    A node in several partitions has GPUs if any of them is a GPU partition,
+    takes the first GPU type configured for one of them and the most threads
+    per core configured for one of them -- the hardware is the node's, not
+    a partition's. Cached on the topology and the two settings, which the
+    scheduler's inner loop would otherwise rescan for every node.
+    """
+    del gpu_env, threads_env  # part of the cache key; gres reads the environment
+    hardware: dict[str, NodeHardware] = {}
+    for partition, (first, last) in ranges:
+        has_gpus = gres.partition_has_gpus(partition)
+        for i in range(first, last + 1):
+            name = f"node{i:03d}"
+            known = hardware.get(name, NodeHardware())
+            hardware[name] = NodeHardware(
+                gpus=NODE_GPUS if has_gpus or known.gpus else 0,
+                gpu_type=known.gpu_type or (gres.partition_gpu_type(partition) if has_gpus else ""),
+                threads_per_core=max(
+                    known.threads_per_core, gres.partition_threads_per_core(partition)
+                ),
+            )
+    return hardware
+
+
+def node_hardware(node: str) -> NodeHardware:
+    key = tuple(sorted(partition_ranges().items()))
+    env = os.environ.get(gres.GPU_TYPES_ENV, ""), os.environ.get(gres.THREADS_PER_CORE_ENV, "")
+    return _hardware_map(key, *env).get(node, NodeHardware())
 
 
 def node_gpu_type(node: str) -> str:
-    return gres.partition_gpu_type(_node_partition(node))
+    return node_hardware(node).gpu_type
 
 
 def node_gpus(node: str) -> int:
-    return NODE_GPUS if _has_gpus(node) else 0
+    return node_hardware(node).gpus
 
 
 def node_threads_per_core(node: str) -> int:
-    return gres.partition_threads_per_core(_node_partition(node))
+    return node_hardware(node).threads_per_core
 
 
 def gpus_wanted(job: Job, nodes: int) -> list[int]:
@@ -551,7 +588,7 @@ def alloc_cpus_per_node(job: Job, node: str) -> int:
     """CPUs ``job`` holds on ``node``: whole nodes when exclusive, else whole cores."""
     if job.exclusive:
         return NODE_CPUS
-    threads = gres.partition_threads_per_core(_node_partition(node))
+    threads = node_threads_per_core(node)
     per_node = job_request(job).cpus_per_node
     return min(math.ceil(per_node / threads) * threads, NODE_CPUS)
 
@@ -570,13 +607,16 @@ def request_fits(job: Job) -> bool:
     if cpt > NODE_CPUS or (job.memory_per_node or 0) > NODE_MEM_MB:
         return False
     request = gpu_request(job)
+    # Nodes with GPUs of the asked-for type; a GPU job may only use those.
+    capable = part_nodes
     if request is not None:
-        # GPUs of the asked-for type, and no more per node than a node has.
-        capable = [
-            n
-            for n in partition_nodes(job.partition)
-            if node_gpus(n) and (not request.gpu_type or node_gpu_type(n) == request.gpu_type)
-        ]
+        capable = len(
+            [
+                n
+                for n in partition_nodes(job.partition)
+                if node_gpus(n) and (not request.gpu_type or node_gpu_type(n) == request.gpu_type)
+            ]
+        )
         per_node = request.count if not request.per_job else 1
         if not capable or per_node > NODE_GPUS:
             return False
@@ -589,7 +629,7 @@ def request_fits(job: Job) -> bool:
         if job.node_count and needed > job.node_count:
             return False
         nodes = max(nodes, needed)
-    return nodes <= part_nodes
+    return nodes <= min(part_nodes, capable)
 
 
 def _split(total: int, parts: int) -> list[int]:
@@ -1010,7 +1050,7 @@ def partition_has_gpus(partition: str) -> bool:
 
 
 def _has_gpus(node: str) -> bool:
-    return any(node in partition_nodes(p) for p in partition_ranges() if partition_has_gpus(p))
+    return node_gpus(node) > 0
 
 
 def max_rss_bytes(mem_fraction: float, mem_per_node_mb: int) -> int:

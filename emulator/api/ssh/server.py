@@ -302,7 +302,10 @@ def _sbatch_gpus(args: list[str]) -> dict[str, str]:
     slurm://src/common/slurm_opt.c#slurm_opt_create_job_desc).
     """
     fields = {}
-    gres_opt = _flag_value(args, "", "--gres")
+    gres_opt = next(
+        (a.split("=", 1)[1] for a in args if a.startswith("--gres=")),
+        next((args[i + 1] for i, a in enumerate(args[:-1]) if a == "--gres"), None),
+    )
     if gres_opt:
         fields["tres_per_node"] = ",".join(f"gres/{g.strip()}" for g in gres_opt.split(",") if g)
     gpus = _flag_value(args, "-G", "--gpus")

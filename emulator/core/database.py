@@ -178,7 +178,9 @@ class UsageRecord:
     # ``raw_tres`` values are ``<count>-hours`` (CPU, Mem in GB, GRES/gpu)
     # except ``energy``, which is consumed energy in joules — the unit the
     # ``energy`` TRES has in real slurmdbd (slurm://src/common/slurmdb_defs.h#TRES_ENERGY).
-    raw_tres: dict[str, int] = field(default_factory=dict)
+    # Submitted jobs' runs carry fractional hours (a short 1-CPU run is less
+    # than a CPU-hour); injected usage whole ones.
+    raw_tres: dict[str, float] = field(default_factory=dict)
     cluster: str = "default"
     partition: str = "compute"
     # Numeric job id (real sacct JobIDs are numeric); assigned by the
@@ -244,6 +246,8 @@ class UsageRecord:
     # derive them from the standard node.
     tres_req: dict[str, int] = field(default_factory=dict)
     tres_alloc: dict[str, int] = field(default_factory=dict)
+    # GPU device indices the run held on each node, as on Job.
+    gpu_indices: dict[str, list[int]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Fold the account name like Account/Association do.
