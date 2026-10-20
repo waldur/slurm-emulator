@@ -1,0 +1,742 @@
+{
+ "sacct": [
+  {
+   "JobID": "1",
+   "JobName": "untyped_gpu",
+   "ReqCPUS": "1",
+   "AllocCPUS": "2",
+   "ReqTRES": "billing=1,cpu=1,gres/gpu=1,mem=8192M,node=1",
+   "AllocTRES": "billing=2,cpu=2,gres/gpu:h200=1,gres/gpu=1,mem=16384M,node=1"
+  },
+  {
+   "JobID": "2",
+   "JobName": "typed_gpu",
+   "ReqCPUS": "3",
+   "AllocCPUS": "4",
+   "ReqTRES": "billing=3,cpu=3,gres/gpu:h200=2,gres/gpu=2,mem=24576M,node=1",
+   "AllocTRES": "billing=4,cpu=4,gres/gpu:h200=2,gres/gpu=2,mem=32768M,node=1"
+  },
+  {
+   "JobID": "3",
+   "JobName": "no_gres_gpu_part",
+   "ReqCPUS": "2",
+   "AllocCPUS": "2",
+   "ReqTRES": "billing=2,cpu=2,mem=2048M,node=1",
+   "AllocTRES": "billing=2,cpu=2,mem=2048M,node=1"
+  },
+  {
+   "JobID": "4",
+   "JobName": "untyped_node",
+   "ReqCPUS": "1",
+   "AllocCPUS": "1",
+   "ReqTRES": "billing=1,cpu=1,gres/gpu=2,mem=8192M,node=1",
+   "AllocTRES": "billing=1,cpu=1,gres/gpu=2,mem=8192M,node=1"
+  },
+  {
+   "JobID": "5",
+   "JobName": "exclusive",
+   "ReqCPUS": "1",
+   "AllocCPUS": "64",
+   "ReqTRES": "billing=1,cpu=1,mem=8192M,node=1",
+   "AllocTRES": "billing=64,cpu=64,gres/gpu:h200=4,gres/gpu=4,mem=524288M,node=1"
+  },
+  {
+   "JobID": "6",
+   "JobName": "debug_cpus",
+   "ReqCPUS": "4",
+   "AllocCPUS": "4",
+   "ReqTRES": "billing=4,cpu=4,mem=32768M,node=1",
+   "AllocTRES": "billing=4,cpu=4,mem=32768M,node=1"
+  },
+  {
+   "JobID": "7",
+   "JobName": "gpus_opt",
+   "ReqCPUS": "1",
+   "AllocCPUS": "2",
+   "ReqTRES": "billing=1,cpu=1,gres/gpu=1,mem=8192M,node=1",
+   "AllocTRES": "billing=2,cpu=2,gres/gpu:h200=1,gres/gpu=1,mem=16384M,node=1"
+  }
+ ],
+ "show_job": {
+  "1": {
+   "NumCPUs": "2",
+   "ReqTRES": "cpu=1,mem=8G,node=1,billing=1,gres/gpu=1",
+   "AllocTRES": "cpu=2,mem=16G,node=1,billing=2,gres/gpu=1,gres/gpu:h200=1",
+   "TresPerNode": "gres/gpu:1",
+   "TresPerJob": ""
+  },
+  "2": {
+   "NumCPUs": "4",
+   "ReqTRES": "cpu=3,mem=24G,node=1,billing=3,gres/gpu=2,gres/gpu:h200=2",
+   "AllocTRES": "cpu=4,mem=32G,node=1,billing=4,gres/gpu=2,gres/gpu:h200=2",
+   "TresPerNode": "gres/gpu:h200:2",
+   "TresPerJob": ""
+  },
+  "3": {
+   "NumCPUs": "2",
+   "ReqTRES": "cpu=2,mem=2G,node=1,billing=2",
+   "AllocTRES": "cpu=2,mem=2G,node=1,billing=2",
+   "TresPerNode": "",
+   "TresPerJob": ""
+  },
+  "4": {
+   "NumCPUs": "1",
+   "ReqTRES": "cpu=1,mem=8G,node=1,billing=1,gres/gpu=2",
+   "AllocTRES": "cpu=1,mem=8G,node=1,billing=1,gres/gpu=2",
+   "TresPerNode": "gres/gpu:2",
+   "TresPerJob": ""
+  },
+  "5": {
+   "NumCPUs": "64",
+   "ReqTRES": "cpu=1,mem=8G,node=1,billing=1",
+   "AllocTRES": "cpu=64,mem=512G,node=1,billing=64,gres/gpu=4,gres/gpu:h200=4",
+   "TresPerNode": "",
+   "TresPerJob": ""
+  },
+  "6": {
+   "NumCPUs": "4",
+   "ReqTRES": "cpu=4,mem=32G,node=1,billing=4",
+   "AllocTRES": "cpu=4,mem=32G,node=1,billing=4",
+   "TresPerNode": "",
+   "TresPerJob": ""
+  },
+  "7": {
+   "NumCPUs": "2",
+   "ReqTRES": "cpu=1,mem=8G,node=1,billing=1,gres/gpu=1",
+   "AllocTRES": "cpu=2,mem=16G,node=1,billing=2,gres/gpu=1,gres/gpu:h200=1",
+   "TresPerNode": "",
+   "TresPerJob": "gres/gpu:1"
+  }
+ },
+ "slurmdb_tres": {
+  "1": {
+   "requested": [
+    [
+     "cpu",
+     "",
+     1,
+     1
+    ],
+    [
+     "mem",
+     "",
+     2,
+     8192
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     1
+    ],
+    [
+     "gres",
+     "gpu",
+     1001,
+     1
+    ]
+   ],
+   "allocated": [
+    [
+     "cpu",
+     "",
+     1,
+     2
+    ],
+    [
+     "mem",
+     "",
+     2,
+     16384
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     2
+    ],
+    [
+     "gres",
+     "gpu",
+     1001,
+     1
+    ],
+    [
+     "gres",
+     "gpu:h200",
+     1002,
+     1
+    ]
+   ]
+  },
+  "2": {
+   "requested": [
+    [
+     "cpu",
+     "",
+     1,
+     3
+    ],
+    [
+     "mem",
+     "",
+     2,
+     24576
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     3
+    ],
+    [
+     "gres",
+     "gpu",
+     1001,
+     2
+    ],
+    [
+     "gres",
+     "gpu:h200",
+     1002,
+     2
+    ]
+   ],
+   "allocated": [
+    [
+     "cpu",
+     "",
+     1,
+     4
+    ],
+    [
+     "mem",
+     "",
+     2,
+     32768
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     4
+    ],
+    [
+     "gres",
+     "gpu",
+     1001,
+     2
+    ],
+    [
+     "gres",
+     "gpu:h200",
+     1002,
+     2
+    ]
+   ]
+  },
+  "3": {
+   "requested": [
+    [
+     "cpu",
+     "",
+     1,
+     2
+    ],
+    [
+     "mem",
+     "",
+     2,
+     2048
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     2
+    ]
+   ],
+   "allocated": [
+    [
+     "cpu",
+     "",
+     1,
+     2
+    ],
+    [
+     "mem",
+     "",
+     2,
+     2048
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     2
+    ]
+   ]
+  },
+  "4": {
+   "requested": [
+    [
+     "cpu",
+     "",
+     1,
+     1
+    ],
+    [
+     "mem",
+     "",
+     2,
+     8192
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     1
+    ],
+    [
+     "gres",
+     "gpu",
+     1001,
+     2
+    ]
+   ],
+   "allocated": [
+    [
+     "cpu",
+     "",
+     1,
+     1
+    ],
+    [
+     "mem",
+     "",
+     2,
+     8192
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     1
+    ],
+    [
+     "gres",
+     "gpu",
+     1001,
+     2
+    ]
+   ]
+  },
+  "5": {
+   "requested": [
+    [
+     "cpu",
+     "",
+     1,
+     1
+    ],
+    [
+     "mem",
+     "",
+     2,
+     8192
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     1
+    ]
+   ],
+   "allocated": [
+    [
+     "cpu",
+     "",
+     1,
+     64
+    ],
+    [
+     "mem",
+     "",
+     2,
+     524288
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     64
+    ],
+    [
+     "gres",
+     "gpu",
+     1001,
+     4
+    ],
+    [
+     "gres",
+     "gpu:h200",
+     1002,
+     4
+    ]
+   ]
+  },
+  "6": {
+   "requested": [
+    [
+     "cpu",
+     "",
+     1,
+     4
+    ],
+    [
+     "mem",
+     "",
+     2,
+     32768
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     4
+    ]
+   ],
+   "allocated": [
+    [
+     "cpu",
+     "",
+     1,
+     4
+    ],
+    [
+     "mem",
+     "",
+     2,
+     32768
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     4
+    ]
+   ]
+  },
+  "7": {
+   "requested": [
+    [
+     "cpu",
+     "",
+     1,
+     1
+    ],
+    [
+     "mem",
+     "",
+     2,
+     8192
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     1
+    ],
+    [
+     "gres",
+     "gpu",
+     1001,
+     1
+    ]
+   ],
+   "allocated": [
+    [
+     "cpu",
+     "",
+     1,
+     2
+    ],
+    [
+     "mem",
+     "",
+     2,
+     16384
+    ],
+    [
+     "node",
+     "",
+     4,
+     1
+    ],
+    [
+     "billing",
+     "",
+     5,
+     2
+    ],
+    [
+     "gres",
+     "gpu",
+     1001,
+     1
+    ],
+    [
+     "gres",
+     "gpu:h200",
+     1002,
+     1
+    ]
+   ]
+  }
+ },
+ "ctld": {
+  "1": {
+   "nodes": "node003",
+   "cpus": 2,
+   "tres_per_node": "gres/gpu:1",
+   "tres_per_job": "",
+   "tres_req_str": "cpu=1,mem=8G,node=1,billing=1,gres/gpu=1",
+   "tres_alloc_str": "cpu=2,mem=16G,node=1,billing=2,gres/gpu=1,gres/gpu:h200=1",
+   "gres_detail": [
+    "gpu:h200:1(IDX:0)"
+   ]
+  },
+  "2": {
+   "nodes": "node003",
+   "cpus": 4,
+   "tres_per_node": "gres/gpu:h200:2",
+   "tres_per_job": "",
+   "tres_req_str": "cpu=3,mem=24G,node=1,billing=3,gres/gpu=2,gres/gpu:h200=2",
+   "tres_alloc_str": "cpu=4,mem=32G,node=1,billing=4,gres/gpu=2,gres/gpu:h200=2",
+   "gres_detail": [
+    "gpu:h200:2(IDX:1-2)"
+   ]
+  },
+  "3": {
+   "nodes": "node003",
+   "cpus": 2,
+   "tres_per_node": "",
+   "tres_per_job": "",
+   "tres_req_str": "cpu=2,mem=2G,node=1,billing=2",
+   "tres_alloc_str": "cpu=2,mem=2G,node=1,billing=2",
+   "gres_detail": []
+  },
+  "4": {
+   "nodes": "node001",
+   "cpus": 1,
+   "tres_per_node": "gres/gpu:2",
+   "tres_per_job": "",
+   "tres_req_str": "cpu=1,mem=8G,node=1,billing=1,gres/gpu=2",
+   "tres_alloc_str": "cpu=1,mem=8G,node=1,billing=1,gres/gpu=2",
+   "gres_detail": [
+    "gpu:2(IDX:0-1)"
+   ]
+  },
+  "5": {
+   "nodes": "node004",
+   "cpus": 64,
+   "tres_per_node": "",
+   "tres_per_job": "",
+   "tres_req_str": "cpu=1,mem=8G,node=1,billing=1",
+   "tres_alloc_str": "cpu=64,mem=512G,node=1,billing=64,gres/gpu=4,gres/gpu:h200=4",
+   "gres_detail": [
+    "gpu:h200:4(IDX:0-3)"
+   ]
+  },
+  "6": {
+   "nodes": "node001",
+   "cpus": 4,
+   "tres_per_node": "",
+   "tres_per_job": "",
+   "tres_req_str": "cpu=4,mem=32G,node=1,billing=4",
+   "tres_alloc_str": "cpu=4,mem=32G,node=1,billing=4",
+   "gres_detail": []
+  },
+  "7": {
+   "nodes": "node003",
+   "cpus": 2,
+   "tres_per_node": "",
+   "tres_per_job": "gres/gpu:1",
+   "tres_req_str": "cpu=1,mem=8G,node=1,billing=1,gres/gpu=1",
+   "tres_alloc_str": "cpu=2,mem=16G,node=1,billing=2,gres/gpu=1,gres/gpu:h200=1",
+   "gres_detail": [
+    "gpu:h200:1(IDX:3)"
+   ]
+  }
+ },
+ "nodes": {
+  "node001": {
+   "gres": "gpu:4",
+   "gres_used": "gpu:2",
+   "tres": "cpu=64,mem=512G,billing=64,gres/gpu=4",
+   "tres_used": "cpu=5,mem=40G,gres/gpu=2",
+   "threads": 1
+  },
+  "node002": {
+   "gres": "gpu:4",
+   "gres_used": "gpu:0",
+   "tres": "cpu=64,mem=512G,billing=64,gres/gpu=4",
+   "tres_used": "",
+   "threads": 1
+  },
+  "node003": {
+   "gres": "gpu:h200:4",
+   "gres_used": "gpu:h200:4(IDX:0-3)",
+   "tres": "cpu=64,mem=512G,billing=64,gres/gpu=4,gres/gpu:h200=4",
+   "tres_used": "cpu=10,mem=66G,gres/gpu=4,gres/gpu:h200=4",
+   "threads": 2
+  },
+  "node004": {
+   "gres": "gpu:h200:4",
+   "gres_used": "gpu:h200:4(IDX:0-3)",
+   "tres": "cpu=64,mem=512G,billing=64,gres/gpu=4,gres/gpu:h200=4",
+   "tres_used": "cpu=64,mem=512G,gres/gpu=4,gres/gpu:h200=4",
+   "threads": 2
+  }
+ },
+ "tres": [
+  [
+   "cpu",
+   "",
+   1
+  ],
+  [
+   "mem",
+   "",
+   2
+  ],
+  [
+   "energy",
+   "",
+   3
+  ],
+  [
+   "node",
+   "",
+   4
+  ],
+  [
+   "billing",
+   "",
+   5
+  ],
+  [
+   "fs",
+   "disk",
+   6
+  ],
+  [
+   "vmem",
+   "",
+   7
+  ],
+  [
+   "pages",
+   "",
+   8
+  ],
+  [
+   "gres",
+   "gpu",
+   1001
+  ],
+  [
+   "gres",
+   "gpu:h200",
+   1002
+  ],
+  [
+   "gres",
+   "gpumem",
+   1003
+  ],
+  [
+   "gres",
+   "gpuutil",
+   1004
+  ]
+ ]
+}

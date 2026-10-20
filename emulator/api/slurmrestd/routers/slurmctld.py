@@ -358,6 +358,9 @@ async def submit_job(
         memory_per_node=_submit_count(job_desc.get("memory_per_node")),
         reservation=reservation,
         exclusive=_submit_exclusive(job_desc.get("shared")),
+        # GPU request, as job_desc carries it (``gres/gpu[:type]:N``).
+        tres_per_node=str(job_desc.get("tres_per_node") or ""),
+        tres_per_job=str(job_desc.get("tres_per_job") or ""),
         # ``hold: true`` is priority 0, a user hold (HOLD overloads priority in
         # slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_DESC_MSG@26.05+).
         priority=0

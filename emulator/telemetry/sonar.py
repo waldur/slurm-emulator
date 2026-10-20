@@ -159,10 +159,31 @@ class JobRun:
     time_limit: Optional[int] = None  # minutes
     exit_code: Optional[int] = None
     environment: dict[str, str] = field(default_factory=dict, hash=False, compare=False)
+    # GPU device indices the run holds on each node; None for jobs and
+    # records from before the GRES model, which hold every GPU of a GPU
+    # partition's node.
+    gpu_indices: Optional[dict[str, tuple[int, ...]]] = field(
+        default=None, hash=False, compare=False
+    )
 
     @property
     def gpus_per_node(self) -> int:
+        """GPUs on the most-used node (legacy runs: every GPU of a GPU node)."""
+        if self.gpu_indices is not None:
+            return max((len(i) for i in self.gpu_indices.values()), default=0)
         return NODE_GPUS if partition_has_gpus(self.partition) else 0
+
+    @property
+    def gpu_total(self) -> int:
+        if self.gpu_indices is not None:
+            return sum(len(i) for i in self.gpu_indices.values())
+        return self.gpus_per_node * len(self.nodes)
+
+    def gpu_cards(self, node: str) -> Optional[list[int]]:
+        """The run's device indices on ``node``; None = take the first free ones."""
+        if self.gpu_indices is None:
+            return None
+        return list(self.gpu_indices.get(node, ()))
 
     def cpus_on(self, node: str) -> int:
         if node not in self.nodes:
@@ -204,6 +225,9 @@ def run_from_record(record: UsageRecord) -> Optional[JobRun]:
         submit_time=utc(record.submit_time) if record.submit_time else None,
         time_limit=record.time_limit,
         exit_code=record.exit_code if record.exit_code is not None else 0,
+        gpu_indices={n: tuple(i) for n, i in record.gpu_indices.items()}
+        if record.tres_req
+        else None,
     )
 
 
@@ -228,6 +252,7 @@ def run_from_job(job: Job) -> Optional[JobRun]:
         submit_time=utc(job.submit_time) if job.submit_time else None,
         time_limit=job.time_limit,
         environment=dict(job.environment or {}),
+        gpu_indices={n: tuple(i) for n, i in job.gpu_indices.items()},
     )
 
 
@@ -449,7 +474,12 @@ def sample_attributes(
     used_kib = OS_MEM_MB * 1024
     threads = 0
     for run in active:
-        claim = free_cards[: run.gpus_per_node] if run.gpus_per_node else []
+        # The devices slurmctld gave the run (gres_detail IDX); legacy runs
+        # take the first free ones.
+        cards_of_run = run.gpu_cards(node)
+        if cards_of_run is None:
+            cards_of_run = free_cards[: run.gpus_per_node] if run.gpus_per_node else []
+        claim = [c for c in cards_of_run if c in free_cards]
         free_cards = [c for c in free_cards if c not in claim]
         use = job_node_use(run, node, at, claim)
         for gpu in use.gpus:
@@ -559,8 +589,8 @@ def _mem_tres(mb: int) -> str:
 def tres_string(run: JobRun) -> str:
     """``billing=..,cpu=..,gres/gpu=..,mem=..,node=..`` as squeue/sacct print it."""
     parts = [f"billing={run.alloc_cpus}", f"cpu={run.alloc_cpus}"]
-    if run.gpus_per_node:
-        parts.append(f"gres/gpu={run.gpus_per_node * len(run.nodes)}")
+    if run.gpu_total:
+        parts.append(f"gres/gpu={run.gpu_total}")
     parts.append(f"mem={_mem_tres(run.mem_per_node_mb * len(run.nodes))}")
     parts.append(f"node={len(run.nodes)}")
     return ",".join(parts)

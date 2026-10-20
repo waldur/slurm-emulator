@@ -36,7 +36,6 @@ from emulator.core.cluster_model import (
     NODE_MEM_MB,
     compress_hostlist,
     job_request,
-    partition_has_gpus,
     partition_nodes,
     partition_ranges,
 )
@@ -136,21 +135,24 @@ def partitions() -> list[str]:
 # --- jobs ---
 
 
-def job_tres(job: Job, allocated: bool) -> str:
-    """ReqTRES / AllocTRES: cpu, mem, node, billing (+ gres/gpu in GPU partitions)."""
-    req = job_request(job)
-    if allocated:
-        nodes = len(job.node_list)
-        cpus = job.alloc_cpus or req.total_cpus
-    else:
-        nodes, cpus = req.node_count, req.total_cpus
-    mem = sum(
-        cluster_model.job_mem_per_node(job, c) for c in cluster_model._split(cpus, max(nodes, 1))
+def tres_string(counts: dict[str, int]) -> str:
+    """``cpu=2,mem=16G,node=1,billing=2,gres/gpu=1,...`` in TRES-id order, as slurmctld prints it."""
+    ids = gres_tres_order()
+    names = sorted(counts, key=lambda name: (ids.get(name, len(ids)), name))
+    return ",".join(
+        f"{name}={mem_str(counts[name]) if name == 'mem' else counts[name]}" for name in names
     )
-    tres = f"cpu={cpus},mem={mem_str(mem)},node={nodes},billing={cpus}"
-    if partition_has_gpus(job.partition):
-        tres += f",gres/gpu={nodes * NODE_GPUS}"
-    return tres
+
+
+def gres_tres_order() -> dict[str, int]:
+    from emulator.api.slurmrestd.schemas import _tres_ids  # noqa: PLC0415 - cycle
+
+    return _tres_ids()
+
+
+def job_tres(job: Job, allocated: bool) -> str:
+    """ReqTRES / AllocTRES of a job in the controller (``cluster_model.job_tres_counts``)."""
+    return tres_string(cluster_model.job_tres_counts(job, allocated))
 
 
 def _num_tasks(job: Job) -> int:
@@ -257,6 +259,9 @@ def sprint_job(job: Job, now: datetime, one_liner: bool = False) -> str:
         f"StdIn={job.standard_input or '/dev/null'}",
         f"StdOut={job_execution.stdout_path(job)}",
     ]
-    if partition_has_gpus(job.partition):
-        lines.append(f"TresPerNode=gres/gpu:{NODE_GPUS}")
+    # The GRES request as given (slurm://src/scontrol/info_job.c#_sprint_job_info).
+    if job.tres_per_job:
+        lines.append(f"TresPerJob={job.tres_per_job}")
+    if job.tres_per_node:
+        lines.append(f"TresPerNode={job.tres_per_node}")
     return sep.join(lines) + ("\n" if one_liner else "\n\n")

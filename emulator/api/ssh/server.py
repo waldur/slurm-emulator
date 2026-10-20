@@ -270,6 +270,7 @@ def _sbatch(emu: SlurmEmulator, user: str, args: list[str]) -> tuple[str, str, i
     identity = admission.identity
     account = admission.account
 
+    gpus = _sbatch_gpus(args)
     jid = emu.database.allocate_job_id()
     emu.database.add_job(
         Job(
@@ -286,10 +287,31 @@ def _sbatch(emu: SlurmEmulator, user: str, args: list[str]) -> tuple[str, str, i
             uid=identity.uid if identity else None,
             gid=identity.gid if identity else None,
             group_name=identity.group if identity else "",
+            tres_per_node=gpus.get("tres_per_node", ""),
+            tres_per_job=gpus.get("tres_per_job", ""),
         )
     )
     emu.database.save_state()
     return f"Submitted batch job {jid}\n", "", 0
+
+
+def _sbatch_gpus(args: list[str]) -> dict[str, str]:
+    """``--gres=gpu:1`` / ``--gpus=[type:]1`` as job_desc's tres_per_node / tres_per_job.
+
+    sbatch prefixes each GRES with ``gres/`` (slurm://src/common/slurm_opt.c#arg_set_gres,
+    slurm://src/common/slurm_opt.c#slurm_opt_create_job_desc).
+    """
+    fields = {}
+    gres_opt = next(
+        (a.split("=", 1)[1] for a in args if a.startswith("--gres=")),
+        next((args[i + 1] for i, a in enumerate(args[:-1]) if a == "--gres"), None),
+    )
+    if gres_opt:
+        fields["tres_per_node"] = ",".join(f"gres/{g.strip()}" for g in gres_opt.split(",") if g)
+    gpus = _flag_value(args, "-G", "--gpus")
+    if gpus:
+        fields["tres_per_job"] = f"gres/gpu:{gpus}"
+    return fields
 
 
 def _squeue(emu) -> str:

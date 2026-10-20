@@ -197,7 +197,7 @@ class TestSacctEnergyFields:
         db, te, sim = env
         sim.inject_usage("proj", "alice", 2.0)
         out = SacctEmulator(db, te).handle_command(["--format=ReqTRES", "-n", "-P"])
-        assert out == "cpu=64,mem=512G,node=1,billing=64,gres/gpu=4"
+        assert out == "billing=64,cpu=64,gres/gpu=4,mem=512G,node=1"
 
 
 def _sreport_energy(server, account, month_start, month_end):
@@ -387,7 +387,7 @@ class TestReviewFixes:
                 "carol",
             ]
         )
-        assert out == "carol|cpu=0,mem=0G,node=1,billing=0|00:00:00|250"
+        assert out == "carol|billing=0,cpu=0,mem=0,node=1|00:00:00|250"
 
     def test_partition_rendered_by_sacct_and_rest(self, server):
         self._post(server, usage={"billing": 1}, partition="gpu")
