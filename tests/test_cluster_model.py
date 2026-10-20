@@ -120,12 +120,20 @@ class TestJobRequest:
         assert (req.total_cpus, req.cpus_per_node) == (3, 1)
         assert req.mem_per_node == cluster_model.DEF_MEM_PER_CPU_MB
 
-    def test_exclusive_takes_whole_nodes(self):
-        req = cluster_model.job_request(
-            Job(job_id="1", account="a", user="u", state="PENDING", node_count=3, exclusive=True)
+    def test_exclusive_asks_for_its_tasks_but_holds_whole_nodes(self):
+        """ReqTRES of an exclusive job is its tasks; it is allocated whole nodes.
+
+        A 25.11.7 cluster reported ``sbatch --exclusive -n1`` as ReqTRES cpu=1,
+        AllocTRES cpu=64 (slurm://src/slurmctld/job_mgr.c#job_allocate).
+        """
+        job = Job(job_id="1", account="a", user="u", state="PENDING", node_count=3, exclusive=True)
+        req = cluster_model.job_request(job)
+        assert req.total_cpus == 3
+        assert cluster_model.alloc_cpus_per_node(job, "node001") == cluster_model.NODE_CPUS
+        assert (
+            cluster_model.job_mem_per_node(job, cluster_model.NODE_CPUS)
+            == cluster_model.NODE_MEM_MB
         )
-        assert req.total_cpus == 3 * cluster_model.NODE_CPUS
-        assert req.mem_per_node == cluster_model.NODE_MEM_MB
 
     def test_tasks_beyond_nodes_add_nodes(self):
         req = cluster_model.job_request(
@@ -511,7 +519,12 @@ class TestAccounting:
         assert job["allocation_nodes"] == 2
         assert job["nodes"] == "node[005-006]"
         requested = {e["type"]: e["count"] for e in job["tres"]["requested"]}
-        assert requested == {"cpu": 128, "mem": 400000, "node": 2, "billing": 128}
+        # An exclusive job asks for its tasks (one per node) and holds whole nodes.
+        assert requested == {"cpu": 2, "mem": 400000, "node": 2, "billing": 2}
+        allocated = {
+            e["type"]: e["count"] for e in job["tres"]["allocated"] if e["type"] != "energy"
+        }
+        assert allocated == {"cpu": 128, "mem": 400000, "node": 2, "billing": 128}
         assert job["required"]["memory_per_node"]["number"] == 200000
         step = job["steps"][0]
         assert step["step"]["id"] == f"{jid}.batch" and step["step"]["name"] == "batch"

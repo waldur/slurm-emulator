@@ -91,7 +91,7 @@ class UsageSimulator:
             billing_units=node_hours,  # 1:1 for node-hour billing
             timestamp=at_time,
             period=self.time_engine.get_current_quarter(),
-            raw_tres=self._convert_to_raw_tres(node_hours, part, energy_joules),
+            raw_tres=dict(self._convert_to_raw_tres(node_hours, part, energy_joules)),
             cluster=cl,
             partition=part,
         )

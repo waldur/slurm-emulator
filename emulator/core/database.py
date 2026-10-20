@@ -9,6 +9,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Optional, overload
 
+from emulator.core import gres
+
 
 @overload
 def fold_account(name: str) -> str: ...
@@ -176,7 +178,9 @@ class UsageRecord:
     # ``raw_tres`` values are ``<count>-hours`` (CPU, Mem in GB, GRES/gpu)
     # except ``energy``, which is consumed energy in joules — the unit the
     # ``energy`` TRES has in real slurmdbd (slurm://src/common/slurmdb_defs.h#TRES_ENERGY).
-    raw_tres: dict[str, int] = field(default_factory=dict)
+    # Submitted jobs' runs carry fractional hours (a short 1-CPU run is less
+    # than a CPU-hour); injected usage whole ones.
+    raw_tres: dict[str, float] = field(default_factory=dict)
     cluster: str = "default"
     partition: str = "compute"
     # Numeric job id (real sacct JobIDs are numeric); assigned by the
@@ -235,6 +239,15 @@ class UsageRecord:
     # end 0 while still suspended; slurmdbd keeps them in the cluster's
     # suspend table (slurm://src/plugins/accounting_storage/mysql/as_mysql_job.c#as_mysql_suspend).
     suspend_intervals: list[list[int]] = field(default_factory=list)
+    # The job's requested and allocated TRES as slurmdbd stores them
+    # (slurm://slurm/slurmdb.h#slurmdb_job_rec_t.tres_req_str,
+    # slurm://slurm/slurmdb.h#slurmdb_job_rec_t.tres_alloc_str), by TRES name
+    # with mem in MB. Empty for injected usage and older state files, which
+    # derive them from the standard node.
+    tres_req: dict[str, int] = field(default_factory=dict)
+    tres_alloc: dict[str, int] = field(default_factory=dict)
+    # GPU device indices the run held on each node, as on Job.
+    gpu_indices: dict[str, list[int]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Fold the account name like Account/Association do.
@@ -317,6 +330,14 @@ class Job:
     begin_time: Optional[datetime] = None
     # Suspend intervals of the current run, as on UsageRecord.
     suspend_intervals: list[list[int]] = field(default_factory=list)
+    # GRES request, as job_desc carries it: ``gres/gpu[:type]:N`` per node
+    # (``--gres``) or per job (``--gpus``)
+    # (slurm://slurm/slurm.h#job_desc_msg_t.tres_per_node,
+    # slurm://slurm/slurm.h#job_desc_msg_t.tres_per_job).
+    tres_per_node: str = ""
+    tres_per_job: str = ""
+    # GPU device indices allocated on each node (gres_detail ``IDX:``).
+    gpu_indices: dict[str, list[int]] = field(default_factory=dict)
 
 
 @dataclass
@@ -402,9 +423,9 @@ class SlurmDatabase:
             "fs/disk",
             "vmem",
             "pages",
-            "GRES/gpu",
-            "GRES/gpumem",
-            "GRES/gpuutil",
+            # gres/gpu, a typed gres/gpu:<type> per configured GPU type, then
+            # gres/gpumem and gres/gpuutil (emulator/core/gres.py).
+            *(name.replace("gres/", "GRES/", 1) for name in gres.gpu_tres_names()),
         ]
         self.state_file = Path(
             os.environ.get("SLURM_EMULATOR_STATE_FILE", "/tmp/slurm_emulator_db.json")

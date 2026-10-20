@@ -52,7 +52,23 @@ python3 record.py acct-real http://127.0.0.1:26830 /tmp/scenario.out \
   ../../../tests/data/slurm_25.11.7_job_accounting.json
 ```
 
-The 25.11.7 data was recorded with node003/node004 configured with typed
-GPUs (`Gres=gpu:h200:4`, `AccountingStorageTRES=gres/gpu,gres/gpu:h200`) and
-`ThreadsPerCore=2`. The golden test does not compare TRES yet, because the
-emulator has no GRES model.
+The 25.11.7 data was recorded on `cluster-gres/` (see below); the job
+accounting test does not compare TRES, `tests/test_gres_golden.py` does.
+
+## GPU and CPU allocation (`tests/test_gres_golden.py`)
+
+`gres.sh` submits seven jobs to a cluster with `cluster-gres/` copied over
+`../cluster/` (node001-002 with four untyped GPUs, node003-004 with four
+`h200` and `ThreadsPerCore=2`, `AccountingStorageTRES=gres/gpu,gres/gpu:h200`):
+untyped and typed `--gres`, `--gpus`, no GPUs on a GPU node, `--exclusive`,
+and plain CPUs. `record_gres.py` then saves sacct's ReqCPUS/AllocCPUS/ReqTRES/AllocTRES,
+`scontrol show job`, the slurmdb TRES lists, the controller's TRES fields and
+`gres_detail`, the nodes' GRES and the TRES table:
+
+```bash
+mkdir -p /tmp/cluster-gres-run && cp -r ../cluster/. /tmp/cluster-gres-run/
+cp cluster-gres/* /tmp/cluster-gres-run/
+# create and start acct-real as above, with /tmp/cluster-gres-run as /run-config
+docker cp gres.sh acct-real:/tmp/gres.sh && docker exec acct-real sh /tmp/gres.sh
+python3 record_gres.py acct-real http://127.0.0.1:26830 ../../../tests/data/slurm_25.11.7_gres.json
+```

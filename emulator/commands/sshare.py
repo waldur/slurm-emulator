@@ -356,7 +356,8 @@ def _aggregate_raw_tres_minutes(records: list[UsageRecord]) -> dict[str, int]:
     in ``<count>-hours``, so the conversion factor here is *x60*, not
     /60.
     """
-    totals: dict[str, int] = dict.fromkeys(_CANONICAL_TRES, 0)
+    # Summed before rounding: runs carry fractional hours.
+    totals: dict[str, float] = dict.fromkeys(_CANONICAL_TRES, 0.0)
     energy_joules = 0
     for record in records:
         totals["node"] += int(record.node_hours)
@@ -369,9 +370,9 @@ def _aggregate_raw_tres_minutes(records: list[UsageRecord]) -> dict[str, int]:
                 energy_joules += int(value)
                 continue
             if key not in totals:
-                totals[key] = 0
-            totals[key] += int(value)
-    minutes = {k: v * 60 for k, v in totals.items()}
+                totals[key] = 0.0
+            totals[key] += float(value)
+    minutes = {k: int(v * 60) for k, v in totals.items()}
     minutes["energy"] = energy_joules // 60
     return minutes
 
