@@ -1,5 +1,6 @@
 #!/bin/sh
-# Runs inside the real cluster as root. Prints T0 (epoch) first.
+# Runs inside the real cluster as root; record.py turns its output and the
+# queries it makes right after into golden data. Prints T0 (epoch) first.
 sb() { u=$1; shift; su $u -c "cd /tmp && sbatch --parsable -o /dev/null -e /dev/null -A acc1 $*"; }
 echo "T0=$(date +%s)"
 J1=$(sb alice "-p gpu --gres=gpu:1 -n1 -c1 --mem=8G -J rocket --wrap 'sleep 20'")
@@ -8,10 +9,14 @@ J3=$(sb alice "-p debug -n1 --mem=1G -J running --wrap 'sleep 3000'")
 J4=$(sb bob "-p debug -n1 --mem=1G -J suspended --wrap 'sleep 3000'")
 J5=$(sb bob "-p debug -n1 --mem=1G -J requeued --requeue --wrap 'sleep 3000'")
 J6=$(sb bob "-p debug -n1 --mem=1G -J pending --hold --wrap 'sleep 30'")
-echo "JOBS=$J1 $J2 $J3 $J4 $J5 $J6"
-sleep 10; scontrol suspend $J4; echo "SUSPEND1=$(date +%s)"
-sleep 15; scontrol resume $J4; echo "RESUME1=$(date +%s)"
+# sleep keeps counting while stopped, so this one ends 20 s after it started
+# with 10 s suspended: the emulator models it as 10 s of work.
+J7=$(sb alice "-p debug -n1 --mem=1G -J resumed --wrap 'sleep 20'")
+echo "JOBS=$J1 $J2 $J3 $J4 $J5 $J6 $J7"
+sleep 5;  scontrol suspend $J7; echo "SUSPEND_RESUMED=$(date +%s)"
+sleep 5;  scontrol suspend $J4; echo "SUSPEND1=$(date +%s)"
+sleep 5;  scontrol resume $J7;  echo "RESUME_RESUMED=$(date +%s)"
+sleep 10; scontrol resume $J4;  echo "RESUME1=$(date +%s)"
 sleep 5;  scontrol requeue $J5; echo "REQUEUE=$(date +%s)"
 sleep 10; scontrol suspend $J4; echo "SUSPEND2=$(date +%s)"
 sleep 20; echo "QUERY=$(date +%s)"
-squeue -o '%i %j %T %R'

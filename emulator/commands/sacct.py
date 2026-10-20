@@ -66,7 +66,7 @@ every job is uid/gid 1000 in a group named after the user.
 
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from emulator.commands.print_fields import (
@@ -458,29 +458,17 @@ class SacctEmulator:
         active = (
             self._active_jobs.get(job_id) if state in ("PENDING", "RUNNING", "SUSPENDED") else None
         )
-        start: Optional[datetime]
-        end: Optional[datetime]
-
         if active is not None:
             # Still in the controller: unset times print "Unknown"
             # (slurm://src/common/parse_time.c#slurm_make_time_str); CPU time
             # and MaxRSS only arrive when steps end.
             from emulator.commands.scontrol_info import job_tres  # noqa: PLC0415
-            from emulator.core.scheduler import job_clock_now  # noqa: PLC0415
 
-            submit = record.submit_time or record.timestamp
-            eligible = record.eligible_time or submit
-            start, end = record.start_time, None
-            elapsed_secs = (
-                max(int((job_clock_now(self.time_engine) - start).total_seconds()), 0)
-                if start
-                else 0
-            )
             nnodes = record.node_count
             node_list = record.node_list
             alloc_cpus = record.alloc_cpus
             req_tres = job_tres(active, allocated=False)
-            alloc_tres = job_tres(active, allocated=True) if start else ""
+            alloc_tres = job_tres(active, allocated=True) if record.start_time else ""
             req_mem_mb = record.req_mem_mb * max(nnodes, 1)
             req_mem = str(req_mem_mb) + "M" if config.noconvert else _convert_exact(req_mem_mb, 2)
             limit = _mins2time_str(record.time_limit) if record.time_limit else "UNLIMITED"
@@ -488,10 +476,6 @@ class SacctEmulator:
             max_rss = ""
         elif record.start_time is not None and record.end_time is not None:
             # A record of a real run: the values slurmdbd stored for it.
-            start, end = record.start_time, record.end_time
-            submit = record.submit_time or start
-            eligible = record.eligible_time or submit
-            elapsed_secs = max(int((end - start).total_seconds()), 0)
             nnodes = record.node_count
             node_list = record.node_list or "None assigned"
             alloc_cpus = record.alloc_cpus
@@ -516,9 +500,6 @@ class SacctEmulator:
                 )
             )
         else:
-            elapsed_secs = int(record.node_hours * 3600)
-            end = record.timestamp
-            start = submit = eligible = end - timedelta(seconds=elapsed_secs)
             nnodes = 1
             node_list = "node001"
             alloc_cpus = self._cpu_rate(record)
@@ -531,13 +512,9 @@ class SacctEmulator:
 
         # The times the query reports, truncated or not (emulator/core/jobacct.py);
         # unset ones print "Unknown" (slurm://src/common/parse_time.c#slurm_make_time_str).
-        suspended_secs = 0
-        times = self.times.get(id(record))
-        if times is not None:
-            submit = _from_epoch(times.submit) or submit
-            eligible = _from_epoch(times.eligible) or eligible
-            start, end = _from_epoch(times.start), _from_epoch(times.end)
-            elapsed_secs, suspended_secs = times.elapsed, times.suspended
+        times = self.times[id(record)]
+        submit, eligible = _from_epoch(times.submit), _from_epoch(times.eligible)
+        start, end = _from_epoch(times.start), _from_epoch(times.end)
 
         return {
             "JobID": job_id,
@@ -551,9 +528,9 @@ class SacctEmulator:
             "AllocNodes": str(nnodes if node_list != "None assigned" else 0),
             "AllocTRES": alloc_tres,
             "Cluster": record.cluster,
-            "Elapsed": _secs2time_str(elapsed_secs),
-            "ElapsedRaw": str(elapsed_secs),
-            "Eligible": eligible.strftime(fmt),
+            "Elapsed": _secs2time_str(times.elapsed),
+            "ElapsedRaw": str(times.elapsed),
+            "Eligible": eligible.strftime(fmt) if eligible else "Unknown",
             "End": end.strftime(fmt) if end else "Unknown",
             "ExitCode": exit_code,
             "GID": str(record.gid if record.gid is not None else 1000),
@@ -568,8 +545,8 @@ class SacctEmulator:
             "State": f"{state} by {record.requid}"
             if state == "CANCELLED" and record.requid is not None
             else state,
-            "Submit": submit.strftime(fmt),
-            "Suspended": _secs2time_str(suspended_secs),
+            "Submit": submit.strftime(fmt) if submit else "Unknown",
+            "Suspended": _secs2time_str(times.suspended),
             "SystemCPU": system_cpu,
             "Timelimit": limit,
             "TotalCPU": total_cpu,

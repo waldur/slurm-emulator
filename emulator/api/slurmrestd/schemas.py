@@ -13,7 +13,6 @@ Waldur's parsers touch, plus enough context to look real.
 from __future__ import annotations
 
 import os
-from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any, Optional
 
@@ -45,8 +44,8 @@ from emulator.core.database import (
     UsageRecord,
     User,
 )
-from emulator.core.jobacct import JobTimes, epoch, stored_times
-from emulator.core.reservations import INFINITE_TIME, YEAR
+from emulator.core.jobacct import JobTimes, epoch, stored_times, suspend_intervals
+from emulator.core.reservations import INFINITE_TIME
 from emulator.core.time_engine import TimeEngine
 from emulator.core.tres import DYNAMIC_TRES_FIRST_ID, STATIC_TRES_IDS, tres_id
 from emulator.slurm_version import at_least
@@ -400,7 +399,9 @@ def _record_stdio(record: UsageRecord) -> dict[str, str]:
     }
 
 
-def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) -> dict[str, Any]:
+def _batch_step(
+    record: UsageRecord, start: int, end: int, cpu: dict[str, Any], suspended: int = 0
+) -> dict[str, Any]:
     """The ``batch`` step of a job (STEP, slurm://src/plugins/data_parser/v0.0.45/parsers.c#STEP@26.05+).
 
     It runs on the first allocated node as one task. ``tres/requested`` holds
@@ -429,10 +430,10 @@ def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) 
     energy = record.raw_tres.get("energy")
     return {
         "time": {
-            "elapsed": end - start,
+            "elapsed": max(end - start - suspended, 0),
             "start": uint_no_val(start),
             "end": uint_no_val(end),
-            "suspended": 0,
+            "suspended": suspended,
             "limit": uint_no_val(),
             **cpu,
         },
@@ -498,21 +499,15 @@ def dbd_job_to_dict(
     state = record.state or "COMPLETED"
     exit_code = _exit_code(state, getattr(record, "exit_code", None))
     gpus = rate(record, "GRES/gpu", _NODE_GPUS)
-    steps: list[dict[str, Any]] = []
+    # Only a record of a real run has a batch step (built below, from the times).
+    step_cpu: Optional[dict[str, Any]] = None
 
     if active is not None:
         # A pending or running job: no end yet, elapsed so far, the request
         # until it is allocated (as slurmdbd holds it from job start/submit,
         # slurm://src/plugins/accounting_storage/mysql/as_mysql_job.c#as_mysql_job_start).
-        from emulator.core.scheduler import job_clock_now  # noqa: PLC0415
-
         request = job_request(active)
-        submit = int(active.submit_time.timestamp()) if active.submit_time else 0
-        eligible = submit
         running = active.state in ("RUNNING", "SUSPENDED") and bool(active.node_list)
-        start = int(active.start_time.timestamp()) if running and active.start_time else 0
-        end = 0
-        elapsed = max(int(job_clock_now(TimeEngine()).timestamp()) - start, 0) if start else 0
         nodes = len(active.node_list) if running else 0
         node_list = record.node_list
         cpus = (active.alloc_cpus or request.total_cpus) if running else 0
@@ -544,13 +539,6 @@ def dbd_job_to_dict(
             "memory_per_node": uint_no_val(request.mem_per_node),
         }
     elif record.start_time is not None and record.end_time is not None:
-        start = int(record.start_time.timestamp())
-        end = int(record.end_time.timestamp())
-        submit = int((record.submit_time or record.start_time).timestamp())
-        eligible = int(
-            (record.eligible_time or record.submit_time or record.start_time).timestamp()
-        )
-        elapsed = max(end - start, 0)
         nodes = record.node_count
         node_list = record.node_list or "None assigned"
         cpus = record.alloc_cpus
@@ -579,8 +567,7 @@ def dbd_job_to_dict(
             "total": _cpu_time(total),
         }
         limit = uint_no_val(record.time_limit, infinite=record.time_limit is None)
-        if nodes:
-            steps.append(_batch_step(record, start, end, cpu))
+        step_cpu = cpu if nodes else None
         tres = {
             "allocated": tres_list_from_dict({k: v for k, v in allocated.items() if v}),
             "requested": tres_list_from_dict(requested),
@@ -591,9 +578,6 @@ def dbd_job_to_dict(
             "memory_per_node": uint_no_val(record.req_mem_mb),
         }
     else:
-        elapsed = int(record.node_hours * 3600)
-        end = int(record.timestamp.timestamp())
-        start = submit = eligible = end - elapsed
         nodes = 1
         node_list = "node001"
         cpus = rate(record, "CPU", _NODE_CPUS)
@@ -617,10 +601,13 @@ def dbd_job_to_dict(
         times = stored_times(
             record, active, max(epoch(engine.get_current_time()), job_now), job_now
         )
-    submit, eligible = times.submit or submit, times.eligible
-    start, end, elapsed = times.start, times.end, times.elapsed
-    if not with_steps:
-        steps = []
+    steps = []
+    if with_steps and step_cpu is not None:
+        # The step is clipped to the same window as the job, but keeps its
+        # whole suspended time, which comes off its elapsed time
+        # (slurm://src/plugins/accounting_storage/mysql/as_mysql_jobacct_process.c#_cluster_get_jobs).
+        suspended = sum(e - s for s, e in suspend_intervals(record, None))
+        steps.append(_batch_step(record, times.start, times.end, step_cpu, suspended))
     # A requeued run is stored as JOB_PENDING | JOB_REQUEUE
     # (slurm://src/slurmctld/job_mgr.c#_job_requeue_op), which JOB_STATE dumps
     # as base state plus flag.
@@ -653,11 +640,11 @@ def dbd_job_to_dict(
         # slurm://src/plugins/data_parser/v0.0.45/parsers.c#"stdout_expanded"@26.05+
         **_record_stdio(record),
         "time": {
-            "elapsed": elapsed,
-            "eligible": eligible,
-            "start": start,
-            "end": end,
-            "submission": submit,
+            "elapsed": times.elapsed,
+            "eligible": times.eligible,
+            "start": times.start,
+            "end": times.end,
+            "submission": times.submit,
             "suspended": times.suspended,
             "limit": limit,
             **cpu,
@@ -698,11 +685,14 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
     # The script's own status when it ran (SLURM_EMULATOR_JOB_EXECUTE),
     # else 1/0 from the state (slurm://slurm/slurm.h#job_info_t.exit_code).
     exit_code = _exit_code(job.state, getattr(job, "exit_code", None))
-    # A running job's end_time is its expected end: start + time limit, or
-    # a year without one (slurm://src/slurmctld/job_mgr.c#job_end_time_reset).
+    # A running or suspended job's end_time is its expected end: start + time
+    # limit (a year without one), moved on by time spent suspended
+    # (slurm://src/slurmctld/job_mgr.c#job_end_time_reset).
     end = job.end_time
-    if end is None and job.state == "RUNNING" and job.start_time:
-        end = job.start_time + (timedelta(minutes=time_limit) if time_limit else YEAR)
+    if end is None and job.state in ("RUNNING", "SUSPENDED") and job.start_time:
+        from emulator.core.scheduler import expected_end  # noqa: PLC0415
+
+        end = expected_end(job)
 
     return {
         "job_id": int(job.job_id) if str(job.job_id).isdigit() else 0,

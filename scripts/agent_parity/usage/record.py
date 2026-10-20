@@ -26,6 +26,7 @@ SACCT_QUERIES = [
     ("S1 --truncate -D", -60, ["--truncate", "-D"]),
     ("S1 -D", -60, ["-D"]),
     ("S2 --truncate", 30, ["--truncate"]),
+    ("S10 --truncate", 10, ["--truncate"]),
 ]
 REST_QUERIES = [
     "",
@@ -86,18 +87,51 @@ def main(container: str, rest_url: str, scenario_out: str, golden: str) -> int:
             rows.append(row)
         data["sacct"][name] = {"start": start, "options": options, "rows": rows}
 
+    # Every job by id, no window: -S defaults to 0 and -E to now.
+    args = [
+        "docker",
+        "exec",
+        container,
+        "sacct",
+        "-X",
+        "-P",
+        "-n",
+        "--noconvert",
+        "-D",
+        f"-j{','.join(str(i) for i in range(1, 8))}",
+        f"--format={SACCT_FIELDS}",
+    ]
+    rows = []
+    for line in subprocess.check_output(args, text=True).splitlines():
+        row = dict(zip(SACCT_FIELDS.split(","), line.split("|")))
+        for field in DATE_FIELDS:
+            row[field] = date_offset(row[field])
+        rows.append(row)
+    data["sacct_by_id"] = rows
+
     now = int(subprocess.check_output(["docker", "exec", container, "date", "+%s"], text=True))
     data["rest_now"] = now - t0
-    for flags in REST_QUERIES:
-        url = f"{rest_url}/slurmdb/v0.0.43/jobs/?account=acc1&start_time={t0 - 60}&end_time={t0 + WINDOW_END}"
-        # The cluster's own REST URL, given on the command line.
-        body = json.load(urllib.request.urlopen(url + (f"&{flags}" if flags else "")))  # noqa: S310
+
+    def number(value):
+        return value.get("number", 0) if isinstance(value, dict) else value
+
+    def rest_rows(body):
         rows = []
         for job in body["jobs"]:
             t = job["time"]
             rel = {
                 k: (t[k] - t0 if t[k] else 0) for k in ("submission", "eligible", "start", "end")
             }
+            steps = [
+                {
+                    "name": step["step"]["name"],
+                    "start": number(step["time"]["start"]) - t0,
+                    "end": number(step["time"]["end"]) - t0,
+                    "elapsed": step["time"]["elapsed"],
+                    "suspended": step["time"]["suspended"],
+                }
+                for step in job["steps"]
+            ]
             rows.append(
                 {
                     "job_id": job["job_id"],
@@ -105,10 +139,25 @@ def main(container: str, rest_url: str, scenario_out: str, golden: str) -> int:
                     **rel,
                     "elapsed": t["elapsed"],
                     "suspended": t["suspended"],
-                    "steps": len(job["steps"]),
+                    "steps": steps,
                 }
             )
-        data["rest"][flags] = rows
+        return rows
+
+    data["rest_by_id"] = {
+        str(i): rest_rows(json.load(urllib.request.urlopen(f"{rest_url}/slurmdb/v0.0.43/job/{i}")))  # noqa: S310
+        for i in range(1, 8)
+    }
+    for start in (-60, 10):
+        key = "" if start == -60 else f"start=+{start}&"
+        for flags in REST_QUERIES:
+            url = (
+                f"{rest_url}/slurmdb/v0.0.43/jobs/?account=acc1"
+                f"&start_time={t0 + start}&end_time={t0 + WINDOW_END}"
+            )
+            # The cluster's own REST URL, given on the command line.
+            body = json.load(urllib.request.urlopen(url + (f"&{flags}" if flags else "")))  # noqa: S310
+            data["rest"][key + flags] = rest_rows(body)
 
     Path(golden).write_text(json.dumps(data, indent=1) + "\n")
     return 0

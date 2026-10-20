@@ -166,17 +166,14 @@ def suspend_intervals(record: UsageRecord, active: Optional[Job]) -> list[tuple[
 
 
 def in_window(times: JobTimes, cond: JobCond) -> bool:
-    """slurm://src/plugins/accounting_storage/mysql/as_mysql_jobacct_process.c#setup_job_cond_limits."""
+    """slurm://src/plugins/accounting_storage/mysql/as_mysql_jobacct_process.c#setup_job_cond_limits.
+
+    ``cond`` comes from ``default_window``, so both ends are set.
+    """
     ended_in_or_after = times.end >= cond.usage_start or times.end == 0
     if cond.job_ids:
         return times.submit < cond.usage_end and ended_in_or_after
-    if cond.usage_start:
-        if not cond.usage_end:
-            return ended_in_or_after
-        return bool(times.eligible) and times.eligible < cond.usage_end and ended_in_or_after
-    if cond.usage_end:
-        return bool(times.eligible) and times.eligible < cond.usage_end
-    return True
+    return bool(times.eligible) and times.eligible < cond.usage_end and ended_in_or_after
 
 
 def truncate(

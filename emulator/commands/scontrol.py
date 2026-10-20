@@ -177,6 +177,8 @@ class ScontrolEmulator:
         self.database = database
         self.time_engine = time_engine
         self.exit_code = 0
+        # The Unix user running scontrol; the dispatcher sets it from $USER.
+        self.caller = "root"
 
     # --- entry ---
 
@@ -522,7 +524,10 @@ class ScontrolEmulator:
         slurm://src/scontrol/update_job.c#scontrol_requeue). An unknown id is
         ``Invalid job id specified`` for requeue but ``Unexpected message
         received`` for suspend/resume, which is what slurmctld's suspend RPC
-        answers for it.
+        answers for it. Suspend and resume are for operators only, even on
+        one's own job; a requeue also for the job's owner
+        (slurm://src/slurmctld/job_mgr.c#_job_suspend_op,
+        slurm://src/slurmctld/job_mgr.c#_job_requeue_op).
         """
         if not job_ids:
             return self._fail(f"scontrol: error: no job id given for {command}")
@@ -538,6 +543,10 @@ class ScontrolEmulator:
                     else ("Unexpected message received")
                 )
                 self._fail(f"{unknown} for job {job_id}")
+                continue
+            allowed = self.caller == "root" or (command == "requeue" and self.caller == job.user)
+            if not allowed:
+                self._fail(f"Access/permission denied for job {job_id}")
                 continue
             if command == "suspend":
                 error = suspend_job(job, now)

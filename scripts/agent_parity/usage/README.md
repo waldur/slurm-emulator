@@ -1,6 +1,6 @@
 # Recording job-accounting golden data
 
-`tests/test_jobacct_golden.py` replays a run of six jobs on the emulator and
+`tests/test_jobacct_golden.py` replays a run of seven jobs on the emulator and
 compares what `sacct` and `GET /slurmdb/{v}/jobs` report with what a real
 cluster reported for the same run (`tests/data/slurm_<release>_job_accounting.json`):
 
@@ -11,12 +11,19 @@ cluster reported for the same run (`tests/data/slurm_<release>_job_accounting.js
 | suspended | Suspended at +10 s, resumed at +25 s, suspended again at +40 s |
 | requeued | Requeued at +30 s while running, so it has a REQUEUED run and a new pending record |
 | pending | Held, so it has no eligible time |
+| resumed | Suspended at +5 s, resumed at +15 s, then finishes (`sleep` keeps counting while stopped, so it ends 20 s after it started with 10 s suspended; the emulator replays it as 10 s of work) |
 
-The queries cover sacct with and without `--truncate` and `-D`, a window that
-starts after the first jobs ended, and slurmrestd with no flags,
-`skip_steps=true`, `skip_steps=true&show_duplicates=true` and
-`disable_truncate_usage_time=true`. Times are stored as seconds after the
-scenario start.
+The queries cover:
+
+- sacct with and without `--truncate` and `-D`, windows starting before and
+  after the first jobs ended, and every job by id without a window;
+- slurmrestd `GET /jobs` with no flags, `skip_steps=true`,
+  `skip_steps=true&show_duplicates=true` and `disable_truncate_usage_time=true`,
+  for both windows, with the batch steps;
+- slurmrestd `GET /job/{id}` for every job.
+
+Times are stored as seconds after the scenario start; how long after submit
+jobs started is taken from the recording.
 
 ## Record
 

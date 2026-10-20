@@ -104,11 +104,13 @@ def expected_end(job: Job) -> Optional[datetime]:
     """When a RUNNING job's allocation ends, as slurmctld sees it.
 
     slurmctld sets a running job's ``end_time`` to start + time limit, or
-    start + a year without one (slurm://src/slurmctld/job_mgr.c#job_end_time_reset).
+    start + a year without one (slurm://src/slurmctld/job_mgr.c#job_end_time_reset),
+    and moves it on by the time a resumed job spent suspended
+    (slurm://src/slurmctld/job_mgr.c#_job_suspend_op).
     """
     if job.start_time is None:
         return None
-    seconds = _limit_seconds(job) or 365 * 86400
+    seconds = (_limit_seconds(job) or 365 * 86400) + suspended_seconds(job)
     return job.start_time + timedelta(seconds=seconds)
 
 
@@ -197,6 +199,7 @@ def requeue_job(
     job.node_list = []
     job.alloc_cpus = 0
     job.exit_code = None
+    job.requid = None
     job.suspend_intervals = []
     return None
 
@@ -210,7 +213,8 @@ def _finish(job: Job, run_duration: float) -> None:
     """End a RUNNING job at its planned end (COMPLETED / FAILED / TIMEOUT)."""
     seconds, timed_out = _planned(job, run_duration)
     assert job.start_time is not None  # noqa: S101 - only RUNNING jobs, which have one
-    job.end_time = job.start_time + timedelta(seconds=seconds)
+    # Time spent suspended pushes the end back; Elapsed then leaves it out again.
+    job.end_time = job.start_time + timedelta(seconds=seconds + suspended_seconds(job))
     job.state = "TIMEOUT" if timed_out else "COMPLETED"
     if job_execution.execution_enabled():
         # The script runs once, at the end of the emulated run. A failing
@@ -380,8 +384,12 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
     if not str(job.job_id).isdigit():
         return False
     jid = int(job.job_id)
-    # One record per run: a requeued job's runs differ in submit time.
-    if any(r.job_id == jid and r.submit_time == job.submit_time for r in database.usage_records):
+    # One record per run: a requeued job's runs differ in submit time. A record
+    # without one predates submit times in the state file and stands for the job.
+    if any(
+        r.job_id == jid and (r.submit_time is None or r.submit_time == job.submit_time)
+        for r in database.usage_records
+    ):
         return False
 
     elapsed = 0.0
