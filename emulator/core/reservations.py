@@ -337,7 +337,7 @@ def _busy_nodes(db: SlurmDatabase, start: datetime, resv_name: Optional[str] = N
     """
     busy: set[str] = set()
     for job in db.jobs.values():
-        if job.state != "RUNNING" or not job.node_list:
+        if job.state not in ("RUNNING", "SUSPENDED") or not job.node_list:
             continue
         if resv_name is not None and job.reservation == resv_name:
             continue

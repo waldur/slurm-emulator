@@ -1,0 +1,1623 @@
+{
+ "t0_offsets": {
+  "SUSPEND_RESUMED": 5,
+  "SUSPEND1": 10,
+  "RESUME_RESUMED": 15,
+  "RESUME1": 25,
+  "REQUEUE": 30,
+  "SUSPEND2": 40,
+  "QUERY": 60
+ },
+ "sacct": {
+  "S1": {
+   "start": -60,
+   "options": [],
+   "rows": [
+    {
+     "JobID": "1",
+     "JobName": "rocket",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 22,
+     "Elapsed": "00:00:20",
+     "ElapsedRaw": "20",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "2",
+     "JobName": "finished",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 12,
+     "Elapsed": "00:00:10",
+     "ElapsedRaw": "10",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "3",
+     "JobName": "running",
+     "State": "RUNNING",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": "Unknown",
+     "Elapsed": "00:00:58",
+     "ElapsedRaw": "58",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "4",
+     "JobName": "suspended",
+     "State": "SUSPENDED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": "Unknown",
+     "Elapsed": "00:00:23",
+     "ElapsedRaw": "23",
+     "Suspended": "00:00:35"
+    },
+    {
+     "JobID": "7",
+     "JobName": "resumed",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 22,
+     "Elapsed": "00:00:10",
+     "ElapsedRaw": "10",
+     "Suspended": "00:00:10"
+    },
+    {
+     "JobID": "5",
+     "JobName": "requeued",
+     "State": "PENDING",
+     "Submit": 30,
+     "Eligible": 151,
+     "Start": "Unknown",
+     "End": "Unknown",
+     "Elapsed": "00:00:00",
+     "ElapsedRaw": "0",
+     "Suspended": "00:00:00"
+    }
+   ]
+  },
+  "S1 --truncate": {
+   "start": -60,
+   "options": [
+    "--truncate"
+   ],
+   "rows": [
+    {
+     "JobID": "1",
+     "JobName": "rocket",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 22,
+     "Elapsed": "00:00:20",
+     "ElapsedRaw": "20",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "2",
+     "JobName": "finished",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 12,
+     "Elapsed": "00:00:10",
+     "ElapsedRaw": "10",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "3",
+     "JobName": "running",
+     "State": "RUNNING",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 60,
+     "Elapsed": "00:00:58",
+     "ElapsedRaw": "58",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "4",
+     "JobName": "suspended",
+     "State": "SUSPENDED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 60,
+     "Elapsed": "00:00:43",
+     "ElapsedRaw": "43",
+     "Suspended": "00:00:15"
+    },
+    {
+     "JobID": "7",
+     "JobName": "resumed",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 22,
+     "Elapsed": "00:00:10",
+     "ElapsedRaw": "10",
+     "Suspended": "00:00:10"
+    },
+    {
+     "JobID": "5",
+     "JobName": "requeued",
+     "State": "PENDING",
+     "Submit": 30,
+     "Eligible": 151,
+     "Start": 60,
+     "End": 60,
+     "Elapsed": "00:00:00",
+     "ElapsedRaw": "0",
+     "Suspended": "00:00:00"
+    }
+   ]
+  },
+  "S1 --truncate -D": {
+   "start": -60,
+   "options": [
+    "--truncate",
+    "-D"
+   ],
+   "rows": [
+    {
+     "JobID": "1",
+     "JobName": "rocket",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 22,
+     "Elapsed": "00:00:20",
+     "ElapsedRaw": "20",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "2",
+     "JobName": "finished",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 12,
+     "Elapsed": "00:00:10",
+     "ElapsedRaw": "10",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "3",
+     "JobName": "running",
+     "State": "RUNNING",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 60,
+     "Elapsed": "00:00:58",
+     "ElapsedRaw": "58",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "4",
+     "JobName": "suspended",
+     "State": "SUSPENDED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 60,
+     "Elapsed": "00:00:43",
+     "ElapsedRaw": "43",
+     "Suspended": "00:00:15"
+    },
+    {
+     "JobID": "5",
+     "JobName": "requeued",
+     "State": "REQUEUED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 30,
+     "Elapsed": "00:00:28",
+     "ElapsedRaw": "28",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "7",
+     "JobName": "resumed",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 22,
+     "Elapsed": "00:00:10",
+     "ElapsedRaw": "10",
+     "Suspended": "00:00:10"
+    },
+    {
+     "JobID": "5",
+     "JobName": "requeued",
+     "State": "PENDING",
+     "Submit": 30,
+     "Eligible": 151,
+     "Start": 60,
+     "End": 60,
+     "Elapsed": "00:00:00",
+     "ElapsedRaw": "0",
+     "Suspended": "00:00:00"
+    }
+   ]
+  },
+  "S1 -D": {
+   "start": -60,
+   "options": [
+    "-D"
+   ],
+   "rows": [
+    {
+     "JobID": "1",
+     "JobName": "rocket",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 22,
+     "Elapsed": "00:00:20",
+     "ElapsedRaw": "20",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "2",
+     "JobName": "finished",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 12,
+     "Elapsed": "00:00:10",
+     "ElapsedRaw": "10",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "3",
+     "JobName": "running",
+     "State": "RUNNING",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": "Unknown",
+     "Elapsed": "00:00:58",
+     "ElapsedRaw": "58",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "4",
+     "JobName": "suspended",
+     "State": "SUSPENDED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": "Unknown",
+     "Elapsed": "00:00:23",
+     "ElapsedRaw": "23",
+     "Suspended": "00:00:35"
+    },
+    {
+     "JobID": "5",
+     "JobName": "requeued",
+     "State": "REQUEUED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 30,
+     "Elapsed": "00:00:28",
+     "ElapsedRaw": "28",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "7",
+     "JobName": "resumed",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 2,
+     "End": 22,
+     "Elapsed": "00:00:10",
+     "ElapsedRaw": "10",
+     "Suspended": "00:00:10"
+    },
+    {
+     "JobID": "5",
+     "JobName": "requeued",
+     "State": "PENDING",
+     "Submit": 30,
+     "Eligible": 151,
+     "Start": "Unknown",
+     "End": "Unknown",
+     "Elapsed": "00:00:00",
+     "ElapsedRaw": "0",
+     "Suspended": "00:00:00"
+    }
+   ]
+  },
+  "S2 --truncate": {
+   "start": 30,
+   "options": [
+    "--truncate"
+   ],
+   "rows": [
+    {
+     "JobID": "3",
+     "JobName": "running",
+     "State": "RUNNING",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 30,
+     "End": 60,
+     "Elapsed": "00:00:30",
+     "ElapsedRaw": "30",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "4",
+     "JobName": "suspended",
+     "State": "SUSPENDED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 30,
+     "End": 60,
+     "Elapsed": "00:00:30",
+     "ElapsedRaw": "30",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "5",
+     "JobName": "requeued",
+     "State": "PENDING",
+     "Submit": 30,
+     "Eligible": 151,
+     "Start": 60,
+     "End": 60,
+     "Elapsed": "00:00:00",
+     "ElapsedRaw": "0",
+     "Suspended": "00:00:00"
+    }
+   ]
+  },
+  "S10 --truncate": {
+   "start": 10,
+   "options": [
+    "--truncate"
+   ],
+   "rows": [
+    {
+     "JobID": "1",
+     "JobName": "rocket",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 10,
+     "End": 22,
+     "Elapsed": "00:00:12",
+     "ElapsedRaw": "12",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "2",
+     "JobName": "finished",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 10,
+     "End": 12,
+     "Elapsed": "00:00:02",
+     "ElapsedRaw": "2",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "3",
+     "JobName": "running",
+     "State": "RUNNING",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 10,
+     "End": 60,
+     "Elapsed": "00:00:50",
+     "ElapsedRaw": "50",
+     "Suspended": "00:00:00"
+    },
+    {
+     "JobID": "4",
+     "JobName": "suspended",
+     "State": "SUSPENDED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 10,
+     "End": 60,
+     "Elapsed": "00:00:35",
+     "ElapsedRaw": "35",
+     "Suspended": "00:00:15"
+    },
+    {
+     "JobID": "7",
+     "JobName": "resumed",
+     "State": "COMPLETED",
+     "Submit": 0,
+     "Eligible": 0,
+     "Start": 10,
+     "End": 22,
+     "Elapsed": "00:00:07",
+     "ElapsedRaw": "7",
+     "Suspended": "00:00:05"
+    },
+    {
+     "JobID": "5",
+     "JobName": "requeued",
+     "State": "PENDING",
+     "Submit": 30,
+     "Eligible": 151,
+     "Start": 60,
+     "End": 60,
+     "Elapsed": "00:00:00",
+     "ElapsedRaw": "0",
+     "Suspended": "00:00:00"
+    }
+   ]
+  }
+ },
+ "rest": {
+  "": [
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING",
+     "REQUEUED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 30,
+    "elapsed": 28,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 30,
+      "elapsed": 28,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 1,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 20,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 22,
+      "elapsed": 20,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 2,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 12,
+    "elapsed": 10,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 12,
+      "elapsed": 10,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 3,
+    "state": [
+     "RUNNING"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 0,
+    "elapsed": 58,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": -1792505187,
+      "elapsed": 58,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 4,
+    "state": [
+     "SUSPENDED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 0,
+    "elapsed": 23,
+    "suspended": 35,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": -1792505187,
+      "elapsed": 23,
+      "suspended": 35
+     }
+    ]
+   },
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING"
+    ],
+    "submission": 30,
+    "eligible": 151,
+    "start": 0,
+    "end": 0,
+    "elapsed": 0,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 7,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 10,
+    "suspended": 10,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 22,
+      "elapsed": 10,
+      "suspended": 10
+     }
+    ]
+   }
+  ],
+  "skip_steps=true": [
+   {
+    "job_id": 1,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 20,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 2,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 12,
+    "elapsed": 10,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 3,
+    "state": [
+     "RUNNING"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 60,
+    "elapsed": 58,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 4,
+    "state": [
+     "SUSPENDED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 60,
+    "elapsed": 43,
+    "suspended": 15,
+    "steps": []
+   },
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING"
+    ],
+    "submission": 30,
+    "eligible": 151,
+    "start": 60,
+    "end": 60,
+    "elapsed": 0,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 7,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 10,
+    "suspended": 10,
+    "steps": []
+   }
+  ],
+  "skip_steps=true&show_duplicates=true": [
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING",
+     "REQUEUED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 30,
+    "elapsed": 28,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 1,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 20,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 2,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 12,
+    "elapsed": 10,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 3,
+    "state": [
+     "RUNNING"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 60,
+    "elapsed": 58,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 4,
+    "state": [
+     "SUSPENDED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 60,
+    "elapsed": 43,
+    "suspended": 15,
+    "steps": []
+   },
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING"
+    ],
+    "submission": 30,
+    "eligible": 151,
+    "start": 60,
+    "end": 60,
+    "elapsed": 0,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 7,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 10,
+    "suspended": 10,
+    "steps": []
+   }
+  ],
+  "disable_truncate_usage_time=true": [
+   {
+    "job_id": 1,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 20,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 22,
+      "elapsed": 20,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 2,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 12,
+    "elapsed": 10,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 12,
+      "elapsed": 10,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 3,
+    "state": [
+     "RUNNING"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 0,
+    "elapsed": 58,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": -1792505187,
+      "elapsed": 58,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 4,
+    "state": [
+     "SUSPENDED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 0,
+    "elapsed": 23,
+    "suspended": 35,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": -1792505187,
+      "elapsed": 23,
+      "suspended": 35
+     }
+    ]
+   },
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING"
+    ],
+    "submission": 30,
+    "eligible": 151,
+    "start": 0,
+    "end": 0,
+    "elapsed": 0,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 7,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 10,
+    "suspended": 10,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 22,
+      "elapsed": 10,
+      "suspended": 10
+     }
+    ]
+   }
+  ],
+  "start=+10&": [
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING",
+     "REQUEUED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 30,
+    "elapsed": 28,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 30,
+      "elapsed": 28,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 1,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 20,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 22,
+      "elapsed": 20,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 2,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 12,
+    "elapsed": 10,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 12,
+      "elapsed": 10,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 3,
+    "state": [
+     "RUNNING"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 0,
+    "elapsed": 58,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": -1792505187,
+      "elapsed": 58,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 4,
+    "state": [
+     "SUSPENDED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 0,
+    "elapsed": 23,
+    "suspended": 35,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": -1792505187,
+      "elapsed": 23,
+      "suspended": 35
+     }
+    ]
+   },
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING"
+    ],
+    "submission": 30,
+    "eligible": 151,
+    "start": 0,
+    "end": 0,
+    "elapsed": 0,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 7,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 10,
+    "suspended": 10,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 22,
+      "elapsed": 10,
+      "suspended": 10
+     }
+    ]
+   }
+  ],
+  "start=+10&skip_steps=true": [
+   {
+    "job_id": 1,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 10,
+    "end": 22,
+    "elapsed": 12,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 2,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 10,
+    "end": 12,
+    "elapsed": 2,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 3,
+    "state": [
+     "RUNNING"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 10,
+    "end": 60,
+    "elapsed": 50,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 4,
+    "state": [
+     "SUSPENDED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 10,
+    "end": 60,
+    "elapsed": 35,
+    "suspended": 15,
+    "steps": []
+   },
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING"
+    ],
+    "submission": 30,
+    "eligible": 151,
+    "start": 60,
+    "end": 60,
+    "elapsed": 0,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 7,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 10,
+    "end": 22,
+    "elapsed": 7,
+    "suspended": 5,
+    "steps": []
+   }
+  ],
+  "start=+10&skip_steps=true&show_duplicates=true": [
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING",
+     "REQUEUED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 10,
+    "end": 30,
+    "elapsed": 20,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 1,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 10,
+    "end": 22,
+    "elapsed": 12,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 2,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 10,
+    "end": 12,
+    "elapsed": 2,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 3,
+    "state": [
+     "RUNNING"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 10,
+    "end": 60,
+    "elapsed": 50,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 4,
+    "state": [
+     "SUSPENDED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 10,
+    "end": 60,
+    "elapsed": 35,
+    "suspended": 15,
+    "steps": []
+   },
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING"
+    ],
+    "submission": 30,
+    "eligible": 151,
+    "start": 60,
+    "end": 60,
+    "elapsed": 0,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 7,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 10,
+    "end": 22,
+    "elapsed": 7,
+    "suspended": 5,
+    "steps": []
+   }
+  ],
+  "start=+10&disable_truncate_usage_time=true": [
+   {
+    "job_id": 1,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 20,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 22,
+      "elapsed": 20,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 2,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 12,
+    "elapsed": 10,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 12,
+      "elapsed": 10,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 3,
+    "state": [
+     "RUNNING"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 0,
+    "elapsed": 58,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": -1792505187,
+      "elapsed": 58,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 4,
+    "state": [
+     "SUSPENDED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 0,
+    "elapsed": 23,
+    "suspended": 35,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": -1792505187,
+      "elapsed": 23,
+      "suspended": 35
+     }
+    ]
+   },
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING"
+    ],
+    "submission": 30,
+    "eligible": 151,
+    "start": 0,
+    "end": 0,
+    "elapsed": 0,
+    "suspended": 0,
+    "steps": []
+   },
+   {
+    "job_id": 7,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 10,
+    "suspended": 10,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 22,
+      "elapsed": 10,
+      "suspended": 10
+     }
+    ]
+   }
+  ]
+ },
+ "sacct_now": 60,
+ "sacct_by_id": [
+  {
+   "JobID": "1",
+   "JobName": "rocket",
+   "State": "COMPLETED",
+   "Submit": 0,
+   "Eligible": 0,
+   "Start": 2,
+   "End": 22,
+   "Elapsed": "00:00:20",
+   "ElapsedRaw": "20",
+   "Suspended": "00:00:00"
+  },
+  {
+   "JobID": "2",
+   "JobName": "finished",
+   "State": "COMPLETED",
+   "Submit": 0,
+   "Eligible": 0,
+   "Start": 2,
+   "End": 12,
+   "Elapsed": "00:00:10",
+   "ElapsedRaw": "10",
+   "Suspended": "00:00:00"
+  },
+  {
+   "JobID": "3",
+   "JobName": "running",
+   "State": "RUNNING",
+   "Submit": 0,
+   "Eligible": 0,
+   "Start": 2,
+   "End": "Unknown",
+   "Elapsed": "00:00:58",
+   "ElapsedRaw": "58",
+   "Suspended": "00:00:00"
+  },
+  {
+   "JobID": "4",
+   "JobName": "suspended",
+   "State": "SUSPENDED",
+   "Submit": 0,
+   "Eligible": 0,
+   "Start": 2,
+   "End": "Unknown",
+   "Elapsed": "00:00:23",
+   "ElapsedRaw": "23",
+   "Suspended": "00:00:35"
+  },
+  {
+   "JobID": "5",
+   "JobName": "requeued",
+   "State": "REQUEUED",
+   "Submit": 0,
+   "Eligible": 0,
+   "Start": 2,
+   "End": 30,
+   "Elapsed": "00:00:28",
+   "ElapsedRaw": "28",
+   "Suspended": "00:00:00"
+  },
+  {
+   "JobID": "6",
+   "JobName": "pending",
+   "State": "PENDING",
+   "Submit": 0,
+   "Eligible": "Unknown",
+   "Start": "Unknown",
+   "End": "Unknown",
+   "Elapsed": "00:00:00",
+   "ElapsedRaw": "0",
+   "Suspended": "00:00:00"
+  },
+  {
+   "JobID": "7",
+   "JobName": "resumed",
+   "State": "COMPLETED",
+   "Submit": 0,
+   "Eligible": 0,
+   "Start": 2,
+   "End": 22,
+   "Elapsed": "00:00:10",
+   "ElapsedRaw": "10",
+   "Suspended": "00:00:10"
+  },
+  {
+   "JobID": "5",
+   "JobName": "requeued",
+   "State": "PENDING",
+   "Submit": 30,
+   "Eligible": 151,
+   "Start": "Unknown",
+   "End": "Unknown",
+   "Elapsed": "00:00:00",
+   "ElapsedRaw": "0",
+   "Suspended": "00:00:00"
+  }
+ ],
+ "rest_now": 60,
+ "rest_by_id": {
+  "1": [
+   {
+    "job_id": 1,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 20,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 22,
+      "elapsed": 20,
+      "suspended": 0
+     }
+    ]
+   }
+  ],
+  "2": [
+   {
+    "job_id": 2,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 12,
+    "elapsed": 10,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 12,
+      "elapsed": 10,
+      "suspended": 0
+     }
+    ]
+   }
+  ],
+  "3": [
+   {
+    "job_id": 3,
+    "state": [
+     "RUNNING"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 0,
+    "elapsed": 58,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": -1792505187,
+      "elapsed": 58,
+      "suspended": 0
+     }
+    ]
+   }
+  ],
+  "4": [
+   {
+    "job_id": 4,
+    "state": [
+     "SUSPENDED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 0,
+    "elapsed": 23,
+    "suspended": 35,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": -1792505187,
+      "elapsed": 23,
+      "suspended": 35
+     }
+    ]
+   }
+  ],
+  "5": [
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING",
+     "REQUEUED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 30,
+    "elapsed": 28,
+    "suspended": 0,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 30,
+      "elapsed": 28,
+      "suspended": 0
+     }
+    ]
+   },
+   {
+    "job_id": 5,
+    "state": [
+     "PENDING"
+    ],
+    "submission": 30,
+    "eligible": 151,
+    "start": 0,
+    "end": 0,
+    "elapsed": 0,
+    "suspended": 0,
+    "steps": []
+   }
+  ],
+  "6": [
+   {
+    "job_id": 6,
+    "state": [
+     "PENDING"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 0,
+    "end": 0,
+    "elapsed": 0,
+    "suspended": 0,
+    "steps": []
+   }
+  ],
+  "7": [
+   {
+    "job_id": 7,
+    "state": [
+     "COMPLETED"
+    ],
+    "submission": 0,
+    "eligible": 0,
+    "start": 2,
+    "end": 22,
+    "elapsed": 10,
+    "suspended": 10,
+    "steps": [
+     {
+      "name": "batch",
+      "start": 2,
+      "end": 22,
+      "elapsed": 10,
+      "suspended": 10
+     }
+    ]
+   }
+  ]
+ }
+}

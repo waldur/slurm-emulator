@@ -358,7 +358,11 @@ async def submit_job(
         memory_per_node=_submit_count(job_desc.get("memory_per_node")),
         reservation=reservation,
         exclusive=_submit_exclusive(job_desc.get("shared")),
-        priority=_submit_int(job_desc.get("priority"), 1) or 1,
+        # ``hold: true`` is priority 0, a user hold (HOLD overloads priority in
+        # slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_DESC_MSG@26.05+).
+        priority=0
+        if job_desc.get("hold") is True
+        else (_submit_int(job_desc.get("priority"), 1) or 1),
         time_limit=_submit_count(job_desc.get("time_limit")) or None,
         environment=_env_to_dict(job_desc.get("environment")),
         constraints=job_desc.get("constraints") or "",
@@ -505,7 +509,7 @@ async def cancel_job(
         errno = ESLURM_INVALID_JOB_ID
     elif requester not in ("root", job.user):
         errno = ESLURM_ACCESS_DENIED
-    elif job.state not in ("RUNNING", "PENDING"):
+    elif job.state not in ("RUNNING", "SUSPENDED", "PENDING"):
         errno = ESLURM_ALREADY_DONE
     elif _requested_signal(signal) == 9:
         job.state = "CANCELLED"

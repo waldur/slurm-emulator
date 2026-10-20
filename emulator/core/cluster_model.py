@@ -447,7 +447,7 @@ def purge_ended_reservations(database: SlurmDatabase, now: datetime) -> bool:
         if resv.end_time is None or resv.end_time > now:
             continue
         users = [j for j in database.jobs.values() if j.reservation == name]
-        if any(j.state == "RUNNING" for j in users) and "FLEX" not in resv.flags:
+        if any(j.state in ("RUNNING", "SUSPENDED") for j in users) and "FLEX" not in resv.flags:
             continue
         del database.reservations[name]
         for job in users:
@@ -626,7 +626,8 @@ def occupancy(
         overrides = node_state_overrides()
     usage: dict[str, NodeUse] = {}
     for job in database.jobs.values():
-        if job.state != "RUNNING":
+        # A suspended job keeps its allocation (slurm://src/slurmctld/job_mgr.c#_job_suspend_op).
+        if job.state not in ("RUNNING", "SUSPENDED"):
             continue
         for node, cpus, mem in job_node_shares(job):
             use = usage.setdefault(node, NodeUse())

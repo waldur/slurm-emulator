@@ -41,7 +41,7 @@ _SIGNALS = {
     "CONT": 18,
     "STOP": 19,
 }
-_ACTIVE = ("PENDING", "RUNNING")
+_ACTIVE = ("PENDING", "RUNNING", "SUSPENDED")
 _STATE_NAMES = {"PD": "PENDING", "R": "RUNNING", "S": "SUSPENDED"}
 
 # (short, long) options that take a value.

@@ -14,8 +14,13 @@ Output formatting and exit codes mirror real Slurm 26.05:
   <str>`` to stderr — no ``sacct:`` prefix, slurm://src/common/parse_time.c#parse_time — and
   exits 1; an unknown format field prints ``sacct: error: Invalid field
   requested: "X"`` and exits 1 (slurm://src/sacct/options.c#parse_command_line);
-* without ``-S``/``-E`` the window is Midnight → Now on the simulated
-  clock (slurmdb_job_cond_def_start_end, slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end);
+* without ``-S`` the window starts at midnight on the simulated clock, and
+  without ``-E`` it ends now (slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end);
+  which records a window returns, ``--truncate`` (``-T``) and
+  ``--duplicates`` (``-D``) follow slurmdbd's job query -- see
+  ``emulator/core/jobacct.py``. Rows are ordered by submit time, then job id
+  (slurm://src/sacct/options.c#_sort_desc_submit_time); ``Suspended`` is the
+  suspended time the query reports;
 * one job row per usage record: numeric JobID from the database,
   standard TRES string (``cpu=...,mem=...G,node=1,billing=...``) in
   TRES-id order — the emulator-internal ``node-hours`` key is not
@@ -61,7 +66,7 @@ every job is uid/gid 1000 in a group named after the user.
 
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from emulator.commands.print_fields import (
@@ -73,9 +78,10 @@ from emulator.commands.print_fields import (
     resolve_format,
 )
 from emulator.commands.slurm_time import ParseTimeError, parse_time_spec
-from emulator.core import exit_status
+from emulator.core import exit_status, jobacct
 from emulator.core.cluster_model import partition_has_gpus
 from emulator.core.database import Job, SlurmDatabase, UsageRecord
+from emulator.core.jobacct import JobCond, JobTimes, epoch
 from emulator.core.time_engine import TimeEngine
 from emulator.slurm_version import current
 
@@ -112,6 +118,7 @@ _REGISTRY: list[FieldSpec] = [
     FieldSpec("StdIn", 20),
     FieldSpec("StdOut", 20),
     FieldSpec("Submit", 19),
+    FieldSpec("Suspended", 10),
     FieldSpec("SystemCPU", 10),
     FieldSpec("Timelimit", 10),
     FieldSpec("TotalCPU", 10),
@@ -144,6 +151,10 @@ class _Config:
     mode: OutputMode = field(default_factory=OutputMode)
     noconvert: bool = False
     version: bool = False
+    # --truncate / -D: slurmdbd's NO_TRUNC flag cleared, DUP flag set
+    # (slurm://src/sacct/options.c#_init_params; see emulator/core/jobacct.py).
+    truncate: bool = False
+    duplicates: bool = False
 
 
 class SacctEmulator:
@@ -156,6 +167,8 @@ class SacctEmulator:
         self.exit_code = 0
         # Pending/running jobs behind the rows built for them, by id.
         self._active_jobs: dict[str, Job] = {}
+        # Times each returned record is reported with, by id(record).
+        self.times: dict[int, JobTimes] = {}
 
     def handle_command(self, args: list[str]) -> str:
         """Process sacct command and return output."""
@@ -179,6 +192,9 @@ class SacctEmulator:
 
         advance_job_states(self.database, self.time_engine)
         records = self._get_filtered_records(config)
+        # sacct orders what slurmdbd returns by submit time, then job id
+        # (slurm://src/sacct/options.c#_sort_desc_submit_time, despite its name ascending).
+        records.sort(key=lambda r: (self.times[id(r)].submit, int(r.job_id or 0)))
         rows = [self._row(record, config) for record in records]
         return render_table(fields, rows, config.mode)
 
@@ -227,7 +243,10 @@ class SacctEmulator:
             "-a": "noop",
             "--allusers": "noop",
             "--noconvert": "noconvert",
-            "--truncate": "noop",
+            "-T": "truncate",
+            "--truncate": "truncate",
+            "-D": "duplicates",
+            "--duplicates": "duplicates",
             "-b": "noop",
             "--brief": "noop",
         }
@@ -266,6 +285,10 @@ class SacctEmulator:
                     cfg.mode.parsable = "P"
                 elif action == "noconvert":
                     cfg.noconvert = True
+                elif action == "truncate":
+                    cfg.truncate = True
+                elif action == "duplicates":
+                    cfg.duplicates = True
                 i += 1
                 continue
             if "=" in arg and arg.split("=", 1)[0] in value_opts:
@@ -311,7 +334,13 @@ class SacctEmulator:
         return parse_time_spec(time_str, self.time_engine.get_current_time(), past=True)
 
     def _get_filtered_records(self, config: _Config) -> list[UsageRecord]:
-        """Get usage records based on filters."""
+        """Records the query returns, in slurmdbd's order (``emulator/core/jobacct.py``).
+
+        The times each record is reported with -- truncated or not -- are
+        kept in ``self.times`` by record identity.
+        """
+        from emulator.core.scheduler import job_clock_now  # noqa: PLC0415
+
         self.database.ensure_job_ids()
         records = list(self.database.usage_records)
 
@@ -329,24 +358,36 @@ class SacctEmulator:
             records = [r for r in records if r.user in config.users]
         if config.jobs:
             records = [r for r in records if str(r.job_id) in config.jobs]
-        active = self._active_job_records(config, {str(r.job_id) for r in records})
+        have = {(r.job_id, r.submit_time) for r in records}
+        active = self._active_job_records(config, have)
 
-        # Explicit job ids bypass the default time window — real sacct
-        # returns the job regardless of when it ran unless -S/-E are given.
-        if config.jobs and not (config.start_time or config.end_time):
-            return records + active
+        # -S/-E on the simulated clock; slurmdbd fills in what is not given.
+        sim_now = self.time_engine.get_current_time()
+        job_now = epoch(job_clock_now(self.time_engine))
+        now = max(epoch(sim_now), job_now)
+        usage_start, usage_end = jobacct.default_window(
+            epoch(config.start_time),
+            epoch(config.end_time),
+            now,
+            epoch(sim_now.replace(hour=0, minute=0, second=0, microsecond=0)),
+            job_ids=bool(config.jobs),
+        )
+        cond = JobCond(
+            usage_start=usage_start,
+            usage_end=usage_end,
+            duplicates=config.duplicates,
+            truncate=config.truncate,
+            job_ids=bool(config.jobs),
+        )
+        candidates: list[tuple[UsageRecord, Optional[Job]]] = [(r, None) for r in records]
+        candidates += [(r, self._active_jobs[str(r.job_id)]) for r in active]
+        rows = jobacct.query(candidates, cond, now, job_now)
+        self.times = {id(record): times for record, _active, times in rows}
+        return [record for record, _active, _times in rows]
 
-        # Default window: Midnight -> Now on the simulated clock
-        # (slurmdb_job_cond_def_start_end, slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end).
-        now = self.time_engine.get_current_time()
-        start = config.start_time or now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = config.end_time or now
-        finished = [r for r in records if start <= r.timestamp <= end]
-        # A pending or running job is eligible now, so it is in any window
-        # that reaches the present.
-        return finished + (active if end >= now else [])
-
-    def _active_job_records(self, config: _Config, have: set[str]) -> list[UsageRecord]:
+    def _active_job_records(
+        self, config: _Config, have: set[tuple[Optional[int], Optional[datetime]]]
+    ) -> list[UsageRecord]:
         """Rows for pending and running jobs, which slurmdbd holds from submission.
 
         The emulator writes accounting when a job ends; until then the row
@@ -359,7 +400,9 @@ class SacctEmulator:
         clusters = config.clusters or [self.database.current_cluster]
         for job in self.database.jobs.values():
             job_id = str(job.job_id)
-            if job.state not in ("PENDING", "RUNNING") or job_id in have or not job_id.isdigit():
+            if job.state not in ("PENDING", "RUNNING", "SUSPENDED") or not job_id.isdigit():
+                continue
+            if (int(job_id), job.submit_time) in have:
                 continue
             if (
                 job.cluster not in clusters
@@ -369,7 +412,7 @@ class SacctEmulator:
             ):
                 continue
             request = job_request(job)
-            running = job.state == "RUNNING" and bool(job.node_list)
+            running = job.state in ("RUNNING", "SUSPENDED") and bool(job.node_list)
             self._active_jobs[job_id] = job
             rows.append(
                 UsageRecord(
@@ -412,30 +455,20 @@ class SacctEmulator:
         job_id = str(record.job_id)
         energy = _energy_joules(record)
         fmt = "%Y-%m-%dT%H:%M:%S"
-        active = self._active_jobs.get(job_id) if state in ("PENDING", "RUNNING") else None
-        start: Optional[datetime]
-        end: Optional[datetime]
-
+        active = (
+            self._active_jobs.get(job_id) if state in ("PENDING", "RUNNING", "SUSPENDED") else None
+        )
         if active is not None:
             # Still in the controller: unset times print "Unknown"
             # (slurm://src/common/parse_time.c#slurm_make_time_str); CPU time
             # and MaxRSS only arrive when steps end.
             from emulator.commands.scontrol_info import job_tres  # noqa: PLC0415
-            from emulator.core.scheduler import job_clock_now  # noqa: PLC0415
 
-            submit = record.submit_time or record.timestamp
-            eligible = record.eligible_time or submit
-            start, end = record.start_time, None
-            elapsed_secs = (
-                max(int((job_clock_now(self.time_engine) - start).total_seconds()), 0)
-                if start
-                else 0
-            )
             nnodes = record.node_count
             node_list = record.node_list
             alloc_cpus = record.alloc_cpus
             req_tres = job_tres(active, allocated=False)
-            alloc_tres = job_tres(active, allocated=True) if start else ""
+            alloc_tres = job_tres(active, allocated=True) if record.start_time else ""
             req_mem_mb = record.req_mem_mb * max(nnodes, 1)
             req_mem = str(req_mem_mb) + "M" if config.noconvert else _convert_exact(req_mem_mb, 2)
             limit = _mins2time_str(record.time_limit) if record.time_limit else "UNLIMITED"
@@ -443,10 +476,6 @@ class SacctEmulator:
             max_rss = ""
         elif record.start_time is not None and record.end_time is not None:
             # A record of a real run: the values slurmdbd stored for it.
-            start, end = record.start_time, record.end_time
-            submit = record.submit_time or start
-            eligible = record.eligible_time or submit
-            elapsed_secs = max(int((end - start).total_seconds()), 0)
             nnodes = record.node_count
             node_list = record.node_list or "None assigned"
             alloc_cpus = record.alloc_cpus
@@ -471,9 +500,6 @@ class SacctEmulator:
                 )
             )
         else:
-            elapsed_secs = int(record.node_hours * 3600)
-            end = record.timestamp
-            start = submit = eligible = end - timedelta(seconds=elapsed_secs)
             nnodes = 1
             node_list = "node001"
             alloc_cpus = self._cpu_rate(record)
@@ -483,6 +509,12 @@ class SacctEmulator:
             limit = "UNLIMITED"
             total_cpu = user_cpu = system_cpu = "00:00:00"
             max_rss = ""
+
+        # The times the query reports, truncated or not (emulator/core/jobacct.py);
+        # unset ones print "Unknown" (slurm://src/common/parse_time.c#slurm_make_time_str).
+        times = self.times[id(record)]
+        submit, eligible = _from_epoch(times.submit), _from_epoch(times.eligible)
+        start, end = _from_epoch(times.start), _from_epoch(times.end)
 
         return {
             "JobID": job_id,
@@ -496,9 +528,9 @@ class SacctEmulator:
             "AllocNodes": str(nnodes if node_list != "None assigned" else 0),
             "AllocTRES": alloc_tres,
             "Cluster": record.cluster,
-            "Elapsed": _secs2time_str(elapsed_secs),
-            "ElapsedRaw": str(elapsed_secs),
-            "Eligible": eligible.strftime(fmt),
+            "Elapsed": _secs2time_str(times.elapsed),
+            "ElapsedRaw": str(times.elapsed),
+            "Eligible": eligible.strftime(fmt) if eligible else "Unknown",
             "End": end.strftime(fmt) if end else "Unknown",
             "ExitCode": exit_code,
             "GID": str(record.gid if record.gid is not None else 1000),
@@ -513,7 +545,8 @@ class SacctEmulator:
             "State": f"{state} by {record.requid}"
             if state == "CANCELLED" and record.requid is not None
             else state,
-            "Submit": submit.strftime(fmt),
+            "Submit": submit.strftime(fmt) if submit else "Unknown",
+            "Suspended": _secs2time_str(times.suspended),
             "SystemCPU": system_cpu,
             "Timelimit": limit,
             "TotalCPU": total_cpu,
@@ -577,6 +610,10 @@ class SacctEmulator:
         if gpus:
             parts.append(f"gres/gpu={gpus}")
         return ",".join(parts)
+
+
+def _from_epoch(value: int) -> Optional[datetime]:
+    return datetime.fromtimestamp(value) if value else None  # noqa: DTZ006 - naive local clock
 
 
 def _energy_joules(record: UsageRecord) -> int:
