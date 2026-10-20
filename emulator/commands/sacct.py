@@ -14,8 +14,8 @@ Output formatting and exit codes mirror real Slurm 26.05:
   <str>`` to stderr — no ``sacct:`` prefix, slurm://src/common/parse_time.c#parse_time — and
   exits 1; an unknown format field prints ``sacct: error: Invalid field
   requested: "X"`` and exits 1 (slurm://src/sacct/options.c#parse_command_line);
-* without ``-S`` the window starts at midnight on the simulated clock,
-  without ``-E`` it stays open (slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end);
+* without ``-S`` the window starts at midnight on the simulated clock, and
+  without ``-E`` it ends now (slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end);
   which records a window returns, ``--truncate`` (``-T``) and
   ``--duplicates`` (``-D``) follow slurmdbd's job query -- see
   ``emulator/core/jobacct.py``. Rows are ordered by submit time, then job id
@@ -361,24 +361,23 @@ class SacctEmulator:
         have = {(r.job_id, r.submit_time) for r in records}
         active = self._active_job_records(config, have)
 
-        # Explicit job ids bypass the default time window — real sacct
-        # returns the job regardless of when it ran unless -S/-E are given.
-        # Otherwise -S defaults to midnight and -E stays open
-        # (slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end), on the simulated clock.
+        # -S/-E on the simulated clock; slurmdbd fills in what is not given.
         sim_now = self.time_engine.get_current_time()
         job_now = epoch(job_clock_now(self.time_engine))
         now = max(epoch(sim_now), job_now)
-        if config.jobs and not (config.start_time or config.end_time):
-            usage_start = 0
-        else:
-            usage_start = epoch(
-                config.start_time or sim_now.replace(hour=0, minute=0, second=0, microsecond=0)
-            )
+        usage_start, usage_end = jobacct.default_window(
+            epoch(config.start_time),
+            epoch(config.end_time),
+            now,
+            epoch(sim_now.replace(hour=0, minute=0, second=0, microsecond=0)),
+            job_ids=bool(config.jobs),
+        )
         cond = JobCond(
             usage_start=usage_start,
-            usage_end=epoch(config.end_time),
+            usage_end=usage_end,
             duplicates=config.duplicates,
             truncate=config.truncate,
+            job_ids=bool(config.jobs),
         )
         candidates: list[tuple[UsageRecord, Optional[Job]]] = [(r, None) for r in records]
         candidates += [(r, self._active_jobs[str(r.job_id)]) for r in active]

@@ -5,9 +5,13 @@ shared by ``sacct`` and slurmrestd ``GET /slurmdb/{v}/jobs`` so both answer a
 query the same way:
 
 * **Window** -- a job is in ``[usage_start, usage_end)`` when it became
-  eligible before ``usage_end`` and has not ended before ``usage_start``
+  eligible before ``usage_end`` and has not ended before ``usage_start``; a
+  query for explicit job ids compares the submit time instead of the
+  eligible time
   (slurm://src/plugins/accounting_storage/mysql/as_mysql_jobacct_process.c#setup_job_cond_limits).
-  Without ``usage_end`` only the second half applies.
+  Without ``-S`` the window starts at midnight (at 0 for job ids), without
+  ``-E`` it ends now; an end equal to now or to the start is moved one second
+  on so the window is not empty (slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end).
 * **Duplicates** -- a job ID can have several records (one per run of a
   requeued job, each with its own submit time). Unless duplicates are asked
   for, only the most recently submitted record of each job is returned, plus
@@ -57,6 +61,22 @@ class JobCond:
     usage_end: int = 0
     duplicates: bool = False
     truncate: bool = False
+    # The query names job ids (sacct -j): slurm://slurm/slurmdb.h#slurmdb_job_cond_t.step_list
+    job_ids: bool = False
+
+
+def default_window(start: int, end: int, now: int, midnight: int, job_ids: bool) -> tuple[int, int]:
+    """``-S``/``-E`` as slurmdbd fills them in (0 = not given).
+
+    slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end
+    """
+    if not start and not job_ids:
+        start = midnight
+    if not end:
+        end = now
+    if end in (start, now):
+        end += 1
+    return start, end
 
 
 @dataclass(frozen=True)
@@ -148,6 +168,8 @@ def suspend_intervals(record: UsageRecord, active: Optional[Job]) -> list[tuple[
 def in_window(times: JobTimes, cond: JobCond) -> bool:
     """slurm://src/plugins/accounting_storage/mysql/as_mysql_jobacct_process.c#setup_job_cond_limits."""
     ended_in_or_after = times.end >= cond.usage_start or times.end == 0
+    if cond.job_ids:
+        return times.submit < cond.usage_end and ended_in_or_after
     if cond.usage_start:
         if not cond.usage_end:
             return ended_in_or_after

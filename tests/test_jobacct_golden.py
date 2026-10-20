@@ -143,3 +143,55 @@ def test_slurmdb_jobs_match_real_slurm(scenario, restd, auth_headers, flags):
         for row in GOLDEN["rest"][flags]
     ]
     assert got == expected
+
+
+def _sacct_lines(*args: str) -> list[str]:
+    db = SlurmDatabase()
+    db.load_state()
+    return SacctEmulator(db, TimeEngine()).handle_command(list(args)).splitlines()
+
+
+def test_job_id_query_compares_submit_time(scenario):
+    """With -j the window tests submit time, so a run not yet eligible still shows.
+
+    Seen on the same 25.11.7 cluster: ``sacct -D --truncate -j <requeued>`` with
+    the window ending at +60 s returned the REQUEUED run (29 s) and the new
+    record, eligible only at +151 s, with 0 s
+    (slurm://src/plugins/accounting_storage/mysql/as_mysql_jobacct_process.c#setup_job_cond_limits).
+    """
+    set_time(at(60))
+    window = ["-S", at(0).isoformat(), "-E", at(60).isoformat()]
+    lines = _sacct_lines(
+        "-X",
+        "-P",
+        "-n",
+        "-D",
+        "--truncate",
+        "-j",
+        str(scenario["requeued"]),
+        *window,
+        "--format=State,ElapsedRaw",
+    )
+    assert lines == ["REQUEUED|29", "PENDING|0"]
+
+
+def test_without_end_time_a_requeued_job_shows_its_last_run(scenario):
+    """-E defaults to now, so a pending record not yet eligible is left out.
+
+    Duplicates are removed after the window is applied, so sacct then shows
+    the REQUEUED run instead -- as the 25.11.7 cluster did right after a
+    requeue (slurm://src/common/slurmdb_defs.c#slurmdb_job_cond_def_start_end).
+    """
+    set_time(at(60))
+    names = {str(job_id): name for name, job_id in scenario.items()}
+    lines = _sacct_lines(
+        "-X", "-P", "-n", "-A", "acc1", "-S", at(-60).isoformat(), "-o", "JobID,State"
+    )
+    got = [(names[line.split("|")[0]], line.split("|")[1]) for line in lines]
+    assert got == [
+        ("rocket", "COMPLETED"),
+        ("finished", "COMPLETED"),
+        ("running", "RUNNING"),
+        ("suspended", "SUSPENDED"),
+        ("requeued", "REQUEUED"),
+    ]
