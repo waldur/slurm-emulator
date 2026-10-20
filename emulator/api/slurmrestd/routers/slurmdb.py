@@ -1307,6 +1307,50 @@ async def delete_qos(
 
 # --- jobs (accounting view, one job per usage record) ---
 
+# JOB_CONDITION flags, each a boolean query key
+# (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_CONDITION_FLAGS@26.05+).
+_JOB_CONDITION_FLAGS = (
+    "show_duplicates",
+    "skip_steps",
+    "disable_truncate_usage_time",
+    "run_away_jobs",
+    "whole_hetjob",
+    "disable_whole_hetjob",
+    "disable_wait_for_result",
+    "usage_time_as_submit_time",
+    "show_batch_script",
+    "show_job_environment",
+)
+_CONTROLLER_STATES = ("PENDING", "RUNNING", "SUSPENDED")
+
+
+def _job_condition_flags(request: Request, warnings: list[dict[str, Any]]) -> set[str]:
+    """The job-condition flags a ``GET /jobs`` query sets.
+
+    A value that does not convert to a boolean is warned about and read as
+    false (slurm://src/plugins/data_parser/v0.0.45/parsing.c#_parser_linked_flag@26.05+).
+    With no flag set at all the handler asks for duplicates and untruncated
+    times (slurm://src/slurmrestd/plugins/openapi/slurmdbd/jobs.c#op_handler_jobs);
+    setting any flag -- ``skip_steps`` included -- drops that default.
+    """
+    flags = set()
+    for name in _JOB_CONDITION_FLAGS:
+        raw = request.query_params.get(name)
+        if raw is None:
+            continue
+        value = raw.strip().lower()
+        if value in ("true", "yes", "1"):
+            flags.add(name)
+        elif value not in ("false", "no", "0"):
+            warnings.append(
+                {
+                    "description": f"Unable to convert to boolean from string. "
+                    f"Flag {name} is being treated as false.",
+                    "source": f"#/{name}",
+                }
+            )
+    return flags or {"show_duplicates", "disable_truncate_usage_time"}
+
 
 def _parse_query_time(value: str, now: datetime) -> datetime:
     if value.strip().lstrip("-").isdigit():
@@ -1368,9 +1412,20 @@ async def get_jobs(
         else:
             cfg.end_time = parsed
 
+    warnings: list[dict[str, Any]] = []
+    flags = _job_condition_flags(request, warnings)
+    cfg.duplicates = "show_duplicates" in flags
+    cfg.truncate = "disable_truncate_usage_time" not in flags
     records = sacct._get_filtered_records(cfg)
-    payload = [dbd_job_to_dict(r, sacct._active_jobs.get(str(r.job_id))) for r in records]
-    warnings = []
+    payload = [
+        dbd_job_to_dict(
+            r,
+            sacct._active_jobs.get(str(r.job_id)) if r.state in _CONTROLLER_STATES else None,
+            times=sacct.times[id(r)],
+            with_steps="skip_steps" not in flags,
+        )
+        for r in records
+    ]
     if not payload:
         warnings.append(found_nothing_warning("slurmdb_jobs_get()", request))
     return _respond(request, state, {"jobs": payload}, warnings=warnings)

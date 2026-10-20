@@ -45,6 +45,7 @@ from emulator.core.database import (
     UsageRecord,
     User,
 )
+from emulator.core.jobacct import JobTimes, epoch, stored_times
 from emulator.core.reservations import INFINITE_TIME, YEAR
 from emulator.core.time_engine import TimeEngine
 from emulator.core.tres import DYNAMIC_TRES_FIRST_ID, STATIC_TRES_IDS, tres_id
@@ -475,7 +476,12 @@ def _batch_step(record: UsageRecord, start: int, end: int, cpu: dict[str, Any]) 
     }
 
 
-def dbd_job_to_dict(record: UsageRecord, active: Optional[Job] = None) -> dict[str, Any]:
+def dbd_job_to_dict(
+    record: UsageRecord,
+    active: Optional[Job] = None,
+    times: Optional[JobTimes] = None,
+    with_steps: bool = True,
+) -> dict[str, Any]:
     """One slurmdb JOB per usage record — agrees with sacct output.
 
     Records that mirror a real run (``start_time`` set: submitted or seeded
@@ -503,7 +509,7 @@ def dbd_job_to_dict(record: UsageRecord, active: Optional[Job] = None) -> dict[s
         request = job_request(active)
         submit = int(active.submit_time.timestamp()) if active.submit_time else 0
         eligible = submit
-        running = active.state == "RUNNING" and bool(active.node_list)
+        running = active.state in ("RUNNING", "SUSPENDED") and bool(active.node_list)
         start = int(active.start_time.timestamp()) if running and active.start_time else 0
         end = 0
         elapsed = max(int(job_clock_now(TimeEngine()).timestamp()) - start, 0) if start else 0
@@ -602,6 +608,24 @@ def dbd_job_to_dict(record: UsageRecord, active: Optional[Job] = None) -> dict[s
         limit = uint_no_val(infinite=True)
         required = None
 
+    # The times the query reports, truncated or not (emulator/core/jobacct.py).
+    if times is None:
+        from emulator.core.scheduler import job_clock_now  # noqa: PLC0415
+
+        engine = TimeEngine()
+        job_now = epoch(job_clock_now(engine))
+        times = stored_times(
+            record, active, max(epoch(engine.get_current_time()), job_now), job_now
+        )
+    submit, eligible = times.submit or submit, times.eligible
+    start, end, elapsed = times.start, times.end, times.elapsed
+    if not with_steps:
+        steps = []
+    # A requeued run is stored as JOB_PENDING | JOB_REQUEUE
+    # (slurm://src/slurmctld/job_mgr.c#_job_requeue_op), which JOB_STATE dumps
+    # as base state plus flag.
+    current = ["PENDING", "REQUEUED"] if state == "REQUEUED" else [state]
+
     job: dict[str, Any] = {
         "account": record.account,
         "allocation_nodes": nodes,
@@ -621,7 +645,7 @@ def dbd_job_to_dict(record: UsageRecord, active: Optional[Job] = None) -> dict[s
         "nodes": node_list,
         "partition": record.partition or "compute",
         "qos": "normal",
-        "state": {"current": [state], "reason": "None"},
+        "state": {"current": current, "reason": "None"},
         "steps": steps,
         "stdout": record.standard_output,
         "stderr": record.standard_error,
@@ -634,7 +658,7 @@ def dbd_job_to_dict(record: UsageRecord, active: Optional[Job] = None) -> dict[s
             "start": start,
             "end": end,
             "submission": submit,
-            "suspended": 0,
+            "suspended": times.suspended,
             "limit": limit,
             **cpu,
         },
