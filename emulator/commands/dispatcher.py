@@ -115,6 +115,7 @@ class SlurmEmulator:
             if command_name == "sreport":
                 return self.sreport.handle_command(args)
             if command_name == "scontrol":
+                self.scontrol.caller = self.caller
                 return self.scontrol.handle_command(args)
             if command_name == "sinfo":
                 return self._handle_sinfo(args)

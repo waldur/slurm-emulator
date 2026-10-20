@@ -293,7 +293,14 @@ def _sbatch(emu: SlurmEmulator, user: str, args: list[str]) -> tuple[str, str, i
 
 
 def _squeue(emu) -> str:
-    st_map = {"PENDING": "PD", "RUNNING": "R", "COMPLETED": "CD", "CANCELLED": "CA", "FAILED": "F"}
+    st_map = {
+        "PENDING": "PD",
+        "RUNNING": "R",
+        "SUSPENDED": "S",
+        "COMPLETED": "CD",
+        "CANCELLED": "CA",
+        "FAILED": "F",
+    }
     header = "JOBID PARTITION NAME USER ST TIME NODES NODELIST(REASON)"
     rows = [header]
     for job in emu.database.jobs.values():

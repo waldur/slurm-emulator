@@ -104,12 +104,104 @@ def expected_end(job: Job) -> Optional[datetime]:
     """When a RUNNING job's allocation ends, as slurmctld sees it.
 
     slurmctld sets a running job's ``end_time`` to start + time limit, or
-    start + a year without one (slurm://src/slurmctld/job_mgr.c#job_end_time_reset).
+    start + a year without one (slurm://src/slurmctld/job_mgr.c#job_end_time_reset),
+    and moves it on by the time a resumed job spent suspended
+    (slurm://src/slurmctld/job_mgr.c#_job_suspend_op).
     """
     if job.start_time is None:
         return None
-    seconds = _limit_seconds(job) or 365 * 86400
+    seconds = (_limit_seconds(job) or 365 * 86400) + suspended_seconds(job)
     return job.start_time + timedelta(seconds=seconds)
+
+
+def suspended_seconds(job: Job) -> int:
+    """Seconds of closed suspend intervals; they push the job's planned end back."""
+    return sum(end - start for start, end in job.suspend_intervals if end)
+
+
+def suspend_job(job: Job, now: datetime) -> Optional[str]:
+    """``scontrol suspend``: stop a running job, keeping its nodes.
+
+    Returns the error slurmctld answers with, or None. scontrol suspends
+    indefinitely, so suspending a suspended job is a no-op
+    (slurm://src/slurmctld/job_mgr.c#_job_suspend_op).
+    """
+    if job.state == "PENDING":
+        return "Job is pending execution"
+    if job.state == "SUSPENDED":
+        return None
+    if job.state != "RUNNING":
+        return "Job/step already completing or completed"
+    job.state = "SUSPENDED"
+    job.suspend_intervals.append([int(now.timestamp()), 0])
+    return None
+
+
+def resume_job(job: Job, now: datetime) -> Optional[str]:
+    """``scontrol resume`` (slurm://src/slurmctld/job_mgr.c#_job_suspend_op)."""
+    if job.state == "PENDING":
+        return "Job is pending execution"
+    if job.state not in ("RUNNING", "SUSPENDED"):
+        return "Job/step already completing or completed"
+    if job.state != "SUSPENDED":
+        return "Job is not suspended"
+    job.state = "RUNNING"
+    close_suspend(job, now)
+    return None
+
+
+def close_suspend(job: Job, at: datetime) -> None:
+    """End an open suspend interval at ``at``."""
+    if job.suspend_intervals and not job.suspend_intervals[-1][1]:
+        job.suspend_intervals[-1][1] = int(at.timestamp())
+
+
+def requeue_delay() -> int:
+    """The credential lifetime (120 s), or SchedulerParameters=requeue_delay from 25.11.
+
+    slurm://src/slurmctld/job_mgr.c#_requeue_delay@25.11+; before 25.11 it is
+    always slurm://src/slurmctld/job_mgr.c#cred_expiration@24.11,25.05.
+    """
+    return 120
+
+
+def requeue_job(
+    database: SlurmDatabase, job: Job, now: datetime, sim_now: datetime
+) -> Optional[str]:
+    """``scontrol requeue``: end the current run and queue the job again.
+
+    A running or suspended job's run is written to accounting as REQUEUED,
+    ending now (a suspended one at its suspend time); a finished job keeps
+    its record. Either way the job goes back to PENDING with a new submit
+    time -- so its next run is a separate accounting record -- and may not
+    start before now + requeue_delay + 1
+    (slurm://src/slurmctld/job_mgr.c#_job_requeue_op,
+    slurm://src/slurmctld/job_mgr.c#batch_requeue_fini).
+    """
+    if job.state == "PENDING":
+        return "Job is pending execution"
+    if job.state in ("RUNNING", "SUSPENDED"):
+        open_suspend = job.state == "SUSPENDED" and job.suspend_intervals
+        # A suspended job's run ends when it was suspended (naive local clock).
+        suspended_at = job.suspend_intervals[-1][0] if open_suspend else 0
+        job.end_time = datetime.fromtimestamp(suspended_at) if suspended_at else now  # noqa: DTZ006
+        close_suspend(job, job.end_time)
+        job.state = "REQUEUED"
+        _ensure_usage_record(database, job, sim_now)
+    submit = now
+    if job.submit_time is not None and int(submit.timestamp()) == int(job.submit_time.timestamp()):
+        submit += timedelta(seconds=1)
+    job.state = "PENDING"
+    job.state_reason, job.state_description = "BeginTime", ""
+    job.submit_time = submit
+    job.begin_time = now + timedelta(seconds=requeue_delay() + 1)
+    job.start_time = job.end_time = None
+    job.node_list = []
+    job.alloc_cpus = 0
+    job.exit_code = None
+    job.requid = None
+    job.suspend_intervals = []
+    return None
 
 
 def _queue_order(job: Job) -> tuple:
@@ -121,7 +213,8 @@ def _finish(job: Job, run_duration: float) -> None:
     """End a RUNNING job at its planned end (COMPLETED / FAILED / TIMEOUT)."""
     seconds, timed_out = _planned(job, run_duration)
     assert job.start_time is not None  # noqa: S101 - only RUNNING jobs, which have one
-    job.end_time = job.start_time + timedelta(seconds=seconds)
+    # Time spent suspended pushes the end back; Elapsed then leaves it out again.
+    job.end_time = job.start_time + timedelta(seconds=seconds + suspended_seconds(job))
     job.state = "TIMEOUT" if timed_out else "COMPLETED"
     if job_execution.execution_enabled():
         # The script runs once, at the end of the emulated run. A failing
@@ -168,6 +261,8 @@ def advance_job_states(database: SlurmDatabase, time_engine: TimeEngine) -> bool
     def eligible(job: Job) -> datetime:
         assert job.submit_time is not None  # noqa: S101 - pending() requires it
         at = job.submit_time + run_delay
+        if job.begin_time is not None:
+            at = max(at, job.begin_time)
         return max(at, cursor) if cursor is not None else at
 
     def running() -> list[Job]:
@@ -186,8 +281,10 @@ def advance_job_states(database: SlurmDatabase, time_engine: TimeEngine) -> bool
         )
 
     def end_of(job: Job) -> datetime:
+        # Time spent suspended does not count towards the run.
         assert job.start_time is not None  # noqa: S101 - running() requires it
-        return job.start_time + timedelta(seconds=_planned(job, run_duration)[0])
+        planned = _planned(job, run_duration)[0] + suspended_seconds(job)
+        return job.start_time + timedelta(seconds=planned)
 
     candidates = [end_of(j) for j in running()] + [eligible(j) for j in pending()]
     t = min(candidates) if candidates else None
@@ -287,12 +384,21 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
     if not str(job.job_id).isdigit():
         return False
     jid = int(job.job_id)
-    if any(r.job_id == jid for r in database.usage_records):
+    # One record per run: a requeued job's runs differ in submit time. A record
+    # without one predates submit times in the state file and stands for the job.
+    if any(
+        r.job_id == jid and (r.submit_time is None or r.submit_time == job.submit_time)
+        for r in database.usage_records
+    ):
         return False
 
     elapsed = 0.0
     if job.start_time and job.end_time:
         elapsed = max((job.end_time - job.start_time).total_seconds(), 0.0)
+        # Suspended time is not usage: the rollup takes it off the job's CPU time
+        # (slurm://src/plugins/accounting_storage/mysql/as_mysql_rollup.c#as_mysql_hourly_rollup).
+        closed = [[s, e or int(job.end_time.timestamp())] for s, e in job.suspend_intervals]
+        elapsed = max(elapsed - sum(e - s for s, e in closed), 0.0)
     node_count = len(job.node_list) or getattr(job, "node_count", 1) or 1
     node_hours = (elapsed / 3600.0) * node_count
     # A job cancelled while pending never started: no nodes, start = end,
@@ -336,7 +442,9 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
             standard_output=job.standard_output or "",
             standard_error=job.standard_error or "",
             submit_time=job.submit_time,
-            eligible_time=job.submit_time,
+            eligible_time=max(job.submit_time, job.begin_time)
+            if job.submit_time and job.begin_time
+            else job.submit_time,
             start_time=job.start_time if started else job.end_time,
             end_time=job.end_time,
             time_limit=job.time_limit,
@@ -347,6 +455,10 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
             cpu_time_seconds=elapsed * alloc_cpus * cpu_eff if started else 0.0,
             max_rss_bytes=cluster_model.max_rss_bytes(mem_frac, mem_per_node) if started else 0,
             tasks=job.tasks,
+            suspend_intervals=[
+                [start, end or int(job.end_time.timestamp())]
+                for start, end in job.suspend_intervals
+            ],
         )
     )
     return True

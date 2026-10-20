@@ -231,6 +231,10 @@ class UsageRecord:
     cpu_time_seconds: float = 0.0
     max_rss_bytes: int = 0
     tasks: int = 0
+    # Suspend intervals of the run as [start, end] epochs on the job clock,
+    # end 0 while still suspended; slurmdbd keeps them in the cluster's
+    # suspend table (slurm://src/plugins/accounting_storage/mysql/as_mysql_job.c#as_mysql_suspend).
+    suspend_intervals: list[list[int]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Fold the account name like Account/Association do.
@@ -307,6 +311,12 @@ class Job:
     # detail slurmctld adds to some reasons (slurm://slurm/slurm.h#job_info_t.state_desc).
     state_reason: str = "None"
     state_description: str = ""
+    # Earliest start, set by a requeue to now + requeue_delay + 1
+    # (slurm://src/slurmctld/job_mgr.c#_job_requeue_op); None = no constraint.
+    # slurm://slurm/slurm.h#job_info_t.begin_time
+    begin_time: Optional[datetime] = None
+    # Suspend intervals of the current run, as on UsageRecord.
+    suspend_intervals: list[list[int]] = field(default_factory=list)
 
 
 @dataclass
@@ -502,7 +512,9 @@ class SlurmDatabase:
             return
         # Check for running/pending jobs
         active_jobs = [
-            j for j in self.jobs.values() if j.cluster == name and j.state in ("RUNNING", "PENDING")
+            j
+            for j in self.jobs.values()
+            if j.cluster == name and j.state in ("RUNNING", "SUSPENDED", "PENDING")
         ]
         if active_jobs:
             raise ValueError(
@@ -950,7 +962,7 @@ class SlurmDatabase:
 
         def _serialize_job(job: Job) -> dict:
             d = asdict(job)
-            for dt_field in ("submit_time", "start_time", "end_time"):
+            for dt_field in ("submit_time", "start_time", "end_time", "begin_time"):
                 if d.get(dt_field) is not None:
                     d[dt_field] = d[dt_field].isoformat()
             return d
@@ -1098,7 +1110,7 @@ class SlurmDatabase:
                 for jid, data in state.get("jobs", {}).items():
                     data.setdefault("cluster", "default")
                     # Handle datetime fields
-                    for dt_field in ["submit_time", "start_time", "end_time"]:
+                    for dt_field in ["submit_time", "start_time", "end_time", "begin_time"]:
                         if data.get(dt_field):
                             data[dt_field] = datetime.fromisoformat(data[dt_field])
                     self.jobs[jid] = Job(**data)

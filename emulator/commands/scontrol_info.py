@@ -24,7 +24,7 @@ Intentional deviations: jobs stay in the controller's list after they end
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from emulator.commands.sacct import _convert_exact
@@ -41,6 +41,7 @@ from emulator.core.cluster_model import (
     partition_ranges,
 )
 from emulator.core.database import Job
+from emulator.core.scheduler import expected_end
 from emulator.slurm_version import at_least
 
 
@@ -161,17 +162,24 @@ def _num_tasks(job: Job) -> int:
 
 
 def _run_time(job: Job, now: datetime) -> float:
+    """RunTime: time run so far, without the time spent suspended.
+
+    slurm://src/scontrol/info_job.c#_sprint_job_info
+    """
     if job.state == "PENDING" or job.start_time is None:
         return 0.0
-    end = now if job.state == "RUNNING" or job.end_time is None else job.end_time
-    return (end - job.start_time).total_seconds()
+    active = job.state in ("RUNNING", "SUSPENDED")
+    end = now if active or job.end_time is None else job.end_time
+    clock = int(now.timestamp())
+    suspended = sum((e or clock) - s for s, e in job.suspend_intervals)
+    return max((end - job.start_time).total_seconds() - suspended, 0.0)
 
 
 def _end_time(job: Job) -> Optional[datetime]:
     if job.end_time:
         return job.end_time
-    if job.state == "RUNNING" and job.start_time and job.time_limit:
-        return job.start_time + timedelta(minutes=job.time_limit)
+    if job.state in ("RUNNING", "SUSPENDED") and job.time_limit:
+        return expected_end(job)
     return None
 
 

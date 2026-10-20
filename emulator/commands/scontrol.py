@@ -19,6 +19,10 @@ Covers what a site agent needs to manage maintenance windows:
 * ``scontrol delete ReservationName=<name>`` (or ``delete reservation <name>``)
   -- silent on success; ``delete_reservation <arg>: <strerror>`` otherwise
   (slurm://src/scontrol/scontrol.c#_delete_it).
+* ``scontrol suspend|resume|requeue <job_id>`` -- the job operations of
+  ``emulator/core/scheduler.py`` (suspend intervals, requeued runs as
+  separate accounting records); silent on success, ``<strerror> for job
+  <id>`` on stderr otherwise (slurm://src/scontrol/update_job.c#scontrol_suspend).
 * ``scontrol show reservation [<name>]`` (also ``show res``,
   ``show ReservationName=<name>``) -- the record format of
   slurm://src/api/reservation_info.c#slurm_sprint_reservation_info, with
@@ -64,7 +68,13 @@ from emulator.core.reservations import (
     ReservationError,
     strerror,
 )
-from emulator.core.scheduler import advance_job_states, job_clock_now
+from emulator.core.scheduler import (
+    advance_job_states,
+    job_clock_now,
+    requeue_job,
+    resume_job,
+    suspend_job,
+)
 from emulator.core.time_engine import TimeEngine
 from emulator.slurm_version import at_least, current
 
@@ -167,6 +177,8 @@ class ScontrolEmulator:
         self.database = database
         self.time_engine = time_engine
         self.exit_code = 0
+        # The Unix user running scontrol; the dispatcher sets it from $USER.
+        self.caller = "root"
 
     # --- entry ---
 
@@ -200,6 +212,8 @@ class ScontrolEmulator:
             return self._write(rest)
         if command == "ping":
             return self._ping()
+        if command in ("suspend", "resume", "requeue"):
+            return self._job_op(command, rest)
         return self._fail(f"scontrol: unsupported command: {words[0]}")
 
     def _fail(self, message: str, stdout: str = "") -> str:
@@ -501,6 +515,52 @@ class ScontrolEmulator:
             return job.script
         Path(target).write_text(job.script, encoding="utf-8")
         return f"batch script for job {args[1]} written to {target}\n"
+
+    def _job_op(self, command: str, job_ids: list[str]) -> str:
+        """``scontrol suspend|resume|requeue <job_id>[,<job_id>...]``.
+
+        Silent on success; each refusal prints ``<strerror> for job <id>`` to
+        stderr and scontrol exits 1 (slurm://src/scontrol/update_job.c#scontrol_suspend,
+        slurm://src/scontrol/update_job.c#scontrol_requeue). An unknown id is
+        ``Invalid job id specified`` for requeue but ``Unexpected message
+        received`` for suspend/resume, which is what slurmctld's suspend RPC
+        answers for it. Suspend and resume are for operators only, even on
+        one's own job; a requeue also for the job's owner
+        (slurm://src/slurmctld/job_mgr.c#_job_suspend_op,
+        slurm://src/slurmctld/job_mgr.c#_job_requeue_op).
+        """
+        if not job_ids:
+            return self._fail(f"scontrol: error: no job id given for {command}")
+        now = self._refresh()
+        sim_now = self.time_engine.get_current_time()
+        changed = False
+        for job_id in (j for arg in job_ids for j in arg.split(",") if j):
+            job = self.database.jobs.get(job_id)
+            if job is None:
+                unknown = (
+                    "Invalid job id specified"
+                    if command == "requeue"
+                    else ("Unexpected message received")
+                )
+                self._fail(f"{unknown} for job {job_id}")
+                continue
+            allowed = self.caller == "root" or (command == "requeue" and self.caller == job.user)
+            if not allowed:
+                self._fail(f"Access/permission denied for job {job_id}")
+                continue
+            if command == "suspend":
+                error = suspend_job(job, now)
+            elif command == "resume":
+                error = resume_job(job, now)
+            else:
+                error = requeue_job(self.database, job, now, sim_now)
+            if error:
+                self._fail(f"{error} for job {job_id}")
+            else:
+                changed = True
+        if changed:
+            self.database.save_state()
+        return ""
 
     def _ping(self) -> str:
         """slurm://src/scontrol/scontrol.c#_print_ping (one primary controller)."""
