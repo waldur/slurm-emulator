@@ -4,6 +4,16 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.9] - 2026-10-20
+
+### Added
+- Add an HPC workspace demo stack with FirecREST v2, reservations, GPU accounting, Sonar and slurm-monitor
+- Add GPU modelling with typed GRES (`gres/gpu:<type>` TRES) and whole-core allocation, matching real Slurm
+- Add emulation of slurmdbd's job query: time window, usage truncation, duplicate jobs, and `scontrol suspend`/`resume`/`requeue`
+
+### Changed
+- Update the site agent's slurmrestd and CLI operations to match real Slurm 26.05
+
 ## [0.9.8] - 2026-09-15
 
 ### Fixed
