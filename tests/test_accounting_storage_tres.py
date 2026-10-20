@@ -58,3 +58,32 @@ def test_rest_lists_them_too(account, restd, auth_headers, monkeypatch):
     monkeypatch.setenv("SLURM_EMULATOR_ACCOUNTING_STORAGE_TRES", "node_hours")
     body = restd.get(f"/slurmdb/{current().api_version}/tres/", headers=auth_headers).json()
     assert ["node_hours", "", 1004] in [[t["type"], t["name"], t["id"]] for t in body["TRES"]]
+
+
+def test_a_real_style_list_only_adds_what_is_new(account, restd, auth_headers, monkeypatch):
+    """A list copied from slurm.conf repeats static and GPU TRES; they keep one row
+    and their ids, and sacctmgr and slurmrestd give every TRES the same id."""
+    from emulator.slurm_version import current  # noqa: PLC0415
+
+    monkeypatch.setenv("SLURM_EMULATOR_GPU_TYPES", "gpu=H200")
+    monkeypatch.setenv(
+        "SLURM_EMULATOR_ACCOUNTING_STORAGE_TRES",
+        "cpu,mem,node,billing,gres/gpu,gres/gpu:H200,license/matlab",
+    )
+    tres, _code = _sacctmgr("-n", "-P", "show", "tres", "format=Type,Name,ID")
+    rows = [tuple(line.split("|")) for line in tres.splitlines()]
+    assert len(rows) == len(set(rows))
+    sacctmgr_ids = {f"{t}/{n}" if n else t: int(i) for t, n, i in rows}
+    assert sacctmgr_ids["cpu"] == 1
+    assert sacctmgr_ids["gres/gpu:h200"] == 1002
+    assert sacctmgr_ids["license/matlab"] == 1005
+    body = restd.get(f"/slurmdb/{current().api_version}/tres/", headers=auth_headers).json()
+    rest_ids = {
+        f"{t['type']}/{t['name']}" if t["name"] else t["type"]: t["id"] for t in body["TRES"]
+    }
+    assert {k: v for k, v in rest_ids.items() if k != "dynamic_offset"} == sacctmgr_ids
+
+    from emulator.api.slurmrestd.schemas import tres_list_from_dict  # noqa: PLC0415
+
+    listed = tres_list_from_dict({"gres/gpu": 2, "cpu": 1, "license/matlab": 1})
+    assert [(e["type"], e["id"]) for e in listed] == [("cpu", 1), ("gres", 1001), ("license", 1005)]

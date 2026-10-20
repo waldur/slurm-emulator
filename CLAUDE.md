@@ -434,7 +434,9 @@ so they also appear in the accounting (`/slurmdb` / `sacct`) view. Configurable 
   sacct prints both sorted by name. Checked against a real 25.11.7 run in
   `tests/test_gres_golden.py` (`scripts/agent_parity/usage/`)
 - `SLURM_EMULATOR_ACCOUNTING_STORAGE_TRES` (`ram,gpu,storage`) = further TRES the cluster tracks
-  (slurm.conf `AccountingStorageTRES`), after the GPU TRES; sacctmgr refuses limits on any other name
+  (slurm.conf `AccountingStorageTRES`), after the GPU TRES; static and GPU TRES in the list are skipped,
+  any other name is accepted (real slurmctld only takes known kinds); sacctmgr refuses limits on
+  names not tracked
 - Accounting reads (`emulator/core/jobacct.py`): sacct `--truncate`/`-D` and slurmrestd job-condition
   flags (`skip_steps`, `show_duplicates`, `disable_truncate_usage_time`) follow slurmdbd;
   `scontrol suspend|resume|requeue` (`tests/test_jobacct_golden.py`)
