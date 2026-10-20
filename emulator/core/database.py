@@ -423,9 +423,10 @@ class SlurmDatabase:
             "fs/disk",
             "vmem",
             "pages",
-            # gres/gpu, a typed gres/gpu:<type> per configured GPU type, then
-            # gres/gpumem and gres/gpuutil (emulator/core/gres.py).
-            *(name.replace("gres/", "GRES/", 1) for name in gres.gpu_tres_names()),
+            # gres/gpu, a typed gres/gpu:<type> per configured GPU type,
+            # gres/gpumem and gres/gpuutil, then the deployment's extra TRES
+            # (emulator/core/gres.py).
+            *(name.replace("gres/", "GRES/", 1) for name in gres.dynamic_tres_names()),
         ]
         self.state_file = Path(
             os.environ.get("SLURM_EMULATOR_STATE_FILE", "/tmp/slurm_emulator_db.json")

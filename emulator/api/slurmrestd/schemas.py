@@ -58,7 +58,7 @@ from emulator.slurm_version import at_least
 # (slurm://src/interfaces/gpu.c#gpu_get_tres_pos), as in the database's list.
 def _tres_ids() -> dict[str, int]:
     """TRES name -> id: the static ones, then the GPU TRES from 1001 in creation order."""
-    dynamic = {name: DYNAMIC_TRES_FIRST_ID + i for i, name in enumerate(gres.gpu_tres_names())}
+    dynamic = {name: DYNAMIC_TRES_FIRST_ID + i for i, name in enumerate(gres.dynamic_tres_names())}
     return {**STATIC_TRES_IDS, **dynamic}
 
 

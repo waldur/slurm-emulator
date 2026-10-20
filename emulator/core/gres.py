@@ -31,6 +31,10 @@ NODE_GPUS = 4
 
 GPU_TYPES_ENV = "SLURM_EMULATOR_GPU_TYPES"
 THREADS_PER_CORE_ENV = "SLURM_EMULATOR_THREADS_PER_CORE"
+# Further TRES the cluster tracks, as slurm.conf's AccountingStorageTRES lists
+# them (slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#acct_storage_p_add_tres);
+# without them sacctmgr refuses limits on those names.
+ACCOUNTING_STORAGE_TRES_ENV = "SLURM_EMULATOR_ACCOUNTING_STORAGE_TRES"
 
 
 def _entries(env: str) -> Optional[dict[str, str]]:
@@ -81,6 +85,21 @@ def gpu_tres_names() -> list[str]:
     by id.
     """
     return ["gres/gpu", *(f"gres/gpu:{t}" for t in gpu_types()), "gres/gpumem", "gres/gpuutil"]
+
+
+def extra_tres_names() -> list[str]:
+    """``SLURM_EMULATOR_ACCOUNTING_STORAGE_TRES`` -- e.g. ``ram,gpu,storage`` -- in order, each once."""
+    names: list[str] = []
+    for item in os.environ.get(ACCOUNTING_STORAGE_TRES_ENV, "").split(","):
+        name = item.strip().lower()
+        if name and name not in names and name not in gpu_tres_names():
+            names.append(name)
+    return names
+
+
+def dynamic_tres_names() -> list[str]:
+    """Every dynamic TRES (ids from 1001): the GPU TRES, then the extra ones."""
+    return [*gpu_tres_names(), *extra_tres_names()]
 
 
 def partition_threads_per_core(partition: str) -> int:
