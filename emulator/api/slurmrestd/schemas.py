@@ -12,6 +12,7 @@ Waldur's parsers touch, plus enough context to look real.
 
 from __future__ import annotations
 
+import functools
 import os
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -48,7 +49,7 @@ from emulator.core.database import (
 from emulator.core.jobacct import JobTimes, epoch, stored_times, suspend_intervals
 from emulator.core.reservations import INFINITE_TIME
 from emulator.core.time_engine import TimeEngine
-from emulator.core.tres import DYNAMIC_TRES_FIRST_ID, STATIC_TRES_IDS, tres_id
+from emulator.core.tres import STATIC_TRES_IDS, tres_id
 from emulator.slurm_version import at_least
 
 
@@ -57,9 +58,23 @@ from emulator.slurm_version import at_least
 # gres/gpumem and gres/gpuutil exist where AccountingStorageTRES lists them
 # (slurm://src/interfaces/gpu.c#gpu_get_tres_pos), as in the database's list.
 def _tres_ids() -> dict[str, int]:
-    """TRES name -> id: the static ones, then the GPU TRES from 1001 in creation order."""
-    dynamic = {name: DYNAMIC_TRES_FIRST_ID + i for i, name in enumerate(gres.gpu_tres_names())}
-    return {**STATIC_TRES_IDS, **dynamic}
+    """TRES name -> id, through the same ``tres_id`` sacctmgr resolves ids with.
+
+    The static TRES keep their fixed ids; the GPU TRES and then the extra
+    ones follow from 1001 in creation order (``gres.dynamic_tres_names``,
+    the list SlurmDatabase.tres_types is built from).
+    """
+    return _tres_id_map(
+        os.environ.get(gres.GPU_TYPES_ENV, ""), os.environ.get(gres.ACCOUNTING_STORAGE_TRES_ENV, "")
+    )
+
+
+@functools.lru_cache(maxsize=16)
+def _tres_id_map(gpu_env: str, extra_env: str) -> dict[str, int]:
+    """Cached per configuration; the arguments are the cache key."""
+    del gpu_env, extra_env  # gres reads the environment itself
+    names = [*STATIC_TRES_IDS, *(n.lower() for n in gres.dynamic_tres_names())]
+    return {name: tres_id(name, names) for name in names}
 
 
 def uint_no_val(number: Optional[int] = None, infinite: bool = False) -> dict[str, Any]:

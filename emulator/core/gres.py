@@ -31,6 +31,10 @@ NODE_GPUS = 4
 
 GPU_TYPES_ENV = "SLURM_EMULATOR_GPU_TYPES"
 THREADS_PER_CORE_ENV = "SLURM_EMULATOR_THREADS_PER_CORE"
+# Further TRES the cluster tracks, as slurm.conf's AccountingStorageTRES lists
+# them (slurm://src/plugins/accounting_storage/mysql/accounting_storage_mysql.c#acct_storage_p_add_tres);
+# without them sacctmgr refuses limits on those names.
+ACCOUNTING_STORAGE_TRES_ENV = "SLURM_EMULATOR_ACCOUNTING_STORAGE_TRES"
 
 
 def _entries(env: str) -> Optional[dict[str, str]]:
@@ -81,6 +85,38 @@ def gpu_tres_names() -> list[str]:
     by id.
     """
     return ["gres/gpu", *(f"gres/gpu:{t}" for t in gpu_types()), "gres/gpumem", "gres/gpuutil"]
+
+
+def extra_tres_names() -> list[str]:
+    """``SLURM_EMULATOR_ACCOUNTING_STORAGE_TRES`` -- e.g. ``ram,gpu,storage`` -- in order, each once.
+
+    Names the cluster tracks anyway -- the static TRES slurmdbd always has
+    and the GPU TRES -- are skipped, case-insensitively, so a list copied
+    from a real slurm.conf (``cpu,mem,node,billing,gres/gpu,...``) only adds
+    what is new.
+
+    Intentional deviations: real slurmctld accepts only known TRES kinds
+    here (``gres/*``, ``license/*``, ``bb/*``, ``fs/lustre``, ``ic/ofed``,
+    and the static ones); the emulator takes any name, so test
+    configurations with ``ram``-style names keep working. Like the GPU
+    TRES, the ids follow the current list: adding a GPU type or changing
+    the list moves them, where slurmdbd keeps ids and appends new TRES.
+    """
+    from emulator.core.tres import STATIC_TRES_IDS  # noqa: PLC0415
+
+    known = set(STATIC_TRES_IDS) | {name.lower() for name in gpu_tres_names()}
+    names: list[str] = []
+    for item in os.environ.get(ACCOUNTING_STORAGE_TRES_ENV, "").split(","):
+        name = item.strip().lower()
+        if name and name not in known:
+            known.add(name)
+            names.append(name)
+    return names
+
+
+def dynamic_tres_names() -> list[str]:
+    """Every dynamic TRES (ids from 1001): the GPU TRES, then the extra ones."""
+    return [*gpu_tres_names(), *extra_tres_names()]
 
 
 def partition_threads_per_core(partition: str) -> int:
