@@ -8,7 +8,7 @@
 FROM python:3.12-slim
 
 ARG SLURM_MONITOR_REPO=https://github.com/2maz/slurm-monitor.git
-ARG SLURM_MONITOR_COMMIT=5fa6a4c
+ARG SLURM_MONITOR_COMMIT=15f5256
 
 # gcc: psutil has no prebuilt wheel for every platform (arm64 here).
 RUN apt-get update \

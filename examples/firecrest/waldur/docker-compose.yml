@@ -267,8 +267,8 @@ services:
   # REST API (/api/v2) over the same database, for Waldur. Bearer tokens are
   # checked against Keycloak: the issuer is the public realm URL (what the
   # users' tokens carry), the keys come over the compose network
-  # (patches/0001), the audience must be slurm-monitor (patches/0003). Users
-  # see their own jobs; realm role "admin" sees all.
+  # (SLURM_MONITOR_OAUTH_JWKS), the audience must be slurm-monitor
+  # (patches/0001). Users see their own jobs; realm role "admin" sees all.
   slurm-monitor-api:
     image: slurm-monitor:hpc-workspace-poc
     restart: unless-stopped
@@ -281,7 +281,7 @@ services:
       SLURM_MONITOR_OAUTH_URL: "${KC_PUBLIC_URL:-http://localhost:${KC_PORT:-8080}/auth}"
       SLURM_MONITOR_OAUTH_REALM: kcrealm
       SLURM_MONITOR_OAUTH_JWKS: http://keycloak:8080/auth/realms/kcrealm/protocol/openid-connect/certs
-      # Only tokens issued for slurm-monitor (patches/0003), which Waldur
+      # Only tokens issued for slurm-monitor (patches/0001), which Waldur
       # gets by token exchange; a sign-in token (aud=account) is refused.
       SLURM_MONITOR_OAUTH_AUDIENCE: slurm-monitor
     command: ["restapi", "--host", "0.0.0.0", "--port", "12000"]
