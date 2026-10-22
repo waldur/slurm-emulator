@@ -89,7 +89,7 @@ before building it (each once; a patch that no longer applies stops it).
   setting; the seed sets it to this stack's FireCREST.
 - FireCREST and slurm-monitor accept only tokens issued for them
   (`aud=firecrest` / `aud=slurm-monitor`; `firecrest-patches/0002`,
-  `slurm-monitor/patches/0001`), so a user's sign-in token is refused there.
+  `SLURM_MONITOR_OAUTH_AUDIENCE`), so a user's sign-in token is refused there.
   Waldur exchanges it for one (Keycloak standard token exchange, which needs
   Keycloak 26.2 or later): the seed's allowlist entries end in `|firecrest`
   and `|slurm-monitor`, and `keycloak-setup` creates those clients, an
