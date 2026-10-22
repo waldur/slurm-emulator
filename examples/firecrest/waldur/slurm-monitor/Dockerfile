@@ -3,12 +3,11 @@
 # REST API that serves per-job time series from them. One image, two
 # services (`slurm-monitor listen ...`, `slurm-monitor restapi ...`).
 #
-# Installed from git at a pinned commit, with the local fixes in patches/
-# applied on top (each patch's header says why).
+# Installed from git at a pinned commit.
 FROM python:3.12-slim
 
 ARG SLURM_MONITOR_REPO=https://github.com/2maz/slurm-monitor.git
-ARG SLURM_MONITOR_COMMIT=5fa6a4c
+ARG SLURM_MONITOR_COMMIT=972664c
 
 # gcc: psutil has no prebuilt wheel for every platform (arm64 here).
 RUN apt-get update \
@@ -18,12 +17,7 @@ RUN apt-get update \
 
 WORKDIR /opt
 RUN git clone --filter=blob:none "${SLURM_MONITOR_REPO}" slurm-monitor \
-    && git -C slurm-monitor checkout --quiet "${SLURM_MONITOR_COMMIT}"
-
-COPY patches/ /opt/patches/
-RUN for p in /opt/patches/*.patch; do \
-        echo "applying $p" && git -C /opt/slurm-monitor apply "$p" || exit 1; \
-    done \
+    && git -C slurm-monitor checkout --quiet "${SLURM_MONITOR_COMMIT}" \
     && pip install --no-cache-dir /opt/slurm-monitor
 
 # The listener writes its stats/log files to the working directory.

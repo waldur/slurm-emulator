@@ -1,0 +1,118 @@
+FireCREST v2: optionally accept only tokens issued for FireCREST
+
+- auth.authentication.audience (a string or a list): when set, the access
+  token's "aud" claim must contain one of the values. FireCREST otherwise
+  accepts any token its identity provider signed, so a user's sign-in token
+  for Waldur (aud=account) works here too. The stack sets audience
+  ["firecrest"], and Waldur exchanges the user's token for one issued for
+  FireCREST before calling it.
+- The health checker's own service-account token is not subject to the
+  check.
+
+Upstream: eth-cscs/firecrest-v2, branch oidc-audience (with tests,
+CHANGELOG and Helm values); this copy carries the source changes only.
+
+diff --git a/src/firecrest/dependencies.py b/src/firecrest/dependencies.py
+index 012021d..811ff34 100644
+--- a/src/firecrest/dependencies.py
++++ b/src/firecrest/dependencies.py
+@@ -60,6 +60,7 @@ class APIAuthDependency(AuthDependency):
+                 username_claim=settings.auth.authentication.username_claim,
+                 jwk_algorithm=settings.auth.authentication.jwk_algorithm,
+                 min_token_ttl=settings.auth.authentication.min_token_ttl,
++                audience=settings.auth.authentication.audience,
+             )
+ 
+         # Init sigleton authZ services
+diff --git a/src/firecrest/status/health_check/health_checker_cluster.py b/src/firecrest/status/health_check/health_checker_cluster.py
+index 6ddf6aa..6657ada 100644
+--- a/src/firecrest/status/health_check/health_checker_cluster.py
++++ b/src/firecrest/status/health_check/health_checker_cluster.py
+@@ -40,6 +40,8 @@ class ClusterHealthChecker:
+     def __init__(self, cluster: HPCCluster, token_decoder: OIDCTokenAuth = None):
+         self.cluster = cluster
+         if token_decoder is None:
++            # The service account token is fetched by FirecREST itself, not
++            # presented by a client, so the accepted audience does not apply.
+             self.token_decoder = OIDCTokenAuth(
+                 settings.auth.authentication.public_certs,
+                 username_claim=settings.auth.authentication.username_claim,
+diff --git a/src/lib/auth/authN/OIDC_token_auth.py b/src/lib/auth/authN/OIDC_token_auth.py
+index b629cbc..5afefd5 100644
+--- a/src/lib/auth/authN/OIDC_token_auth.py
++++ b/src/lib/auth/authN/OIDC_token_auth.py
+@@ -27,11 +27,13 @@ class OIDCTokenAuth(AuthenticationService):
+         username_claim: str = None,
+         jwk_algorithm: str = None,
+         min_token_ttl: int = DEFAULT_MIN_TOKEN_TTL,
++        audience: List[str] = None,
+     ):
+ 
+         self.username_claim = username_claim
+         self.jwk_algorithm = jwk_algorithm
+         self.min_token_ttl = min_token_ttl
++        self.audience = audience or []
+ 
+         keys = []
+         s = requests.Session()
+@@ -92,6 +94,9 @@ class OIDCTokenAuth(AuthenticationService):
+         options = {"verify_signature": True, "verify_aud": False, "verify_exp": True}
+         decoded_token = jwt.decode(token=access_token, key=public_key, options=options)
+ 
++        if self.audience and not self._has_accepted_audience(decoded_token):
++            raise JWTError("Access token is not issued for this service.")
++
+         exp = decoded_token.get("exp")
+         if exp is not None and (exp - time()) < self.min_token_ttl:
+             raise HTTPException(
+@@ -104,6 +109,13 @@ class OIDCTokenAuth(AuthenticationService):
+             decoded_token=decoded_token, username_claim=self.username_claim
+         )
+ 
++    def _has_accepted_audience(self, decoded_token: dict) -> bool:
++        # "aud" may be a single string or a list (RFC 7519, section 4.1.3).
++        audience = decoded_token.get("aud") or []
++        if isinstance(audience, str):
++            audience = [audience]
++        return any(value in self.audience for value in audience)
++
+     async def authenticate(self, access_token: str):
+         try:
+             auth = self.auth_from_token(access_token)
+diff --git a/src/lib/models/config_model.py b/src/lib/models/config_model.py
+index 47b69c8..4a0045b 100644
+--- a/src/lib/models/config_model.py
++++ b/src/lib/models/config_model.py
+@@ -6,7 +6,7 @@
+ from pathlib import Path
+ from typing import List, Optional
+ 
+-from pydantic import SecretStr, Field
++from pydantic import SecretStr, Field, field_validator
+ from lib.models.base_model import CamelModel
+ from lib.models.token_endpoint_auth_method import TokenEndpointAuthMethod
+ 
+@@ -73,6 +73,23 @@ class Oidc(CamelModel):
+         nullable=False,
+         ge=0,
+     )
++    audience: Optional[List[str]] = Field(
++        None,
++        description=(
++            "Audiences FirecREST accepts. When set, an access token must name at "
++            "least one of them in its 'aud' claim, so tokens the identity provider "
++            "issued for other services are rejected. When unset (the default), the "
++            "audience is not checked."
++        ),
++        nullable=True,
++    )
++
++    @field_validator("audience", mode="before")
++    @classmethod
++    def _audience_as_list(cls, value):
++        if isinstance(value, str):
++            return [value]
++        return value
+ 
+ 
+ class LoadFileSecretStr(SecretStr):
