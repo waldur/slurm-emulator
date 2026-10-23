@@ -210,6 +210,8 @@ def _run_slurm(user: str, argv: list[str]) -> tuple[str, str, int]:
                 if name == "id" and not any(not a.startswith("-") for a in args):
                     # Bare ``id`` (what FireCREST's IdCommand runs) means the
                     # calling user — the SSH login, as on a real login node.
+                    if not nss.enabled():
+                        return _nl(_legacy_id(user, args)), err.getvalue(), 0
                     args = [*args, user]
                 out = emu.execute_command(name, args)
                 code = getattr(getattr(emu, name, None), "exit_code", 0) or 0
@@ -231,6 +233,25 @@ def _run_slurm(user: str, argv: list[str]) -> tuple[str, str, int]:
     except Exception as exc:  # surface as command failure, not a dropped session
         return "", err.getvalue() + f"{name}: {exc}\n", 1
     return "", f"{name}: unsupported\n", 1
+
+
+def _legacy_id(user: str, args: list[str]) -> str:
+    """Bare ``id`` without NSS mode: the login user on the legacy identity model.
+
+    Without NSS every user is uid 1000 and its own group (as ``scontrol show
+    job`` reports), but the output keeps the coreutils shape FireCREST's
+    ``/status/userinfo`` parses. The shell's own ``id`` would describe the
+    emulator's OS user instead, typically root, since nothing drops privileges.
+    """
+    long_opts = {"user": "u", "group": "g", "groups": "G", "name": "n"}
+    flags = {c for a in args if a.startswith("-") and not a.startswith("--") for c in a[1:]}
+    flags.update(long_opts.get(a[2:], "") for a in args if a.startswith("--"))
+    names = "n" in flags
+    if "u" in flags:
+        return user if names else "1000"
+    if "g" in flags or "G" in flags:
+        return user if names else "1000"
+    return f"uid=1000({user}) gid=1000({user}) groups=1000({user})"
 
 
 def _nl(text: str) -> str:
@@ -471,9 +492,9 @@ def _slurm_argv(command: str) -> Optional[list[str]]:
     if not argv or Path(argv[0]).name not in _SLURM_BINS:
         return None
     argv[0] = Path(argv[0]).name
-    if argv[0] == "id" and not nss.enabled():
-        # Only NSS mode owns ``id``: without it the real coreutils ``id`` in
-        # the shell path gives clients the genuine ``uid=…(…) gid=…`` output.
+    if argv[0] == "id" and not nss.enabled() and any(not a.startswith("-") for a in argv[1:]):
+        # Without NSS mode only a bare ``id`` (the login user) is ours: ``id
+        # <name>`` goes to the shell's coreutils ``id``, as it always has.
         return None
     return argv
 

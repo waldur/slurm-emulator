@@ -208,6 +208,12 @@ class TestSshPlane:
             out == "uid=9001(hpc_9001) gid=9001(hpc_9001) groups=9001(hpc_9001),5000(project-a)\n"
         )
 
+    def test_bare_id_over_ssh_is_the_login_user_when_nss_is_off(self, state_env, nss_off):
+        out, err, code = server._run_slurm("alice", ["id"])
+        assert (out, err, code) == ("uid=1000(alice) gid=1000(alice) groups=1000(alice)\n", "", 0)
+        assert server._run_slurm("alice", ["id", "-un"])[0] == "alice\n"
+        assert server._run_slurm("alice", ["id", "-u"])[0] == "1000\n"
+
     def test_unknown_user_id_over_ssh_fails(self, state_env, nss_on):
         out, err, code = server._run_slurm("ghost", ["id", "-u"])
         assert (out, code) == ("", 1)
@@ -238,10 +244,23 @@ class TestSshTimeoutWrapper:
     def test_slurm_argv(self, nss_on, command, expected):
         assert server._slurm_argv(command) == expected
 
-    @pytest.mark.parametrize("command", ["id", "timeout 10 id", "id -u alice", "/usr/bin/id"])
-    def test_id_goes_to_the_shell_when_nss_is_off(self, nss_off, command):
-        # Only NSS mode owns ``id``; otherwise real coreutils answers, as before.
+    @pytest.mark.parametrize("command", ["id -u alice", "timeout 10 id alice"])
+    def test_named_id_goes_to_the_shell_when_nss_is_off(self, nss_off, command):
+        # Without NSS mode ``id <name>`` is answered by real coreutils, as before.
         assert server._slurm_argv(command) is None
+
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            ("id", ["id"]),
+            ("timeout 10 id", ["id"]),
+            ("/usr/bin/id", ["id"]),
+            ("id -u", ["id", "-u"]),
+        ],
+    )
+    def test_bare_id_is_ours_when_nss_is_off(self, nss_off, command, expected):
+        # The shell's ``id`` would describe the emulator's OS user (root).
+        assert server._slurm_argv(command) == expected
 
     def test_other_slurm_bins_unaffected_by_nss(self, nss_off):
         assert server._slurm_argv("timeout 10 sacct -P") == ["sacct", "-P"]
