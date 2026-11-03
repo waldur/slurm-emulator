@@ -81,8 +81,9 @@ A submitted job runs `SLURM_EMULATOR_RUN_SECONDS` from its environment when
 set (e.g. to watch a TIMEOUT), and `SLURM_EMULATOR_CPU_EFFICIENCY` /
 `SLURM_EMULATOR_MEM_FRACTION` (0–1) fix its synthetic efficiency.
 
-`up.sh` also applies `firecrest-patches/*.patch` to the FireCREST checkout
-before building it (each once; a patch that no longer applies stops it).
+`up.sh` builds FireCREST 2.6.2 as released (`FIRECREST_V2_REF`). A checkout
+from before, with the old `firecrest-patches` applied, still builds the old
+fields: remove it (`rm -rf ../ui/.firecrest-v2`) and run `up.sh` again.
 
 ## Notes
 

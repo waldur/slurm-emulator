@@ -8,7 +8,8 @@
 #
 # Env:
 #   FIRECREST_V2_DIR  firecrest-v2 checkout (default: ../ui/.firecrest-v2, cloned)
-#   FIRECREST_V2_REF  ref to clone (default: master)
+#   FIRECREST_V2_REF  ref to clone (default: 2.6.2, the first release with the
+#                     job, node and reservation fields the workspace reads)
 #   PORT_BASE         first of five consecutive host ports; KC = base, FireCREST
 #                     = base+1, slurmrestd = base+2, SSH = base+3,
 #                     slurm-monitor REST = base+4
@@ -39,7 +40,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 export FIRECREST_V2_DIR="${FIRECREST_V2_DIR:-$(cd ../ui && pwd)/.firecrest-v2}"
-FIRECREST_V2_REF="${FIRECREST_V2_REF:-master}"
+FIRECREST_V2_REF="${FIRECREST_V2_REF:-2.6.2}"
 if [ -n "${PORT_BASE:-}" ]; then
     export KC_PORT=$((PORT_BASE)) FIRECREST_PORT=$((PORT_BASE + 1))
     export SLURM_REST_PORT=$((PORT_BASE + 2)) SLURM_SSH_PORT=$((PORT_BASE + 3))
@@ -56,24 +57,6 @@ if [ ! -d "${FIRECREST_V2_DIR}/.git" ]; then
     git clone --depth 1 --branch "${FIRECREST_V2_REF}" \
         https://github.com/eth-cscs/firecrest-v2 "${FIRECREST_V2_DIR}"
 fi
-
-# Local fixes to FireCREST (firecrest-patches/*.patch), applied once: a patch
-# that is already in the checkout is skipped; one that neither applies nor is
-# applied stops the script.
-shopt -s nullglob
-for patch in "$PWD"/firecrest-patches/*.patch; do
-    if git -C "${FIRECREST_V2_DIR}" apply --reverse --check "$patch" 2>/dev/null; then
-        echo ">> FireCREST patch already applied: $(basename "$patch")"
-    elif git -C "${FIRECREST_V2_DIR}" apply --check "$patch" 2>/dev/null; then
-        echo ">> Applying FireCREST patch: $(basename "$patch")"
-        git -C "${FIRECREST_V2_DIR}" apply "$patch"
-    else
-        echo "!! FireCREST patch neither applies nor is applied: $patch" >&2
-        git -C "${FIRECREST_V2_DIR}" apply --check "$patch" || true
-        exit 1
-    fi
-done
-shopt -u nullglob
 
 mkdir -p secrets
 [ -f secrets/ssh_private_key ] ||
