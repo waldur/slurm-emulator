@@ -23,14 +23,18 @@ workspace to its allocation's account.
 
 ```bash
 # 1. Cluster, FireCREST, Keycloak (+ cluster accounts/associations)
-PORT_BASE=8080 ./up.sh        # KC :8080, FireCREST :8081, slurmrestd :8082, SSH :8083
-                              # (unset: 8080/8000/6820/2222)
+PORT_BASE=8080 ./up.sh        # KC :8080, FireCREST :8081, slurmrestd :8082, SSH :8083,
+                              # slurm-monitor :8084 (unset: 8080/8000/6820/2222/12000)
 
 # 2. Waldur dev stack from the workspace hub, then seed it
 ./scripts/start-dev-stack.sh --skip-preset
 cd waldur-mastermind
-KC_PORT=8080 FIRECREST_PORT=8081 AI_ASSISTANT_CREDS=/path/to/creds \
+KC_PORT=8080 FIRECREST_PORT=8081 SLURM_MONITOR_PORT=8084 AI_ASSISTANT_CREDS=/path/to/creds \
   uv run waldur shell < ../slurm-emulator/examples/firecrest/waldur/seed_waldur.py
+
+# 3. Restart mastermind if it was already running: the dev stack caches the
+#    settings and feature flags homeport reads in each process's memory, so a
+#    running one goes on serving the assistant as off.
 ```
 
 Sign in to homeport with **HPC centre (Keycloak)** as `alice` / `password`
@@ -96,7 +100,11 @@ before building it (each once; a patch that no longer applies stops it).
   and `|slurm-monitor`, and `keycloak-setup` creates those clients, an
   optional client scope of the same name with the audience mapper, and turns
   on token exchange for the `waldur` client. This needs mastermind with
-  waldur/waldur-mastermind#791.
+  waldur/waldur-mastermind#791. A mastermind without it sends the sign-in
+  token and gets 401; for such a backend turn the checks off: delete the
+  `audience:` line in `firecrest-config.yaml` and `SLURM_MONITOR_OAUTH_AUDIENCE`
+  in `docker-compose.yml`, and drop the `|firecrest` / `|slurm-monitor`
+  suffixes in the seed's allowlists.
 - Moving an existing stack from Keycloak 26.0.7 to 26.7.5 recreates the
   container. In dev mode Keycloak keeps its data inside the container, so
   alice and bob get new user ids (`sub`). Waldur matches users by `sub`, so
