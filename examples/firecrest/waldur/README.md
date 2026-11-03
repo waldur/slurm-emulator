@@ -107,3 +107,25 @@ before building it (each once; a patch that no longer applies stops it).
   `/home/<user>`, and a failing script ends the job FAILED with its exit code.
   `module`/`spack` are stand-ins that only echo, so a job "loads" software
   without it being installed.
+- The cluster's name is `SONAR_CLUSTER` (default `hpc-demo`) in Slurm too
+  (`SLURM_EMULATOR_CLUSTER_NAME`), so `sacct`, slurmrestd and slurm-monitor
+  agree. A stack from before keeps its seeded history under the old name,
+  `default`: new jobs still run (`up.sh` adds the associations again under the
+  new name), but `sacct`, slurmrestd and the portal no longer show that
+  history. To move such a stack, start the cluster and the monitoring stack
+  from empty state (volume names start with the compose project's name);
+  Keycloak and FireCREST stay as they are:
+
+  ```bash
+  docker compose rm -sfv slurm sonar kafka monitor-db slurm-monitor-listen slurm-monitor-api
+  docker volume rm hpc-workspace-poc_slurm_state hpc-workspace-poc_timescaledb_data \
+    hpc-workspace-poc_sonar_state
+  ./up.sh
+  ```
+
+  `up.sh` then seeds the history again: the same job ids at new times. The
+  monitoring data has to go with it, because slurm-monitor keeps samples per
+  job id and republishing (`slurm-sonar-emulator --reset`) only adds the new
+  run's samples next to the old ones. `-v` drops Kafka's log too, which a fresh
+  monitor database would otherwise read back. Sonar publishes the history on
+  its first start.

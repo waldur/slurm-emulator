@@ -19,7 +19,7 @@
 #                     token issuer carry it (default http://localhost:$KC_PORT/auth)
 #   WALDUR_PUBLIC_URL homeport's URL when it is not localhost (e.g. behind a
 #                     reverse proxy); added to the waldur client's redirect URIs
-#   SONAR_CLUSTER     cluster name in the Sonar topics and slurm-monitor
+#   SONAR_CLUSTER     the cluster's name in Slurm, the Sonar topics and slurm-monitor
 #                     (default hpc-demo)
 #   SONAR_BACKFILL_DAYS  finished jobs that ended this many days back get
 #                     telemetry on the first run (default 14; slurm-monitor
