@@ -164,6 +164,37 @@ def test_home_working_directory_is_provisioned(fs_root, monkeypatch):
     assert (fs_root / "home/bob/hi.out").read_text() == "hi\n"
 
 
+def test_execution_cap_names_itself_not_a_time_limit(fs_root, monkeypatch):
+    """A script stopped by the emulator's cap fails 124 and says which cap stopped it.
+
+    Real Slurm runs the script up to the job's time limit, ends the job
+    TIMEOUT (slurm://src/slurmctld/job_mgr.c#_job_timed_out) and slurmstepd
+    logs slurm://src/slurmd/slurmstepd/req.c#"*** %s ON %s CANCELLED AT %s DUE TO TIME LIMIT ***".
+    The cap is the emulator's own bound, so its message must not read as one.
+    """
+    monkeypatch.setenv(job_execution.EXECUTE_ENV, "1")
+    monkeypatch.setenv(job_execution.TIMEOUT_ENV, "0.5")
+    job = _job("exec sleep 5", standard_output="cap.out", time_limit=120)
+    _advance(job)
+    assert job.state == "FAILED"
+    assert job.exit_code == 124
+    out = (fs_root / "home/alice/cap.out").read_text()
+    assert "SLURM_EMULATOR_JOB_EXECUTE_TIMEOUT=0.5" in out
+    assert "TIME LIMIT" not in out
+
+
+@pytest.mark.usefixtures("fs_root")
+def test_job_reaching_its_time_limit_stays_timeout_when_scripts_run(monkeypatch):
+    """slurm://src/slurmctld/job_mgr.c#_job_timed_out: TIMEOUT whatever the script returned."""
+    monkeypatch.setenv(job_execution.EXECUTE_ENV, "1")
+    job = _job("exit 3", standard_output="tl.out", time_limit=1)
+    job.environment = {"SLURM_EMULATOR_RUN_SECONDS": "120"}
+    job.submit_time = datetime.now() - timedelta(minutes=5)
+    _advance(job)
+    assert job.state == "TIMEOUT"
+    assert job.exit_code == -15
+
+
 def test_srun_stand_in_runs_the_command_and_reports_a_missing_one(fs_root, monkeypatch):
     monkeypatch.setenv(job_execution.EXECUTE_ENV, "1")
     job = _job("srun --mpi=pmix -n 4 -N 2 gmx_mpi mdrun -s topol.tpr", standard_output="m.out")

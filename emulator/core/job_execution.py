@@ -16,12 +16,20 @@ script is run once, when the job reaches the end of its emulated run time:
   slurmctld records it (``job_ptr->exit_code``,
   slurm://src/slurmctld/job_mgr.c#job_complete).
 
-Deliberate deviations from real Slurm: the script runs inside the emulator
-(container), not on a compute node; it runs as the emulator's own OS user
-unless NSS mode resolves the job's user; and it is bounded by
-``SLURM_EMULATOR_JOB_EXECUTE_TIMEOUT`` seconds (default 60) rather than the
-job's time limit. This is a test fixture -- enable it only where running the
-submitted scripts is acceptable.
+Deliberate deviations from real Slurm (this is a test fixture -- enable it
+only where running the submitted scripts is acceptable):
+
+* the script runs inside the emulator (container), not on a compute node,
+  and as the emulator's own OS user unless NSS mode resolves the job's user;
+* it is stopped after ``SLURM_EMULATOR_JOB_EXECUTE_TIMEOUT`` seconds
+  (default 60), whatever the job's time limit, because it runs inside the
+  request that first sees the job end. The job then ends FAILED with exit
+  code 124 and a stderr line naming the cap. Real Slurm lets the script run
+  until its time limit, ends the job TIMEOUT
+  (slurm://src/slurmctld/job_mgr.c#_job_timed_out) and slurmstepd logs
+  slurm://src/slurmd/slurmstepd/req.c#"*** %s ON %s CANCELLED AT %s DUE TO TIME LIMIT ***";
+  the emulator does not print that line, so a capped script is not mistaken
+  for one that hit its own limit.
 """
 
 from __future__ import annotations
@@ -70,6 +78,13 @@ def _timeout() -> float:
         return float(os.environ.get(TIMEOUT_ENV, "60"))
     except ValueError:
         return 60.0
+
+
+def _cap_message() -> str:
+    return (
+        f"slurm-emulator: script stopped after {TIMEOUT_ENV}={_timeout():g} seconds, "
+        "the emulator's execution cap (not the job's time limit)\n"
+    )
 
 
 def _fs_root() -> Path:
@@ -267,7 +282,7 @@ def run_job_script(job) -> int:
         return completed.returncode
     except subprocess.TimeoutExpired:
         with err_path.open("ab") as err:
-            err.write(b"slurmstepd: error: *** JOB CANCELLED DUE TO TIME LIMIT ***\n")
+            err.write(_cap_message().encode())
         return 124
     except OSError as e:
         logger.warning("Job %s: cannot run script: %s", job.job_id, e)
