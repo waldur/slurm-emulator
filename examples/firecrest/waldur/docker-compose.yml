@@ -152,6 +152,12 @@ services:
               -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=false'
           fi
           $$kc update clients/$$id/optional-client-scopes/$$sid -r kcrealm
+          if [ "$$aud" = firecrest ]; then
+            # FirecREST checks its own health checker's token (the realm's
+            # firecrest-health-check service account) against the same audience.
+            hc=$$($$kc get clients -r kcrealm -q clientId=firecrest-health-check --fields id --format csv --noquotes)
+            $$kc update clients/$$hc/default-client-scopes/$$sid -r kcrealm
+          fi
         done
 
   firecrest:

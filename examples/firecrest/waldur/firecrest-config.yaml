@@ -17,7 +17,8 @@ auth:
     usernameClaim: "preferred_username"
     # Only tokens issued for FirecREST (FirecREST's own check, upstream since
     # eth-cscs/firecrest-v2#250): Waldur sends one it got by token exchange,
-    # never the user's sign-in token.
+    # never the user's sign-in token. The health checker's service-account
+    # token is checked too; keycloak-setup gives it this audience.
     audience: ["firecrest"]
 
 # The emulator's SSH plane accepts any key; the static-key loader only needs
