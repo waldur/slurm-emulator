@@ -88,8 +88,9 @@ before building it (each once; a patch that no longer applies stops it).
 - Mastermind only sends tokens to URLs in the `FIRECREST_ALLOWED_API_URLS`
   setting; the seed sets it to this stack's FireCREST.
 - FireCREST and slurm-monitor accept only tokens issued for them
-  (`aud=firecrest` / `aud=slurm-monitor`; `firecrest-patches/0002`,
-  `SLURM_MONITOR_OAUTH_AUDIENCE`), so a user's sign-in token is refused there.
+  (`aud=firecrest` / `aud=slurm-monitor`; FirecREST's `audience` setting,
+  upstream since eth-cscs/firecrest-v2#250, and `SLURM_MONITOR_OAUTH_AUDIENCE`),
+  so a user's sign-in token is refused there.
   Waldur exchanges it for one (Keycloak standard token exchange, which needs
   Keycloak 26.2 or later): the seed's allowlist entries end in `|firecrest`
   and `|slurm-monitor`, and `keycloak-setup` creates those clients, an
