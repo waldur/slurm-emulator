@@ -153,8 +153,8 @@ def expand_hostlist(expr: str) -> list[str]:
 def compress_hostlist(names: list[str]) -> str:
     """Inverse of ``expand_hostlist``: ``node005,node006,node008`` -> ``node[005-006,008]``.
 
-    Ranged output as ``hostlist_ranged_string`` prints it
-    (slurm://src/common/hostlist.c#hostlist_ranged_string); a single host
+    Ranged output as Slurm prints it
+    (slurm://src/common/hostlist.c#hostlist_ranged_string_xmalloc); a single host
     stays bare.
     """
     groups: dict[tuple[str, int], list[int]] = {}

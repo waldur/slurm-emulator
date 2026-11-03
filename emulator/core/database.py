@@ -316,7 +316,8 @@ class Job:
     # (slurm://slurm/slurm.h#job_info_t.nodes, slurm://slurm/slurm.h#job_info_t.num_cpus).
     node_list: list[str] = field(default_factory=list)
     alloc_cpus: int = 0
-    # uid of whoever cancelled the job (slurm://slurm/slurmdb.h#slurmdb_job_rec_t.requid);
+    # uid of whoever cancelled the job (slurm://slurm/slurmdb.h#slurmdb_job_rec_t.requid@24.11,25.05,25.11,26.05,
+    # renamed slurm://slurm/slurmdb.h#slurmdb_job_rec_t.kill_requid@master);
     # sacct prints "CANCELLED by <uid>".
     requid: Optional[int] = None
     # Why a pending job waits, or how a finished one failed
