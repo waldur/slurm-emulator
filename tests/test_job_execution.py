@@ -202,3 +202,137 @@ def test_srun_stand_in_runs_the_command_and_reports_a_missing_one(fs_root, monke
     assert job.state == "FAILED"
     assert job.exit_code == 127
     assert "gmx_mpi" in (fs_root / "home/alice/m.out").read_text()
+
+
+def _script_env(fs_root, out: str) -> tuple[list[str], dict[str, str]]:
+    lines = (fs_root / "home/alice" / out).read_text().splitlines()
+    return lines, dict(line.split("=", 1) for line in lines if "=" in line)
+
+
+def test_batch_script_gets_the_batch_job_environment(fs_root, monkeypatch):
+    """The variables Slurm sets for a batch job, from the job record.
+
+    slurmctld's slurm://src/slurmctld/job_scheduler.c#_set_job_env, slurmstepd's
+    slurm://src/common/env.c#env_array_for_batch_job and, for the batch task,
+    slurm://src/slurmd/slurmstepd/task.c#exec_task + slurm://src/common/env.c#setup_env;
+    sbatch's own exports (slurm://src/sbatch/opt.c#set_envs). Tasks are laid out in
+    blocks (slurm://src/common/slurm_step_layout.c#_task_layout_block).
+    """
+    import socket  # noqa: PLC0415
+
+    from emulator.commands.scontrol_info import mem_str, sprint_job  # noqa: PLC0415
+    from emulator.slurm_version import at_least, matches  # noqa: PLC0415
+
+    monkeypatch.setenv(job_execution.EXECUTE_ENV, "1")
+    job = _job(
+        'hostname; echo "HOST=$HOSTNAME"; env',
+        standard_output="env.out",
+        partition="compute",
+        tasks=4,
+        cpus_per_task=2,
+        memory_per_node=4096,
+        node_count=2,
+        time_limit=30,
+    )
+    _advance(job)
+    assert job.state == "COMPLETED"
+    lines, env = _script_env(fs_root, "env.out")
+    first = job.node_list[0]
+    assert lines[0] == first  # `hostname`
+    assert env["HOST"] == env["HOSTNAME"] == env["SLURMD_NODENAME"] == first
+    start = int(job.start_time.timestamp())
+    expected = {
+        "SLURM_CLUSTER_NAME": "default",
+        "SLURM_JOB_ID": "42",
+        "SLURM_JOBID": "42",
+        "SLURM_JOB_NAME": "sim",
+        "SLURM_JOB_NODELIST": "node[005-006]",
+        "SLURM_NODELIST": "node[005-006]",
+        "SLURM_JOB_NUM_NODES": "2",
+        "SLURM_NNODES": "2",
+        "SLURM_JOB_CPUS_PER_NODE": "4(x2)",
+        "SLURM_CPUS_ON_NODE": "4",
+        "SLURM_NTASKS": "4",
+        "SLURM_NPROCS": "4",
+        "SLURM_TASKS_PER_NODE": "2(x2)",
+        "SLURM_CPUS_PER_TASK": "2",
+        "SLURM_TRES_PER_TASK": "cpu=2",
+        "SLURM_MEM_PER_NODE": "4096",
+        "SLURM_JOB_PARTITION": "compute",
+        "SLURM_JOB_ACCOUNT": "alloc",
+        "SLURM_JOB_QOS": "normal",
+        "ENVIRONMENT": "BATCH",
+        "SLURM_TOPOLOGY_ADDR": first,
+        "SLURM_TOPOLOGY_ADDR_PATTERN": "node",
+        "SLURM_NODEID": "0",
+        "SLURM_PROCID": "0",
+        "SLURM_LOCALID": "0",
+        "SLURM_GTIDS": "0",
+        "SLURM_JOB_UID": "1000",
+        "SLURM_JOB_GID": "1000",
+        "SLURM_JOB_USER": "alice",
+        "SLURM_OOM_KILL_STEP": "0",
+        "SLURM_JOB_START_TIME": str(start),
+        "SLURM_JOB_END_TIME": str(start + 30 * 60),
+        "SLURM_SUBMIT_DIR": "/home/alice",
+        "SLURM_SUBMIT_HOST": socket.gethostname(),
+        "SLURM_PRIO_PROCESS": "0",
+    }
+    assert {k: env.get(k) for k in expected} == expected
+    assert env["SLURM_TASK_PID"].isdigit()
+    assert "SLURM_MEM_PER_CPU" not in env
+    assert "SLURM_JOB_GPUS" not in env
+    # slurm://src/common/slurm_protocol_defs.c#get_job_oversubscribe_value@26.05+
+    if at_least("26.05"):
+        assert env["SLURM_JOB_OVERSUBSCRIBE"] == "NO"
+        assert env["SLURM_JOB_EXCLUSIVE"] == "NO"
+    else:
+        assert "SLURM_JOB_EXCLUSIVE" not in env
+    # Only the 26.05 releases print the batch step's id (signed): slurm://src/common/env.c#"SLURM_STEP_ID"
+    if matches("26.05"):
+        assert env["SLURM_STEP_ID"] == env["SLURM_STEPID"] == "-5"
+    else:
+        assert "SLURM_STEP_ID" not in env
+
+    # Same job as scontrol show job reports it.
+    record = dict(
+        item.split("=", 1) for item in sprint_job(job, datetime.now(), True).split() if "=" in item
+    )
+    assert record["NodeList"] == env["SLURM_JOB_NODELIST"]
+    assert record["NumNodes"] == env["SLURM_JOB_NUM_NODES"]
+    assert record["NumCPUs"] == str(job.alloc_cpus) == "8"
+    assert record["NumTasks"] == env["SLURM_NTASKS"]
+    assert record["CPUs/Task"] == env["SLURM_CPUS_PER_TASK"]
+    assert record["MinMemoryNode"] == mem_str(int(env["SLURM_MEM_PER_NODE"]))
+    assert record["Partition"] == env["SLURM_JOB_PARTITION"]
+    assert record["Account"] == env["SLURM_JOB_ACCOUNT"]
+    assert record["QOS"] == env["SLURM_JOB_QOS"]
+
+
+def test_batch_script_sees_its_gpus(fs_root, monkeypatch):
+    """slurm://src/plugins/gres/common/gres_common.c#gres_common_gpu_set_env, global
+    indices without device confinement (slurm://src/interfaces/gres.c#gres_use_local_device_index)."""
+    monkeypatch.setenv(job_execution.EXECUTE_ENV, "1")
+    monkeypatch.setenv("SLURM_EMULATOR_GPU_TYPES", "debug")
+    job = _job("env", standard_output="gpu.out", partition="debug", tres_per_node="gres/gpu:2")
+    _advance(job)
+    _lines, env = _script_env(fs_root, "gpu.out")
+    for name in ("SLURM_JOB_GPUS", "CUDA_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES"):
+        assert env[name] == "0,1"
+    assert env["ZE_AFFINITY_MASK"] == env["GPU_DEVICE_ORDINAL"] == "0,1"
+    assert env["SLURM_GPUS_ON_NODE"] == "2"
+
+
+def test_defaults_and_user_environment_wins(fs_root, monkeypatch):
+    """No --ntasks: no SLURM_NTASKS, one task per allocated CPU; no --mem: DefMemPerCPU
+    (slurm://src/common/env.c#env_array_for_batch_job). The job's own environment wins."""
+    monkeypatch.setenv(job_execution.EXECUTE_ENV, "1")
+    job = _job("env", standard_output="d.out", partition="compute")
+    job.environment = {"SLURM_JOB_QOS": "mine", "HOSTNAME": "mine"}
+    _advance(job)
+    _lines, env = _script_env(fs_root, "d.out")
+    assert "SLURM_NTASKS" not in env
+    assert "SLURM_CPUS_PER_TASK" not in env
+    assert env["SLURM_TASKS_PER_NODE"] == env["SLURM_JOB_CPUS_PER_NODE"] == "1"
+    assert env["SLURM_MEM_PER_CPU"] == "8192"
+    assert env["SLURM_JOB_QOS"] == env["HOSTNAME"] == "mine"
