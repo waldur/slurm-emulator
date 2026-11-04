@@ -8,9 +8,12 @@ repos:
         # parse error here. `helm lint` + `helm unittest` cover them in CI.
         exclude: ^charts/[^/]+/templates/
       - id: trailing-whitespace
+        # A patch's context lines keep the source's whitespace.
+        exclude: \.patch$
       - id: check-toml
       - id: check-merge-conflict
       - id: end-of-file-fixer
+        exclude: \.patch$
 
   - repo: local
     hooks:
