@@ -1,1 +1,4 @@
 secrets/
+demo/*.mp4
+demo/*.error.png
+demo/*.error.html
