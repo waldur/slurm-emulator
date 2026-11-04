@@ -8,7 +8,11 @@
 Idempotent: re-running updates what exists. Creates
   - Keycloak (realm kcrealm, client "waldur") as the "keycloak" identity
     provider, matching users by preferred_username -> username;
-  - users alice and bob (they sign in through Keycloak);
+  - users alice and bob (they sign in through Keycloak), with the Terms of
+    Service accepted so they land in the portal;
+  - RESOURCE.LIST and PROJECT.LIST for project members: a freshly migrated
+    database does not grant them, and without them alice and bob get 404 on
+    their own allocations;
   - an HPC centre offering (Marketplace.Slurm) connected to FireCREST,
     with partitions, QoS and a small software catalog;
   - two allocations whose backend_id is the Slurm account up.sh seeded:
@@ -17,7 +21,8 @@ Idempotent: re-running updates what exists. Creates
     (per user too) so the usage charts and the run-out forecast have data;
   - offering users so the cluster username is the Keycloak login name.
 With AI_ASSISTANT_CREDS (lines "url: …", "token: …", "model: …") the AI
-assistant is enabled against that OpenAI-compatible endpoint.
+assistant is enabled against that OpenAI-compatible endpoint, and turned on
+in homeport (feature support.enable_llm_assistant).
 """
 
 import datetime
@@ -26,12 +31,19 @@ import random
 from pathlib import Path
 
 import requests
-from constance import config
+
+try:
+    from waldur_core.configuration import config
+except ImportError:
+    # Mastermind from before waldur_core.configuration replaced constance:
+    # token exchange (waldur/waldur-mastermind#791) is still on such a branch.
+    from constance import config
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
 from waldur_auth_social.models import IdentityProvider
-from waldur_core.core.models import User
-from waldur_core.permissions.enums import RoleEnum
+from waldur_core.core.models import Feature, User
+from waldur_core.permissions.enums import PermissionEnum, RoleEnum
+from waldur_core.permissions.models import Role
 from waldur_core.structure.models import Customer, Project
 from waldur_mastermind.marketplace import models as m
 from waldur_mastermind.marketplace.enums import (
@@ -52,7 +64,10 @@ MONITOR_CLUSTER = os.environ.get("SONAR_CLUSTER", "hpc-demo")
 # Mastermind talks to Keycloak on localhost; browsers may reach it elsewhere
 # (KC_PUBLIC_URL, e.g. behind a reverse proxy), and the issuer follows them.
 REALM = f"http://localhost:{KC_PORT}/auth/realms/kcrealm"
-PUBLIC_REALM = os.environ.get("KC_PUBLIC_URL", f"http://localhost:{KC_PORT}/auth").rstrip("/") + "/realms/kcrealm"
+PUBLIC_REALM = (
+    os.environ.get("KC_PUBLIC_URL", f"http://localhost:{KC_PORT}/auth").rstrip("/")
+    + "/realms/kcrealm"
+)
 CLIENT_SECRET = os.environ.get("WALDUR_CLIENT_SECRET", "waldur-poc-secret")
 
 # --- Identity provider ------------------------------------------------------
@@ -102,8 +117,12 @@ for name in ("alice", "bob"):
         },
     )
     user.set_unusable_password()
+    # Terms of Service accepted, or the first sign-in stops on that page.
+    if user.agreement_date is None:
+        user.agreement_date = timezone.now()
     user.save()
     users[name] = user
+
 
 def grant(scope, user, role):
     """Give a role once: add_user grants again on every run, it does not check."""
@@ -119,6 +138,11 @@ genomics, _ = Project.objects.get_or_create(customer=org, name="Genomics")
 for project, members in ((climate, ("alice", "bob")), (genomics, ("alice",))):
     for name in members:
         grant(project, users[name], RoleEnum.PROJECT_MEMBER)
+# No migration lets members see their project's resources; deployments set
+# role permissions themselves, so the demo does it here.
+member_role = Role.objects.get(name=RoleEnum.PROJECT_MEMBER)
+for permission in (PermissionEnum.LIST_RESOURCES, PermissionEnum.LIST_PROJECTS):
+    member_role.add_permission(permission)
 
 # --- Offering ----------------------------------------------------------------
 category, _ = m.Category.objects.get_or_create(title="HPC")
@@ -377,4 +401,6 @@ if creds_path:
     config.AI_ASSISTANT_API_URL = creds["url"]
     config.AI_ASSISTANT_API_TOKEN = creds["token"]
     config.AI_ASSISTANT_MODEL = creds["model"]
+    # Homeport shows the assistant only with this feature on as well.
+    Feature.objects.update_or_create(key="support.enable_llm_assistant", defaults={"value": True})
     print(f"AI assistant enabled: {creds['url']} model {creds['model']}")

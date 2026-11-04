@@ -45,6 +45,9 @@ services:
     image: slurm-emulator:hpc-workspace-poc
     hostname: slurm
     environment: &slurm-env
+      # Slurm's ClusterName, the name Sonar and slurm-monitor file the same
+      # jobs under. Read at start; see the README on moving an existing stack.
+      SLURM_EMULATOR_CLUSTER_NAME: "${SONAR_CLUSTER:-hpc-demo}"
       SLURM_EMULATOR_ENABLE_SSH: "1"
       # Associations are enforced (the default), as on a real cluster: the
       # Waldur allocation's account must exist and hold the user, which
@@ -152,6 +155,12 @@ services:
               -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=false'
           fi
           $$kc update clients/$$id/optional-client-scopes/$$sid -r kcrealm
+          if [ "$$aud" = firecrest ]; then
+            # FirecREST checks its own health checker's token (the realm's
+            # firecrest-health-check service account) against the same audience.
+            hc=$$($$kc get clients -r kcrealm -q clientId=firecrest-health-check --fields id --format csv --noquotes)
+            $$kc update clients/$$hc/default-client-scopes/$$sid -r kcrealm
+          fi
         done
 
   firecrest:
