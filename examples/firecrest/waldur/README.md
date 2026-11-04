@@ -85,6 +85,15 @@ set (e.g. to watch a TIMEOUT), and `SLURM_EMULATOR_CPU_EFFICIENCY` /
 from before, with the old `firecrest-patches` applied, still builds the old
 fields: remove it (`rm -rf ../ui/.firecrest-v2`) and run `up.sh` again.
 
+slurm-monitor is built at a pinned upstream commit with the fixes still open
+upstream applied from `slurm-monitor/patches/`, one per pull request:
+2maz/slurm-monitor#165 lets it accept the tokens Waldur exchanges for it
+(without it every call from Waldur answers 401), #164 shows users only their
+own jobs, and #166 answers 404 for a job that is not found. `up.sh` builds
+with `--build`, so an existing stack gets them on its next run. When a pull
+request is merged, its patch goes and the pin in `slurm-monitor/Dockerfile`
+moves past it.
+
 ## Notes
 
 - Keycloak's public hostname is `localhost:<port>`, so no hosts entry is

@@ -1,0 +1,680 @@
+From 33f4833037aa7de3e81eded09ee91d0a78d9df02 Mon Sep 17 00:00:00 2001
+From: Ilja Livenson <ilja.livenson@gmail.com>
+Date: Wed, 4 Nov 2026 09:36:09 +0200
+Subject: [PATCH] auth: show users only their own jobs in partitions, node
+ process samples and named queries
+
+Any authenticated user got every user's jobs from routes outside the
+job routes: the pending and running jobs of each partition, the
+per-process GPU samples of a node (timeseries by job, and the latest
+utilization with its pids), and the rows of the user-job-results,
+user-success-job-results, user-failed-job-results and
+jobs-exceeding-resource-usage queries. Like the job routes, these now
+give a user without the admin realm role only their own jobs, and the
+named queries answer 403. The queries' check is a dependency, so it
+runs before the route's URL-keyed response cache.
+
+NoneForUserWithRealmRoles reads whether OAuth is required when called
+instead of when the route is defined, like get_token_payload.
+
+The node process GPU timeseries also returned only the last job of each
+GPU: a GPU's list was reset for every process.
+
+The test data gets jobs of two users (TestDBConfig.user_names), and the
+endpoint smoke test uses an admin token, since the job routes now scope
+to the token's user in tests too.
+---
+ README.md                                  |   7 +
+ src/slurm_monitor/api/monitor.py           |  30 ++-
+ src/slurm_monitor/api/nodes.py             |  12 +-
+ src/slurm_monitor/api/routes.py            |  18 +-
+ src/slurm_monitor/db/db.py                 |  34 +++-
+ src/slurm_monitor/db/db_testing.py         |   9 +-
+ src/slurm_monitor/db/query.py              |  15 ++
+ tests/slurm_monitor/api/test_monitor.py    |   4 +-
+ tests/slurm_monitor/api/test_user_scope.py | 202 +++++++++++++++++++++
+ 9 files changed, 308 insertions(+), 23 deletions(-)
+ create mode 100644 tests/slurm_monitor/api/test_user_scope.py
+
+diff --git a/README.md b/README.md
+index c7c80f4..f16f955 100644
+--- a/README.md
++++ b/README.md
+@@ -199,6 +199,13 @@ exchange), restrict the audience to its client:
+ SLURM_MONITOR_OAUTH_AUDIENCE="slurm-monitor"
+ ```
+ 
++With OAuth enabled, a user sees only their own jobs: in the job routes, in the
++jobs each partition lists, and in the per-process GPU samples of a node. The
++named queries that list users or their jobs answer 403. A user with the realm
++role `admin` sees everyone's. Node and GPU card metrics (utilization, memory,
++power and disk I/O over time, states, system information) carry no user and
++are open to any authenticated user.
++
+ 
+ ### Probe
+ 
+diff --git a/src/slurm_monitor/api/monitor.py b/src/slurm_monitor/api/monitor.py
+index 0076a6e..49acb0f 100644
+--- a/src/slurm_monitor/api/monitor.py
++++ b/src/slurm_monitor/api/monitor.py
+@@ -12,7 +12,14 @@ from fastapi_cache import FastAPICache
+ from fastapi_cache.decorator import cache
+ from pydantic import ValidationError
+ 
+-from slurm_monitor.api.routes import RequiredPermissions, TokenPayload, api_router, get_token_payload
++from slurm_monitor.api.routes import (
++    NoneForUserWithRealmRoles,
++    RequiredPermissions,
++    Role,
++    TokenPayload,
++    api_router,
++    get_token_payload,
++)
+ from slurm_monitor.app_settings import AppSettings
+ from slurm_monitor.db.db import ClusterDB
+ from slurm_monitor.db.query import QueryMaker
+@@ -49,15 +56,18 @@ async def clear_cache(
+ )
+ @cache(expire=120)
+ async def partitions(
+-    token_payload: Annotated[TokenPayload, Depends(get_token_payload)],
++    user: Annotated[str | None, Depends(NoneForUserWithRealmRoles([Role.ADMIN]))],
+     cluster: str,
+     time_in_s: int | None = None,
+     dbi=Depends(DBManager.get_database),
+ ):
+     """
+     Get status of partitions of a cluster (for a specific time point)
++
++    Without the admin role, jobs_pending and jobs_running list only the caller's
++    own jobs; the counts and times cover every job.
+     """
+-    return await dbi.get_partitions(cluster, time_in_s)
++    return await dbi.get_partitions(cluster, time_in_s, user=user)
+ 
+ 
+ @api_router.get(
+@@ -276,6 +286,18 @@ async def list_queries(
+     return {"queries": QueryMaker.list_available()}
+ 
+ 
++def query_access(
++    query_name: str,
++    user: Annotated[str | None, Depends(NoneForUserWithRealmRoles([Role.ADMIN]))],
++) -> None:
++    """
++    Named queries that list users or their jobs are for admins. A dependency, so
++    it runs before the route's response cache, which keys on the URL alone.
++    """
++    if user is not None and QueryMaker.is_admin_only(query_name):
++        raise HTTPException(status_code=403, detail=f"Query '{query_name}' requires the admin role")
++
++
+ def _url_key_builder(func, namespace: str = "", *, request: Request, **_) -> str:
+     # The default key builder hashes the endpoint's arguments, which include
+     # the Request object itself, so it would never produce a cache hit here.
+@@ -291,7 +313,7 @@ def _url_key_builder(func, namespace: str = "", *, request: Request, **_) -> str
+ # Long time ranges take tens of seconds to compute, and change little within 15 minutes.
+ @cache(expire=900, key_builder=_url_key_builder)
+ async def queries(
+-    _: Annotated[TokenPayload, Depends(get_token_payload)],
++    _: Annotated[None, Depends(query_access)],
+     cluster: str,
+     query_name: str,
+     request: Request,
+diff --git a/src/slurm_monitor/api/nodes.py b/src/slurm_monitor/api/nodes.py
+index ffd2343..bb51407 100644
+--- a/src/slurm_monitor/api/nodes.py
++++ b/src/slurm_monitor/api/nodes.py
+@@ -19,6 +19,8 @@ from slurm_monitor.api.response_models import (
+     SampleProcessAccResponse,
+ )
+ from slurm_monitor.api.routes import (
++    NoneForUserWithRealmRoles,
++    Role,
+     TokenPayload,
+     api_router,
+     create_custom_page,
+@@ -224,7 +226,7 @@ async def nodes_last_probe_timestamp(
+     response_model=NodeSampleProcessGpuAccResponse,
+ )
+ async def nodes_process_gpu_util(
+-    token_payload: Annotated[TokenPayload, Depends(get_token_payload)],
++    user: Annotated[str | None, Depends(NoneForUserWithRealmRoles([Role.ADMIN]))],
+     cluster: str,
+     nodename: str | None = None,
+     reference_time_in_s: float | None = None,
+@@ -233,6 +235,8 @@ async def nodes_process_gpu_util(
+ ):
+     """
+     Retrieve the latest gpu utilization
++
++    Without the admin role, summed over the caller's own processes only.
+     """
+     nodes = [nodename] if nodename else (await dbi.get_nodes(cluster))
+     tasks = {}
+@@ -243,6 +247,7 @@ async def nodes_process_gpu_util(
+                 node=node,
+                 reference_time_in_s=reference_time_in_s,
+                 window_in_s=window_in_s,
++                user=user,
+             ),
+             name=f"nodes_process_gpu_util-{node}",
+         )
+@@ -271,7 +276,7 @@ async def nodes_process_gpu_util(
+     response_model=NodeGpuJobSampleProcessGpuTimeseriesResponse,
+ )
+ async def nodes_sample_process_gpu(
+-    token_payload: Annotated[TokenPayload, Depends(get_token_payload)],
++    user: Annotated[str | None, Depends(NoneForUserWithRealmRoles([Role.ADMIN]))],
+     cluster: str,
+     nodename: str | None = None,
+     job_id: int | None = None,
+@@ -283,6 +288,8 @@ async def nodes_sample_process_gpu(
+ ):
+     """
+     Get node-related timeseries for processes running on gpu
++
++    Without the admin role, only the caller's own jobs.
+     """
+     start_time_in_s, end_time_in_s, resolution_in_s = validate_interval(
+         start_time_in_s=start_time_in_s,
+@@ -299,6 +306,7 @@ async def nodes_sample_process_gpu(
+         start_time_in_s=start_time_in_s,
+         end_time_in_s=end_time_in_s,
+         resolution_in_s=resolution_in_s,
++        user=user,
+     )
+ 
+ 
+diff --git a/src/slurm_monitor/api/routes.py b/src/slurm_monitor/api/routes.py
+index 8af9414..2de8d14 100644
+--- a/src/slurm_monitor/api/routes.py
++++ b/src/slurm_monitor/api/routes.py
+@@ -224,17 +224,23 @@ class NoneForUserWithResourceRoles:
+ 
+ 
+ class NoneForUserWithRealmRoles:
++    """
++    None for a caller with all of the given realm roles (or with OAuth off),
++    otherwise the caller's username, to which a route restricts its result.
++    """
++
+     optional_roles: list[Role]
+ 
+     def __init__(self, roles: list[Role]) -> None:
+-        app_settings = AppSettings.initialize()
+-
+-        if not app_settings.oauth.required:
+-            self.optional_roles = []
+-        else:
+-            self.optional_roles = roles
++        AppSettings.initialize()
++        self.optional_roles = roles
+ 
+     def __call__(self, token_payload: Annotated[TokenPayload, Depends(get_token_payload)]) -> str | None:
++        # Read when called, like get_token_payload: deciding when the route was
++        # defined used whatever the settings were at import time.
++        if not AppSettings.get_instance().oauth.required:
++            return None
++
+         if token_payload:
+             logger.info(f"Optional roles: {self.optional_roles} - available roles: {token_payload.realm_access.roles}")
+ 
+diff --git a/src/slurm_monitor/db/db.py b/src/slurm_monitor/db/db.py
+index 8f43a03..b2f8891 100644
+--- a/src/slurm_monitor/db/db.py
++++ b/src/slurm_monitor/db/db.py
+@@ -379,7 +379,11 @@ class ClusterDB(Database):
+                 result = [x[0] for x in result]
+             return result
+ 
+-    async def get_partitions(self, cluster: str, time_in_s: int | None = None):
++    async def get_partitions(self, cluster: str, time_in_s: int | None = None, user: str | None = None):
++        """
++        With a user, jobs_pending and jobs_running list only that user's jobs;
++        the counts and times still cover every job.
++        """
+ 
+         if time_in_s is None:
+             time_in_s = utcnow().timestamp()
+@@ -482,6 +486,10 @@ class ClusterDB(Database):
+                     else:
+                         logger.warning(f"ClusterDB.get_partitions: job: {job['job_id']} has no 'sacct' information")
+ 
++                if user is not None:
++                    pending_jobs = [job for job in pending_jobs if job["user_name"] == user]
++                    running_jobs = [job for job in running_jobs if job["user_name"] == user]
++
+                 partitions.append(
+                     {
+                         "cluster": x[0],
+@@ -1240,9 +1248,11 @@ class ClusterDB(Database):
+         start_time_in_s: int,
+         end_time_in_s: int,
+         resolution_in_s: int,
++        user: str | None = None,
+     ):
+         """
+-        Get the SampleProcessGpu timeseries for a set of nodes in a cluster.
++        Get the SampleProcessGpu timeseries for a set of nodes in a cluster,
++        of the given user's jobs only if a user is given.
+ 
+         return:
+             nodename:
+@@ -1275,6 +1285,9 @@ class ClusterDB(Database):
+             if job_id is not None:
+                 where &= (SampleProcessGpu.job == job_id) & (SampleProcessGpu.epoch == epoch)
+ 
++            if user is not None:
++                where &= SampleProcessGpu.user == user
++
+             if start_time_in_s:
+                 where &= SampleProcessGpu.time >= fromtimestamp(start_time_in_s)
+ 
+@@ -1311,7 +1324,7 @@ class ClusterDB(Database):
+                     resolution_in_s=resolution_in_s,
+                 )
+ 
+-                if uuid not in processes:
++                if uuid not in processes["gpus"]:
+                     processes["gpus"][uuid] = []
+ 
+                 processes["gpus"][uuid].append(
+@@ -1469,9 +1482,11 @@ class ClusterDB(Database):
+         node: str,
+         reference_time_in_s: float | None = None,
+         window_in_s: int | None = None,
++        user: str | None = None,
+     ):
+         """
+-        Get the latest (default is last 5 min) gpu utilization for the given node
++        Get the latest (default is last 5 min) gpu utilization for the given node,
++        summed over the given user's processes only if a user is given
+         """
+         if reference_time_in_s is None:
+             reference_time_in_s = utcnow().timestamp()
+@@ -1499,6 +1514,7 @@ class ClusterDB(Database):
+             uuids=cards,
+             reference_time_in_s=reference_time_in_s,
+             window_in_s=window_in_s,
++            user=user,
+         )
+ 
+     async def get_sample_process_gpu_util(
+@@ -1506,9 +1522,11 @@ class ClusterDB(Database):
+         uuids: str | list[str],
+         reference_time_in_s: float | None = None,
+         window_in_s: int | None = None,
++        user: str | None = None,
+     ) -> dict[str, SampleProcessGpuAccResponse]:
+         """
+-        Get the latest gpu utilization for the given uuids
++        Get the latest gpu utilization for the given uuids, summed over the given
++        user's processes only if a user is given
+         """
+         if reference_time_in_s is None:
+             reference_time_in_s = utcnow().timestamp()
+@@ -1518,6 +1536,7 @@ class ClusterDB(Database):
+ 
+         try:
+             start_time_in_s = reference_time_in_s - window_in_s
++            of_user = SampleProcessGpu.user == user if user is not None else sqlalchemy.sql.true()
+             query = (
+                 select(
+                     SampleProcessGpu.uuid,
+@@ -1525,7 +1544,8 @@ class ClusterDB(Database):
+                 )
+                 .where(
+                     (SampleProcessGpu.uuid.in_(uuids))
+-                    & (SampleProcessGpu.time >= dt.datetime.fromtimestamp(start_time_in_s, dt.timezone.utc)),
++                    & (SampleProcessGpu.time >= dt.datetime.fromtimestamp(start_time_in_s, dt.timezone.utc))
++                    & of_user,
+                 )
+                 .group_by(
+                     SampleProcessGpu.uuid,
+@@ -1550,7 +1570,7 @@ class ClusterDB(Database):
+                         func.array_agg(SampleProcessGpu.pid.distinct()).label("pids"),
+                     )
+                     .where(
+-                        (SampleProcessGpu.uuid == uuid) & (SampleProcessGpu.time == timestamp),
++                        (SampleProcessGpu.uuid == uuid) & (SampleProcessGpu.time == timestamp) & of_user,
+                     )
+                     .group_by(
+                         SampleProcessGpu.uuid,
+diff --git a/src/slurm_monitor/db/db_testing.py b/src/slurm_monitor/db/db_testing.py
+index dfdff1c..7f03f42 100644
+--- a/src/slurm_monitor/db/db_testing.py
++++ b/src/slurm_monitor/db/db_testing.py
+@@ -38,6 +38,8 @@ class TestDBConfig(BaseModel):
+     number_of_cpus: int = 2
+     number_of_gpus: int = 2
+     number_of_jobs: int = 4
++    # jobs are assigned to these users in turn
++    user_names: list[str] = ["any-user"]
+     number_of_samples: int = 25
+     sampling_interval_in_s: int = 30
+ 
+@@ -218,6 +220,7 @@ def create_test_db(
+ 
+             for j in range(1, config.number_of_jobs + 1):
+                 jobId = nIdx * len(nodes) * config.number_of_jobs + j
++                user_name = config.user_names[(jobId - 1) % len(config.user_names)]
+                 start_time = time - dt.timedelta(seconds=config.number_of_samples * config.sampling_interval_in_s)
+                 sample_time = start_time
+                 sample_slurm_jobs = []
+@@ -236,7 +239,7 @@ def create_test_db(
+                             array_task_id=None,
+                             het_job_id=0,
+                             het_job_offset=0,
+-                            user_name="any-user",
++                            user_name=user_name,
+                             account="any-account",
+                             start_time=start_time,
+                             suspend_time=0,
+@@ -279,7 +282,7 @@ def create_test_db(
+                             node=n,
+                             job=jobId,
+                             epoch=0,
+-                            user="any-user",
++                            user=user_name,
+                             resident_memory=8 * 1024 * 2,
+                             virtual_memory=2 * 1024 * 2,
+                             cmd="test-command",
+@@ -299,7 +302,7 @@ def create_test_db(
+                                 node=n,
+                                 job=jobId,
+                                 epoch=0,
+-                                user="any-user",
++                                user=user_name,
+                                 pid=jobId,
+                                 uuid=card,
+                                 gpu_util=100.0 / config.number_of_jobs,
+diff --git a/src/slurm_monitor/db/query.py b/src/slurm_monitor/db/query.py
+index 0d6cbd6..a012df4 100644
+--- a/src/slurm_monitor/db/query.py
++++ b/src/slurm_monitor/db/query.py
+@@ -22,6 +22,8 @@ class Query:
+     db: Database
+     statement: ClassVar[str]
+     parameters: ClassVar[type[QueryParams]] = QueryParams
++    # rows of individual users or their jobs: only for the admin role
++    admin_only: ClassVar[bool] = False
+ 
+     def __init__(self, db: Database):
+         self.db = db
+@@ -55,6 +57,8 @@ class UserJobResults(Query):
+         min_time, max_time, avg_cpu_count, avg_node_count
+     """
+ 
++    admin_only = True
++
+     parameters = CommonUsageStatQueryParams
+ 
+     statement = """
+@@ -99,6 +103,8 @@ class UserSuccessJobResults(Query):
+         min_time, max_time, avg_cpu_count, avg_node_count
+     """
+ 
++    admin_only = True
++
+     statement = """
+         SELECT row_number() OVER(ORDER BY  user_name) as anon_user,
+             user_name,
+@@ -136,6 +142,8 @@ class UserFailedJobResults(Query):
+         min_time, max_time, avg_cpu_count, avg_node_count
+     """
+ 
++    admin_only = True
++
+     statement = """
+         SELECT row_number() OVER(ORDER BY  user_name) as anon_user,
+             user_name,
+@@ -213,6 +221,8 @@ class JobsExceedingRequestedResources(Query):
+         gpus_used_exceeded_requested
+     """
+ 
++    admin_only = True
++
+     parameters = CommonUsageStatQueryParams
+ 
+     statement = r"""
+@@ -982,6 +992,11 @@ class QueryMaker:
+     def list_available(cls) -> list[str]:
+         return sorted(cls._queries.keys())
+ 
++    @classmethod
++    def is_admin_only(cls, name: str) -> bool:
++        query = cls._queries.get(name)
++        return query is not None and query.admin_only
++
+ 
+ class CommonQueryParams(QueryParams):
+     cluster: str
+diff --git a/tests/slurm_monitor/api/test_monitor.py b/tests/slurm_monitor/api/test_monitor.py
+index b7d4231..8c3631f 100644
+--- a/tests/slurm_monitor/api/test_monitor.py
++++ b/tests/slurm_monitor/api/test_monitor.py
+@@ -61,7 +61,9 @@ def mock_token(monkeypatch, mock_appsettings_with_oauth_required) -> str:
+         "sid": "0e7aad19-8b15-06c2-1449-616b92625b9b",
+         "acr": 1,
+         "allowed-origins": ["", "https://naic-monitor.simula.no"],
+-        "realm_access": {"roles": ["default-roles-naic-monitor", "offline_access", "uma_authorization"]},
++        # an admin sees every user's jobs, so each route has data to answer with;
++        # test_user_scope.py covers what a user without the role sees
++        "realm_access": {"roles": ["default-roles-naic-monitor", "offline_access", "uma_authorization", "admin"]},
+         "resource_access": {"account": {"roles": ["manage-account", "manage-account-links", "view-profile"]}},
+         "scope": "email profile",
+         "email_verified": False,
+diff --git a/tests/slurm_monitor/api/test_user_scope.py b/tests/slurm_monitor/api/test_user_scope.py
+new file mode 100644
+index 0000000..cdab5cb
+--- /dev/null
++++ b/tests/slurm_monitor/api/test_user_scope.py
+@@ -0,0 +1,202 @@
++"""
++Routes that attribute data to jobs or users show a user only their own;
++an admin (realm role 'admin') sees everyone's, as with the jobs routes.
++"""
++
++from types import SimpleNamespace
++
++import jwt
++import pytest
++import pytest_asyncio
++from fastapi.testclient import TestClient
++
++from slurm_monitor.app import app
++from slurm_monitor.app_settings import AppSettings
++from slurm_monitor.db.db_base import DatabaseSettings
++from slurm_monitor.db.db_testing import TestDBConfig
++from slurm_monitor.db_operations import DBManager
++from slurm_monitor.utils.slurm import Slurm
++
++USER = "user-a"
++OTHER = "user-b"
++ADMIN = "admin-user"
++CLUSTER = "cluster-0"
++NODE = "cluster-0-node-0"
++
++# create_test_db hands the jobs out to the users in turn: on cluster-0,
++# node-0 runs jobs 1-4 and node-1 jobs 9-12, and the odd ones are USER's.
++# A job's processes have its id as pid.
++NODE_JOBS = {1, 2, 3, 4}
++CLUSTER_JOBS = {1, 2, 3, 4, 9, 10, 11, 12}
++
++
++def own(jobs: set[int]) -> set[int]:
++    return {job for job in jobs if job % 2}
++
++
++@pytest.fixture(scope="module")
++def db_config() -> TestDBConfig:
++    return TestDBConfig(user_names=[USER, OTHER])
++
++
++@pytest_asyncio.fixture(loop_scope="module", scope="module")
++def client(mock_slurm_command_hint, test_db, timescaledb, monkeypatch_module):
++    Slurm._BIN_HINTS = [mock_slurm_command_hint]
++
++    monkeypatch_module.setenv("SLURM_MONITOR_DATABASE_URI", f"{timescaledb}")
++    monkeypatch_module.setenv("SLURM_MONITOR_JOBS_COLLECTOR", "false")
++    monkeypatch_module.setenv("SLURM_MONITOR_PREFETCH_ENABLED", "false")
++    # a database whose connection pool belongs to this client's event loop,
++    # and no responses cached by an earlier module
++    monkeypatch_module.setattr(DBManager, "_databases", None)
++
++    with TestClient(app) as c:
++        assert c.get("/api/v2/clear_cache").status_code == 200
++        yield c
++
++
++def payload(username: str, roles: list[str]) -> dict:
++    return {
++        "exp": 1765187642,
++        "iat": 1765187342,
++        "jti": f"jti-{username}",
++        "iss": "http://myidentityprovider.com/realms/naic-monitor",
++        "aud": "account",
++        "sub": f"sub-{username}",
++        "typ": "Bearer",
++        "azp": "slurm-monitor.no",
++        "sid": f"sid-{username}",
++        "acr": 1,
++        "realm_access": {"roles": roles},
++        "resource_access": {"account": {"roles": []}},
++        "scope": "email profile",
++        "email_verified": False,
++        "name": username,
++        "preferred_username": username,
++        "given_name": username,
++        "family_name": username,
++        "email": f"{username}@xyz.com",
++    }
++
++
++@pytest.fixture
++def headers(monkeypatch, timescaledb) -> dict[str, dict[str, str]]:
++    """Request headers of a user and of an admin, with OAuth required."""
++    app_settings = AppSettings.get_instance()
++    monkeypatch.setattr(app_settings.oauth, "required", True)
++    monkeypatch.setattr(app_settings.oauth, "url", "https://example.invalid")
++    monkeypatch.setattr(app_settings.oauth, "realm", "test-realm")
++    monkeypatch.setattr(app_settings, "database", DatabaseSettings(uri=timescaledb))
++
++    payloads = {
++        "user-token": payload(USER, ["default-roles-naic-monitor"]),
++        "admin-token": payload(ADMIN, ["default-roles-naic-monitor", "admin"]),
++    }
++
++    def decode(token, *args, **kwargs):
++        if token not in payloads:
++            raise jwt.InvalidTokenError(f"unexpected token {token}")
++        return payloads[token]
++
++    monkeypatch.setattr(jwt, "decode", decode)
++    monkeypatch.setattr(
++        app_settings.oauth.jwks_client,
++        "get_signing_key_from_jwt",
++        lambda token: SimpleNamespace(key="signing-key"),
++    )
++    return {
++        "user": {"Authorization": "Bearer user-token"},
++        "admin": {"Authorization": "Bearer admin-token"},
++    }
++
++
++def get(client, path: str, headers: dict[str, str]):
++    response = client.get(f"/api/v2{path}", headers=headers)
++    assert response.status_code == 200, response.text
++    return response.json()
++
++
++def partition_users(partitions: list[dict]) -> set[str]:
++    return {job["user_name"] for p in partitions for job in p["jobs_pending"] + p["jobs_running"]}
++
++
++def test_partitions_list_only_the_callers_jobs(client, headers):
++    path = f"/cluster/{CLUSTER}/partitions"
++    # the admin's response is cached first, for 120 s
++    admin = get(client, path, headers["admin"])
++    assert partition_users(admin) == {USER, OTHER}
++
++    user = get(client, path, headers["user"])
++    assert partition_users(user) == {USER}
++    # counts without attribution still cover every job
++    assert [p["total_gpus"] for p in user] == [p["total_gpus"] for p in admin]
++    assert [p["gpus_reserved"] for p in user] == [p["gpus_reserved"] for p in admin]
++
++
++def process_gpu_jobs(nodes: dict) -> set[int]:
++    return {series["job"] for node in nodes.values() for per_gpu in node["gpus"].values() for series in per_gpu}
++
++
++@pytest.mark.parametrize(
++    "path,jobs",
++    [
++        (f"/cluster/{CLUSTER}/nodes/{NODE}/process/gpu/timeseries", NODE_JOBS),
++        (f"/cluster/{CLUSTER}/nodes/process/gpu/timeseries", CLUSTER_JOBS),
++    ],
++)
++def test_process_gpu_timeseries_only_of_the_callers_jobs(client, headers, path, jobs):
++    assert process_gpu_jobs(get(client, path, headers["admin"])) == jobs
++    assert process_gpu_jobs(get(client, path, headers["user"])) == own(jobs)
++
++
++def test_process_gpu_timeseries_of_another_users_job_is_empty(client, headers):
++    path = f"/cluster/{CLUSTER}/nodes/{NODE}/jobs/2/process/gpu/timeseries"
++    assert process_gpu_jobs(get(client, path, headers["admin"])) == {2}
++    assert process_gpu_jobs(get(client, path, headers["user"])) == set()
++
++
++def test_process_gpu_util_sums_only_the_callers_processes(client, headers):
++    path = f"/cluster/{CLUSTER}/nodes/{NODE}/process/gpu/util"
++    admin = get(client, path, headers["admin"])[NODE]
++    user = get(client, path, headers["user"])[NODE]
++
++    assert admin and set(user) == set(admin)
++    for uuid, card in admin.items():
++        assert set(card["pids"]) == NODE_JOBS
++        assert set(user[uuid]["pids"]) == own(NODE_JOBS)
++        assert user[uuid]["gpu_util"] < card["gpu_util"]
++
++
++@pytest.mark.parametrize(
++    "query",
++    [
++        "user-job-results",
++        "user-success-job-results",
++        "user-failed-job-results",
++        "jobs-exceeding-resource-usage",
++    ],
++)
++def test_queries_listing_users_or_their_jobs_are_for_admins(client, headers, query):
++    path = f"/api/v2/cluster/{CLUSTER}/queries/{query}"
++    # The route caches by URL alone, so an admin's result is there first.
++    # The user-success/failed queries take no cluster parameter yet and
++    # answer 422 to anyone the check lets through.
++    assert client.get(path, headers=headers["admin"]).status_code in (200, 422)
++    assert client.get(path, headers=headers["user"]).status_code == 403
++
++
++def test_aggregate_queries_stay_open(client, headers):
++    get(client, f"/cluster/{CLUSTER}/queries/popular-partitions-by-number-of-jobs", headers["user"])
++
++
++def test_jobs_are_cached_per_user(client, headers):
++    path = f"/cluster/{CLUSTER}/jobs"
++    admin = get(client, path, headers["admin"])["jobs"]
++    assert {job["user_name"] for job in admin} == {USER, OTHER}
++
++    user = get(client, path, headers["user"])["jobs"]
++    assert {job["user_name"] for job in user} == {USER}
++
++
++def test_card_metrics_stay_open(client, headers):
++    assert get(client, f"/cluster/{CLUSTER}/nodes/{NODE}/gpu/timeseries", headers["user"])[NODE]
+-- 
+2.50.1 (Apple Git-155)
+
