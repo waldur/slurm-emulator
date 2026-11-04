@@ -5,7 +5,11 @@ A failing script ends the job FAILED with the script's exit status
 expanded as slurm_get_job_stdout() does (slurm://src/api/job_info.c#slurm_get_job_stdout).
 """
 
+import os
+import subprocess
+import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -183,6 +187,35 @@ def test_execution_cap_names_itself_not_a_time_limit(fs_root, monkeypatch):
     assert "TIME LIMIT" not in out
 
 
+def _running(pid: int) -> bool:
+    """Alive and not a zombie waiting to be reaped."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    stat = Path(f"/proc/{pid}/stat")
+    if stat.exists():
+        return stat.read_text().rsplit(")", 1)[-1].split()[0] != "Z"
+    state = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False
+    ).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def test_execution_cap_ends_what_the_script_started(fs_root, monkeypatch):
+    """slurmstepd ends the job's whole cgroup; the cap ends the script's process group."""
+    monkeypatch.setenv(job_execution.EXECUTE_ENV, "1")
+    monkeypatch.setenv(job_execution.TIMEOUT_ENV, "0.5")
+    job = _job("sleep 30 & echo $! > child.pid; wait", standard_output="bg.out", time_limit=120)
+    _advance(job)
+    assert job.exit_code == 124
+    pid = int((fs_root / "home/alice/child.pid").read_text())
+    deadline = time.monotonic() + 5
+    while _running(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not _running(pid)
+
+
 @pytest.mark.usefixtures("fs_root")
 def test_job_reaching_its_time_limit_stays_timeout_when_scripts_run(monkeypatch):
     """slurm://src/slurmctld/job_mgr.c#_job_timed_out: TIMEOUT whatever the script returned."""
@@ -307,6 +340,13 @@ def test_batch_script_gets_the_batch_job_environment(fs_root, monkeypatch):
     assert record["Partition"] == env["SLURM_JOB_PARTITION"]
     assert record["Account"] == env["SLURM_JOB_ACCOUNT"]
     assert record["QOS"] == env["SLURM_JOB_QOS"]
+    # Both from get_job_oversubscribe_value from 26.05
+    # (slurm://src/common/slurm_protocol_defs.c#get_job_oversubscribe_value@26.05+).
+    if at_least("26.05"):
+        assert record["OverSubscribe"] == env["SLURM_JOB_OVERSUBSCRIBE"]
+    # sbatch's external-launcher settings (slurm://src/common/env.c#set_env_from_opts).
+    assert env["OMPI_MCA_plm_slurm_args"] == env["PRTE_MCA_plm_slurm_args"] == "--external-launcher"
+    assert env["HYDRA_BOOTSTRAP"] == env["I_MPI_HYDRA_BOOTSTRAP"] == "slurm"
 
 
 def test_batch_script_sees_its_gpus(fs_root, monkeypatch):
@@ -336,3 +376,26 @@ def test_defaults_and_user_environment_wins(fs_root, monkeypatch):
     assert env["SLURM_TASKS_PER_NODE"] == env["SLURM_JOB_CPUS_PER_NODE"] == "1"
     assert env["SLURM_MEM_PER_CPU"] == "8192"
     assert env["SLURM_JOB_QOS"] == env["HOSTNAME"] == "mine"
+
+
+def test_gpus_requested_for_the_job_are_exported(monkeypatch):
+    """sbatch exports --gpus as SLURM_GPUS (slurm://src/common/env.c#set_env_from_opts)."""
+    job = _job("env", partition="debug", tres_per_job="gres/gpu:a100:2")
+    assert job_execution._submit_environment(job)["SLURM_GPUS"] == "a100:2"
+    assert "SLURM_GPUS" not in job_execution._submit_environment(_job("env"))
+
+
+def test_task_count_follows_the_node_count_without_a_node_list():
+    """ntasks_per_node x nodes (slurm://src/common/env.c#env_array_for_batch_job)."""
+    job = _job("env", node_count=3, tasks_per_node=4)
+    env = job_execution.batch_environment(job)
+    assert env["SLURM_JOB_NUM_NODES"] == env["SLURM_NNODES"] == "3"
+    assert env["SLURM_NTASKS"] == env["SLURM_NPROCS"] == "12"
+
+
+def test_null_fields_of_a_stored_job_still_give_strings():
+    job = _job("env")
+    job.partition = job.cluster = None
+    env = {**job_execution._submit_environment(job), **job_execution.batch_environment(job)}
+    assert all(isinstance(value, str) for value in env.values())
+    assert env["SLURM_JOB_PARTITION"] == ""

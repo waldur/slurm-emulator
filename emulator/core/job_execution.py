@@ -24,8 +24,10 @@ only where running the submitted scripts is acceptable):
   and as the emulator's own OS user unless NSS mode resolves the job's user;
 * it is stopped after ``SLURM_EMULATOR_JOB_EXECUTE_TIMEOUT`` seconds
   (default 60), whatever the job's time limit, because it runs inside the
-  request that first sees the job end. The job then ends FAILED with exit
-  code 124 and a stderr line naming the cap. Real Slurm lets the script run
+  request that first sees the job end. Everything the script started goes
+  with it (its process group, as slurmstepd ends the job's whole cgroup).
+  The job then ends FAILED with exit code 124 and a stderr line naming the
+  cap. Real Slurm lets the script run
   until its time limit, ends the job TIMEOUT
   (slurm://src/slurmctld/job_mgr.c#_job_timed_out) and slurmstepd logs
   slurm://src/slurmd/slurmstepd/req.c#"*** %s ON %s CANCELLED AT %s DUE TO TIME LIMIT ***";
@@ -41,10 +43,15 @@ only where running the submitted scripts is acceptable):
   ``SLURM_PRIO_PROCESS``, ``SLURM_CPUS_PER_TASK`` & co.,
   slurm://src/sbatch/opt.c#set_envs) is set for every job, also one submitted
   over REST, where slurmrestd leaves the environment to the client;
+  ``SLURM_SUBMIT_DIR`` is the job's working directory, as the record keeps
+  no other: it differs from the directory sbatch ran in only with ``--chdir``;
 * not set: ``SLURM_CONF`` (there is no slurm.conf,
-  slurm://src/common/env.c#"SLURM_CONF") and ``SLURM_JOB_SLUID`` (no SLUIDs,
-  slurm://src/common/env.c#"SLURM_JOB_SLUID"@26.05+); GPU indices are the
-  global ones, as on nodes without device confinement.
+  slurm://src/common/env.c#"SLURM_CONF"), ``SLURM_JOB_SLUID`` (no SLUIDs,
+  slurm://src/common/env.c#"SLURM_JOB_SLUID"@26.05+), ``SLURM_UMASK`` (the
+  submitting sbatch's umask, slurm://src/sbatch/sbatch.c#_set_umask_env) and
+  ``SLURM_GPUS_PER_NODE`` (``--gpus-per-node`` and ``--gres`` both end up in
+  the record's ``tres_per_node``); GPU indices are the global ones, as on
+  nodes without device confinement.
 """
 
 from __future__ import annotations
@@ -52,6 +59,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import signal
 import socket
 import subprocess
 import tempfile
@@ -253,21 +261,32 @@ def _submit_environment(job) -> dict[str, str]:
     slurm://src/sbatch/opt.c#set_envs (cpus per task, tasks, tasks per node),
     slurm://src/common/env.c#set_env_from_opts with the ``cpu=N`` that
     slurm://src/common/slurm_opt.c#_set_tres_per_task_from_sibling_opt makes of
-    ``-c N``; ``SLURM_PRIO_PROCESS`` stays unless PropagatePrioProcess
-    (slurm://src/slurmd/slurmstepd/mgr.c#_set_prio_process).
+    ``-c N``, ``SLURM_GPUS`` for ``--gpus``, and the external-launcher
+    settings it always adds for an mpirun that starts srun; ``SLURM_PRIO_PROCESS``
+    stays unless PropagatePrioProcess
+    (slurm://src/slurmd/slurmstepd/mgr.c#_set_prio_process). ``SLURM_NTASKS``
+    is slurmstepd's (``batch_environment``).
     """
     env = {
         "SLURM_SUBMIT_DIR": working_directory(job),
         "SLURM_SUBMIT_HOST": socket.gethostname(),
         "SLURM_PRIO_PROCESS": "0",
+        "OMPI_MCA_plm_slurm_args": "--external-launcher",
+        "PRTE_MCA_plm_slurm_args": "--external-launcher",
+        "HYDRA_BOOTSTRAP": "slurm",
+        "HYDRA_LAUNCHER_EXTRA_ARGS": "--external-launcher",
+        "I_MPI_HYDRA_BOOTSTRAP": "slurm",
+        "I_MPI_HYDRA_BOOTSTRAP_EXEC_EXTRA_ARGS": "--external-launcher",
     }
     if job.cpus_per_task:
         env["SLURM_CPUS_PER_TASK"] = str(job.cpus_per_task)
         env["SLURM_TRES_PER_TASK"] = f"cpu={job.cpus_per_task}"
-    if job.tasks:
-        env["SLURM_NTASKS"] = env["SLURM_NPROCS"] = str(job.tasks)
     if job.tasks_per_node:
         env["SLURM_NTASKS_PER_NODE"] = str(job.tasks_per_node)
+    # --gpus is the job's tres_per_job, "gres/gpu[:type]:N"; sbatch exports
+    # what was given, "[type:]N".
+    if (job.tres_per_job or "").startswith("gres/gpu:"):
+        env["SLURM_GPUS"] = job.tres_per_job[len("gres/gpu:") :]
     return env
 
 
@@ -291,14 +310,17 @@ def batch_environment(job) -> dict[str, str]:
     job_id = str(job.job_id)
     uid = job.uid if job.uid is not None else 1000
     gid = job.gid if job.gid is not None else 1000
+    shares = cluster_model.job_node_shares(job)
+    num_nodes = str(len(shares) or job.node_count or 1)
+    # A state file can hold nulls; the environment takes strings only.
     env = {
-        "SLURM_CLUSTER_NAME": job.cluster,
+        "SLURM_CLUSTER_NAME": job.cluster or "",
         "SLURM_JOB_ID": job_id,
         "SLURM_JOBID": job_id,
-        "SLURM_JOB_NUM_NODES": str(job.node_count or 1),
-        "SLURM_NNODES": str(job.node_count or 1),
-        "SLURM_JOB_PARTITION": job.partition,
-        "SLURM_JOB_ACCOUNT": job.account,
+        "SLURM_JOB_NUM_NODES": num_nodes,
+        "SLURM_NNODES": num_nodes,
+        "SLURM_JOB_PARTITION": job.partition or "",
+        "SLURM_JOB_ACCOUNT": job.account or "",
         "SLURM_JOB_QOS": job.qos or "normal",
         "ENVIRONMENT": "BATCH",
         "SLURM_NODEID": "0",
@@ -308,7 +330,7 @@ def batch_environment(job) -> dict[str, str]:
         "SLURM_OOM_KILL_STEP": "0",
         "SLURM_JOB_UID": str(uid),
         "SLURM_JOB_GID": str(gid),
-        "SLURM_JOB_USER": job.user,
+        "SLURM_JOB_USER": job.user or "",
     }
     if job.name:
         env["SLURM_JOB_NAME"] = job.name
@@ -332,16 +354,16 @@ def batch_environment(job) -> dict[str, str]:
     if job.start_time:
         # The credential's start and end: start + time limit, a year without one
         # (slurm://src/interfaces/cred.c#job_end_time,
-        # slurm://src/slurmctld/job_mgr.c#job_end_time_reset).
+        # slurm://src/slurmctld/job_mgr.c#job_end_time_reset). At launch, so
+        # without the suspended time scheduler.expected_end adds later.
         limit = job.time_limit * 60 if job.time_limit else 365 * 86400
         env["SLURM_JOB_START_TIME"] = str(int(job.start_time.timestamp()))
         env["SLURM_JOB_END_TIME"] = str(
             int((job.start_time + timedelta(seconds=limit)).timestamp())
         )
 
-    shares = cluster_model.job_node_shares(job)
     # Only an explicit task count, or sbatch's SLURM_NTASKS_PER_NODE x nodes.
-    num_tasks = job.tasks or job.tasks_per_node * max(len(shares), 1)
+    num_tasks = job.tasks or job.tasks_per_node * int(num_nodes)
     if num_tasks:
         env["SLURM_NTASKS"] = env["SLURM_NPROCS"] = str(num_tasks)
     if not shares:
@@ -355,8 +377,6 @@ def batch_environment(job) -> dict[str, str]:
     hostlist = cluster_model.compress_hostlist(nodes)
     env.update(
         {
-            "SLURM_JOB_NUM_NODES": str(len(nodes)),
-            "SLURM_NNODES": str(len(nodes)),
             "SLURM_JOB_NODELIST": hostlist,
             "SLURM_NODELIST": hostlist,
             "SLURM_JOB_CPUS_PER_NODE": _compressed(cpus),
@@ -462,17 +482,23 @@ def run_job_script(job) -> int:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         separate_err = err_path if err_path != out_path else Path(os.devnull)
         with out_path.open("ab") as out, separate_err.open("ab") as err:
-            completed = subprocess.run(
+            # Its own session, so the cap ends what the script started too.
+            process = subprocess.Popen(
                 ["bash", "-c", PRELUDE + (job.script or "")],
                 cwd=cwd,
                 env=_environment(job),
                 stdout=out,
                 stderr=err if err_path != out_path else subprocess.STDOUT,
-                timeout=_timeout(),
-                check=False,
+                start_new_session=True,
                 **_run_as(job),
             )
-        return completed.returncode
+            try:
+                return process.wait(timeout=_timeout())
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+                raise
     except subprocess.TimeoutExpired:
         with err_path.open("ab") as err:
             err.write(_cap_message().encode())

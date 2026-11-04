@@ -235,7 +235,11 @@ def sprint_job(job: Job, now: datetime, one_liner: bool = False) -> str:
     ]
     if job.reservation:
         lines.append(f"Reservation={job.reservation}")
-    oversubscribe = "NO" if job.exclusive else "OK"
+    # Before 26.05 the job's share value ("OK" unless exclusive); from 26.05
+    # get_job_oversubscribe_value, NO on the emulator's OverSubscribe=NO
+    # partitions (max_share 1)
+    # (slurm://src/common/slurm_protocol_defs.c#get_job_oversubscribe_value@26.05+).
+    oversubscribe = "NO" if job.exclusive or at_least("26.05") else "OK"
     if at_least("26.05"):
         lines.append(
             f"OverSubscribe={oversubscribe} Exclusive={'NODE' if job.exclusive else 'NO'} "
