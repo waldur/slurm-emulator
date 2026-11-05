@@ -232,7 +232,8 @@ class Demo:
 
     def type(self, target: Locator, text: str, delay: int = 45) -> None:
         self.click(target, pause=0.2)
-        target.first.press_sequentially(text, delay=delay)
+        # A long prompt typed on a busy machine can outlast the default 30 s.
+        target.first.press_sequentially(text, delay=delay, timeout=180_000)
 
     def scroll(self, pixels: int, seconds: float = 2.0) -> None:
         steps = max(1, int(seconds * 20))
