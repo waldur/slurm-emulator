@@ -94,6 +94,45 @@ with `--build`, so an existing stack gets them on its next run. When a pull
 request is merged, its patch goes and the pin in `slurm-monitor/Dockerfile`
 moves past it.
 
+## Record the demo
+
+`demo/record_demo.py` records a video tour of this stack with Playwright:
+alice signs in through Keycloak, walks through her Climate allocation and
+then hands the work to the AI assistant. It needs the assistant on (seed
+with `AI_ASSISTANT_CREDS`), ffmpeg, and Chromium for Playwright once
+(`uvx --from playwright==1.52.0 playwright install chromium`):
+
+```bash
+cd demo
+uv run record_demo.py --homeport-url http://localhost:10781 \
+    --waldur-url http://localhost:10780 --out hpc-demo.mp4
+```
+
+The URLs are the dev stack's frontend and backend (slot 0's ports, also the
+defaults; a stack on another slot has its own). A take that fails leaves
+`hpc-demo.partial.mp4` and a screenshot of where it stopped, and keeps the
+last good video.
+
+| Scene | Shows |
+|---|---|
+| `overview` | the allocation, its limits, the jobs table |
+| `insights` | burn-down and run-out forecast, efficiency, queue wait, cluster load |
+| `cluster` | partitions and their limits, the EESSI software catalog per architecture |
+| `files` | home directory; `.xvg` and WRF `rsl.error` plotted, a MultiQC report rendered |
+| `performance` | a GPU job's time series from slurm-monitor |
+| `submit-form` | the portal's submit dialog: software from the catalog, limits checked as you type |
+| `ai-usage`, `ai-plan` | the assistant works out how long the allocation lasts and what a job costs |
+| `ai-program` | it writes a parallel matrix multiplication, runs it, and debugs it if it fails |
+| `ai-debug` | why a job failed (a WRF run without its input, submitted before recording) |
+| `ai-rightsize`, `ai-maintenance`, `ai-software`, `ai-plot` | right-sizing, planning around maintenance, software per partition, plotting a result |
+
+`--scenes files,ai-debug` records only those (sign-in always runs). The
+assistant's answers differ between takes, and the recorder follows them: it
+answers the questions the assistant asks in the chat, presses Submit on the
+job card, and follows the job to its end. Waits on the model or on a job
+play `--speedup` times faster (6× by default) with a badge in the corner;
+everything else plays in real time.
+
 ## Notes
 
 - Keycloak's public hostname is `localhost:<port>`, so no hosts entry is
