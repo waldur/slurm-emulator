@@ -144,6 +144,14 @@ async ([pxPerSecond, minSeconds, maxSeconds]) => {
 """
 
 TERMINAL = {"COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "OUT_OF_MEMORY", "NODE_FAIL"}
+# The allocation's tabs, by the ?tab= value a page load opens them with.
+TAB_LABELS = {
+    "hpc-jobs": "Jobs",
+    "hpc-files": "Files",
+    "hpc-insights": "Insights",
+    "hpc-cluster": "Cluster",
+    "hpc-software": "Software",
+}
 
 
 @dataclass
@@ -463,8 +471,14 @@ class Demo:
         self.hold(1.5)
 
     def open_allocation(self, tab: str = "hpc-jobs") -> None:
-        self.page.goto(f"{self.url}/resource-details/{self.resource_uuid}/?tab={tab}")
-        self.page.wait_for_load_state("networkidle")
+        # Load the page once; later scenes switch tabs inside the app, as a
+        # user would, instead of reloading it (which shows the boot splash).
+        if f"/resource-details/{self.resource_uuid}" not in self.page.url:
+            self.page.goto(f"{self.url}/resource-details/{self.resource_uuid}/?tab={tab}")
+            self.page.wait_for_load_state("networkidle")
+        else:
+            self.page.evaluate("window.scrollTo({top: 0, behavior: 'smooth'})")
+            self.tab(TAB_LABELS[tab])
         self.hold(2)
 
     def scene_overview(self) -> None:
@@ -595,9 +609,23 @@ class Demo:
             "Sonar -> slurm-monitor: CPU, memory, GPU use and processes over time",
         )
         self.tab("Jobs")
-        # A finished GPU job with telemetry: md-equil from the seeded history.
-        self.click(self.page.get_by_role("button", name="Clear filters"), pause=2)
-        row = self.page.get_by_role("row").filter(has_text="md-equil").first
+        # A finished GPU job with telemetry: md-equil from the seeded history,
+        # which can be older than the table's default window of 24 hours.
+        page = self.page
+        self.click(page.get_by_role("button", name="Add filter"), pause=0.8)
+        self.click(page.get_by_role("button", name="Time period", exact=True), pause=1)
+        self.click(page.get_by_role("combobox").last, pause=0.8)
+        self.click(page.get_by_text("Last 7 days", exact=True), pause=1)
+        page.keyboard.press("Escape")
+        self.type(page.get_by_placeholder("Search..."), "md-equil", delay=70)
+        self.hold(2)
+        row = (
+            page.get_by_role("row")
+            .filter(has_text="md-equil")
+            .filter(has_text="gpu")
+            .filter(has_text="Completed")
+            .first
+        )
         self.click(row.get_by_role("button").first, pause=3)
         perf = self.page.get_by_role("tab", name="Performance")
         if perf.count():
@@ -605,6 +633,10 @@ class Demo:
         self.scroll(600, 3)
         self.hold(4)
         self.scroll(-600, 1.5)
+        # The table keeps its search and filters across tabs; later scenes
+        # look for new jobs in the default view.
+        page.get_by_placeholder("Search...").fill("")
+        self.click(page.get_by_role("button", name="Clear filters"), pause=1)
 
     def scene_submit_form(self) -> None:
         page = self.page
