@@ -4,6 +4,27 @@ All notable changes to slurm-emulator will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.11] - 2026-11-05
+
+### Added
+- Add the batch environment Slurm sets for a job to batch scripts run with `SLURM_EMULATOR_JOB_EXECUTE=1`: node lists, CPU/task/memory counts, GPU variables, sbatch option exports and MPI launcher settings, with values matching `scontrol show job` and a `hostname`/`HOSTNAME` that names the first allocated node
+- Add a Playwright-recorded demo of the Waldur HPC workspace and AI assistant
+- Add OIDC audience checks to the demo stack, so FirecREST and slurm-monitor accept only tokens issued for them
+
+### Changed
+- Print `OverSubscribe=NO` in `scontrol` from 26.05 on partitions with max share 1, matching `SLURM_JOB_OVERSUBSCRIBE`
+- Name the emulator's execution cap (`SLURM_EMULATOR_JOB_EXECUTE_TIMEOUT`) in the stderr line instead of reporting a Slurm time limit; the cap now ends the script's whole process group
+- Use one cluster name for Slurm, Sonar and slurm-monitor in the FirecREST/Waldur example via `SLURM_EMULATOR_CLUSTER_NAME`
+- Build FireCREST 2.6.2 as released, dropping the job resources and audience patches
+- Build slurm-monitor with the fixes still open upstream: per-user job visibility, token exchange audience and 404 for missing jobs
+- Update Slurm source references for symbols SchedMD master renamed (`hostlist_ranged_string_xmalloc`, `kill_requid`/`kill_user`)
+
+### Fixed
+- Fix a bare `id` over SSH so it answers as the login user when NSS mode is off
+- Fix batch script runs failing when a stored job has null partition, account, cluster or user
+- Fix the Waldur seed on a freshly migrated database: configuration import, project member permissions, accepted Terms of Service and the LLM assistant feature flag
+- Fix FirecREST health checks returning 401 by giving the health checker's token the firecrest audience
+
 ## [0.9.10] - 2026-10-20
 
 ### Added
