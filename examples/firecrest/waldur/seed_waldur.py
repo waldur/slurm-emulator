@@ -170,8 +170,10 @@ offering.plugin_options = {
 }
 offering.save(update_fields=["plugin_options"])
 plan, _ = m.Plan.objects.get_or_create(offering=offering, name="Default")
-# What the allocations are limited by. Usage-billed with a limit over the
-# allocation's life, as SLURM site-agent offerings report it.
+# What the allocations are limited by: CPU-hour and GPU-hour limits over the
+# allocation's whole life. Limit-billed, so the resource page sets the usage
+# of the whole allocation against them (for a usage-billed component it shows
+# the latest month's report).
 components = {}
 for kind, name, unit in (("cpu", "CPU", "CPU-h"), ("gpu", "GPU", "GPU-h")):
     components[kind], _ = m.OfferingComponent.objects.update_or_create(
@@ -180,7 +182,7 @@ for kind, name, unit in (("cpu", "CPU", "CPU-h"), ("gpu", "GPU", "GPU-h")):
         defaults={
             "name": name,
             "measured_unit": unit,
-            "billing_type": BillingTypes.USAGE,
+            "billing_type": BillingTypes.LIMIT,
             "limit_period": LimitPeriods.TOTAL,
         },
     )
