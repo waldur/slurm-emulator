@@ -104,9 +104,14 @@ with `AI_ASSISTANT_CREDS`), ffmpeg, and Chromium for Playwright once
 
 ```bash
 cd demo
-uv run record_demo.py --homeport-url http://localhost:8001 \
-    --waldur-url http://localhost:8000 --out hpc-demo.mp4
+uv run record_demo.py --homeport-url http://localhost:10781 \
+    --waldur-url http://localhost:10780 --out hpc-demo.mp4
 ```
+
+The URLs are the dev stack's frontend and backend (slot 0's ports, also the
+defaults; a stack on another slot has its own). A take that fails leaves
+`hpc-demo.partial.mp4` and a screenshot of where it stopped, and keeps the
+last good video.
 
 | Scene | Shows |
 |---|---|

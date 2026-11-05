@@ -22,8 +22,8 @@ AI_ASSISTANT_CREDS (the assistant on). Chromium for Playwright, once:
 
 Run (homeport and mastermind URLs of your dev stack):
 
-    uv run record_demo.py --homeport-url http://localhost:8001 \
-        --waldur-url http://localhost:8000 --out hpc-demo.mp4
+    uv run record_demo.py --homeport-url http://localhost:10781 \
+        --waldur-url http://localhost:10780 --out hpc-demo.mp4
 
     # only some scenes (login always runs), e.g. to retake one:
     uv run record_demo.py ... --scenes files,ai-debug
@@ -200,6 +200,8 @@ class Demo:
         self.resource_uuid = ""
         self.failed_job = ""
         self.program_job = ""
+        self.submitted_jobs: list[str] = []
+        self.chat_started = False
 
     # --- pacing and pointer -------------------------------------------------
 
@@ -362,8 +364,9 @@ class Demo:
         else a request to choose a sensible default.
         """
         answer = self.last_answer()
-        send = answer.locator(".aui-ask-user-submit")
-        if not send.count():
+        send = answer.locator(".aui-ask-user-submit").last
+        # An answered form stays in the message, its button gone or disabled.
+        if not send.count() or not send.is_visible() or not send.is_enabled():
             return False
         self.caption("The assistant asks what it needs to know", "Answered right in the chat")
         self.read_answer()
@@ -419,20 +422,58 @@ class Demo:
             with self.fast():
                 self.wait_answer()
             self.read_answer()
-        text = self.last_answer_text()
-        found = re.findall(r"Job ID:?\s*(\d+)", text) or re.findall(
-            r"\bjob (?:ID )?(\d{2,})", text, re.IGNORECASE
-        )
+        # The submitted card names the job; the model's own words may also
+        # mention an earlier one ("job 94 failed, ...").
+        card = self.last_answer().locator(".aui-vm-order-block").filter(has_text="Submitted")
+        text = card.last.inner_text() if card.count() else self.last_answer_text()
+        seen = {self.failed_job, *self.submitted_jobs}
+        found = [
+            job_id
+            for job_id in re.findall(r"Job ID:?\s*(\d+)", text)
+            or re.findall(r"\bjob (?:ID )?(\d{2,})", text, re.IGNORECASE)
+            if job_id not in seen
+        ]
+        if found:
+            self.submitted_jobs.append(found[-1])
         return found[-1] if found else ""
 
+    def show_script_panel(self) -> None:
+        """Dwell on the script panel beside the full-screen chat, if it is open."""
+        panel = self.page.get_by_test_id("hpc-script-panel")
+        if not panel.count() or not panel.is_visible():
+            return
+        self.caption(
+            "The code, highlighted beside the chat",
+            "One tab per file the job writes, then the batch script",
+        )
+        self.point(panel.locator(".monaco-editor").first)
+        self.hold(3)
+        self.scroll(700, 4)
+        self.hold(2)
+        script_tab = panel.get_by_role("tab", name="Batch script")
+        if script_tab.count():
+            self.click(script_tab, pause=3.5)
+            first_tab = panel.get_by_role("tab").first
+            self.click(first_tab, pause=1)
+
     def watch_job(self, job_id: str) -> str:
-        """Close the chat and follow the job in the Jobs table until it ends."""
+        """Follow the job from its card to the Jobs table until it ends."""
         self.caption(
             "The job runs on the cluster", "Pending, running, completed: the table follows it live"
         )
-        self.assistant_collapse()
-        self.click(self.page.get_by_test_id("llm-chat-drawer-toggle"), pause=1)  # close the panel
-        self.tab("Jobs")
+        follow = self.last_answer().get_by_text("Follow the job")
+        if follow.count():
+            # Collapses the full-screen chat and opens the job's row; then the
+            # chat closes so the table has the whole page.
+            self.click(follow.last, pause=1.5)
+            drawer = self.page.locator("[data-slot='drawer']")
+            close = drawer.get_by_role("button", name="Close").filter(visible=True)
+            if close.count():
+                self.click(close.first, pause=1)
+        else:
+            self.assistant_collapse()
+            self.click(self.page.get_by_test_id("llm-chat-drawer-toggle"), pause=1)
+            self.tab("Jobs")
         with self.fast():
             state = self.wait_job(job_id) if job_id else ""
             if not job_id:
@@ -456,7 +497,9 @@ class Demo:
             "Sign in with the HPC centre's identity provider",
             "Keycloak; Waldur calls FireCREST with the user's own token",
         )
-        self.click(page.get_by_text("HPC centre", exact=False), pause=0)
+        idp = re.compile("HPC centre")
+        sign_in = page.get_by_role("button", name=idp).or_(page.get_by_role("link", name=idp))
+        self.click(sign_in.first, pause=0)
         page.wait_for_url("**/auth/realms/**", timeout=30000)
         page.wait_for_load_state("networkidle")
         self.caption(
@@ -652,7 +695,7 @@ class Demo:
         dialog.get_by_label("Job name").first.fill("")
         self.type(dialog.get_by_label("Job name"), "wrf-nordic-9km", delay=60)
         self.hold(1)
-        # Replace the template's commands with the run itself.
+        # Replace the template script with the run itself.
         editor_line = dialog.get_by_text("srun", exact=False).last
         if editor_line.count():
             self.click(editor_line, pause=0.3)
@@ -694,6 +737,7 @@ class Demo:
         )
         self.assistant_open()
         self.assistant_new_chat()
+        self.chat_started = True
         self.caption("Calculation: how long does the allocation last?")
         self.ask(
             "How much of my Climate allocation is left, and when will it run out at the current pace?"
@@ -731,9 +775,12 @@ class Demo:
             "as a job on 1 node in the debug partition of my Climate allocation with a 10 minute "
             "limit, and show it to me before submitting."
         )
+        self.show_script_panel()
         # A program written in one go does not always run: if it fails, the
         # assistant reads the error, fixes it and the fixed one is submitted.
         for attempt in range(3):
+            if attempt:
+                self.show_script_panel()
             self.program_job = self.submit_from_chat()
             state = self.watch_job(self.program_job)
             self.assistant_open()
@@ -749,6 +796,10 @@ class Demo:
             )
         self.caption("The real output, explained")
         self.ask("Show me the output of that matrix job and explain the result briefly.")
+        # The next questions are not about this program: put its code away.
+        hide = self.page.get_by_role("button", name="Hide script")
+        if hide.count() and hide.first.is_visible():
+            self.click(hide.first, pause=1)
 
     def scene_ai_debug(self) -> None:
         self.assistant_open()
@@ -826,8 +877,6 @@ SCENES = [
 
 
 def assemble(rec: Recorder, out: Path, speedup: float, fps: int, end: float) -> None:
-    if not rec.frames:
-        sys.exit("no frames recorded")
     listing = rec.frames_dir / "frames.txt"
     lines = []
     for i, (t, path) in enumerate(rec.frames):
@@ -870,9 +919,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--homeport-url", default="http://localhost:8001")
+    parser.add_argument("--homeport-url", default="http://localhost:10781")
     parser.add_argument(
-        "--waldur-url", default="http://localhost:8000", help="mastermind, for the off-camera setup"
+        "--waldur-url",
+        default="http://localhost:10780",
+        help="mastermind, for the off-camera setup",
     )
     parser.add_argument("--user", default="alice")
     parser.add_argument("--password", default="password")
@@ -898,6 +949,8 @@ def main() -> int:
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--keep-frames", action="store_true")
     args = parser.parse_args()
+    if args.speedup <= 0:
+        parser.error("--speedup must be above 0")
     sys.stdout.reconfigure(line_buffering=True)  # progress shows in a log as it happens
 
     wanted = [s.strip() for s in args.scenes.split(",") if s.strip()]
@@ -928,26 +981,51 @@ def main() -> int:
             "Page.startScreencast",
             {"format": "jpeg", "quality": 90, "maxWidth": WIDTH, "maxHeight": HEIGHT},
         )
+        out = Path(args.out)
+        failed = False
         try:
             demo.scene_login()
             for name in wanted:
                 print(f"scene {name}")
+                # A take of some scenes only: the assistant scenes after
+                # ai-usage expect the allocation page and a chat already open.
+                if name.startswith("ai-") and name != "ai-usage" and not demo.chat_started:
+                    demo.open_allocation()
+                    demo.assistant_open()
+                    demo.assistant_new_chat()
+                    demo.chat_started = True
                 getattr(demo, "scene_" + name.replace("-", "_"))()
         except Exception:
-            page.screenshot(path=Path(args.out).with_suffix(".error.png"))
-            Path(args.out).with_suffix(".error.html").write_text(page.content())
+            failed = True
+            # A dead page must not hide the error that killed the take.
+            with contextlib.suppress(Exception):
+                page.screenshot(path=out.with_suffix(".error.png"))
+                out.with_suffix(".error.html").write_text(page.content())
             raise
         finally:
             end = time.time()
-            cdp.send("Page.stopScreencast")
-            browser.close()
-            print(f"{len(rec.frames)} frames; assembling {args.out}")
-            assemble(rec, Path(args.out), args.speedup, args.fps, end)
-            if args.keep_frames:
+            with contextlib.suppress(Exception):
+                cdp.send("Page.stopScreencast")
+            with contextlib.suppress(Exception):
+                browser.close()
+            # A failed take goes next to the last good one, not over it.
+            if failed:
+                out = out.with_suffix(".partial.mp4")
+            keep = args.keep_frames
+            try:
+                if rec.frames:
+                    print(f"{len(rec.frames)} frames; assembling {out}")
+                    assemble(rec, out, args.speedup, args.fps, end)
+                else:
+                    print("no frames recorded")
+            except Exception as error:  # reported; the frames are kept
+                print(f"assembling {out} failed: {error}")
+                keep = failed = True
+            if keep:
                 print(f"frames kept in {frames_dir}")
             else:
                 shutil.rmtree(frames_dir, ignore_errors=True)
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
