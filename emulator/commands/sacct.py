@@ -36,6 +36,12 @@ Output formatting and exit codes mirror real Slurm 26.05:
   ``raw_tres["energy"]`` from the power model (``emulator/core/energy.py``).
   The ``energy`` TRES is deliberately *not* added to the ReqTRES/AllocTRES
   string so the site-agent invocation shape stays byte-identical.
+* ``AdminComment`` prints ``job->admin_comment`` verbatim, empty when
+  unset (slurm://src/sacct/print.c#PRINT_ADMIN_COMMENT); the emulator
+  treats it as an opaque string. ``-p``/``-P`` print it unescaped
+  (slurm://src/common/print_fields.c#print_fields_str), so a comment
+  containing ``|`` or a newline breaks the row exactly as on a real
+  cluster; writers must keep both out of the value.
 
 * ``StdIn``/``StdOut``/``StdErr`` print the paths as stored, patterns not
   expanded (slurm://src/sacct/print.c#PRINT_STDIN, ``PRINT_STDOUT``,
@@ -92,6 +98,8 @@ from emulator.slurm_version import current
 # match wins, no minimum prefix length).
 _REGISTRY: list[FieldSpec] = [
     FieldSpec("Account", 10),
+    # After Account, so ``-o A`` still resolves to Account and ``Ad`` here.
+    FieldSpec("AdminComment", 15),
     FieldSpec("AllocCPUS", 10, truncate=False),
     FieldSpec("AllocNodes", 10),
     FieldSpec("AllocTRES", 10),
@@ -531,6 +539,7 @@ class SacctEmulator:
             "JobName": record.job_name or f"job_{record.job_id}",
             "Partition": record.partition or "compute",
             "Account": record.account,
+            "AdminComment": record.admin_comment,
             "AllocCPUS": str(alloc_cpus),
             "AllocNodes": str(nnodes if node_list != "None assigned" else 0),
             "AllocTRES": alloc_tres,

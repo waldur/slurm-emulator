@@ -385,6 +385,8 @@ print('Current quarter:', te.get_current_quarter())
 - `POST /api/token` - Mint a JWT for the slurmrestd API (scontrol token stand-in)
 - `POST /api/time/set` - Jump emulator time to a specific date (ISO 8601)
 - `POST /api/accounts` - Create an account (sacctmgr add account stand-in)
+- `POST /api/inject-jobs` - Record finished jobs with explicit cpus/gpus/elapsed/energy/state/CPU efficiency/AdminComment
+  (one sacct row each; see README "Per-job software annotations")
 
 ### slurmrestd Endpoints (port 6820)
 - `/slurmdb/v0.0.45/...` - accounts, users, associations, qos, tres, clusters, jobs

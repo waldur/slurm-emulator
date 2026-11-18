@@ -54,7 +54,7 @@ from emulator.api.slurmrestd.schemas import (
     uint_no_val,
 )
 from emulator.api.slurmrestd.state import StateDep
-from emulator.core.accounting import admit_job
+from emulator.core.accounting import admit_job, is_super_user
 from emulator.core.cluster_model import (
     expand_hostlist,
     job_may_access,
@@ -277,8 +277,27 @@ async def submit_job(
     script = body.get("script") or job_desc.get("script") or ""
 
     db = state.database
-    user = str(job_desc.get("user_name") or getattr(request.state, "slurm_user", "root") or "root")
+    submitter = str(getattr(request.state, "slurm_user", "root") or "root")
+    user = str(job_desc.get("user_name") or submitter)
     partition = job_desc.get("partition") or "compute"
+    # JOB_DESC_MSG accepts admin_comment
+    # (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_DESC_MSG@26.05+),
+    # but "AdminComment can only be set by an Admin": a non-super-user
+    # submitter gets ESLURM_ACCESS_DENIED before the job is created
+    # (slurm://src/slurmctld/job_mgr.c#validate_job_create_req).
+    admin_comment = job_desc.get("admin_comment") or ""
+    if not isinstance(admin_comment, str):
+        admin_comment = str(admin_comment)
+    if admin_comment and not is_super_user(submitter):
+        return _respond(
+            request,
+            state,
+            errors=[
+                slurm_error(
+                    "Access/permission denied", ESLURM_ACCESS_DENIED, "slurm_submit_batch_job()"
+                )
+            ],
+        )
     # Admission as in slurmctld: the USER_ID parser must resolve the user
     # (NSS mode, slurm://src/plugins/data_parser/v0.0.45/parsers.c#USER_ID@26.05+),
     # then _job_create needs an association for the account
@@ -372,6 +391,7 @@ async def submit_job(
         uid=identity.uid if identity else None,
         gid=identity.gid if identity else None,
         group_name=identity.group if identity else "",
+        admin_comment=admin_comment,
     )
     if not request_fits(job):
         errno = ESLURM_REQUESTED_NODE_CONFIG_UNAVAILABLE

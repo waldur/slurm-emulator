@@ -248,6 +248,11 @@ class UsageRecord:
     tres_alloc: dict[str, int] = field(default_factory=dict)
     # GPU device indices the run held on each node, as on Job.
     gpu_indices: dict[str, list[int]] = field(default_factory=dict)
+    # Free-form text an administrator attached to the job
+    # (slurm://slurm/slurmdb.h#slurmdb_job_rec_t.admin_comment). Opaque to
+    # the emulator: stored and printed verbatim (sacct ``AdminComment``,
+    # slurmrestd ``comment.administrator``).
+    admin_comment: str = ""
 
     def __post_init__(self) -> None:
         """Fold the account name like Account/Association do.
@@ -339,6 +344,9 @@ class Job:
     tres_per_job: str = ""
     # GPU device indices allocated on each node (gres_detail ``IDX:``).
     gpu_indices: dict[str, list[int]] = field(default_factory=dict)
+    # Copied into the accounting record when the job completes, as slurmctld
+    # sends it to slurmdbd with the job (slurm://slurm/slurm.h#job_info_t.admin_comment).
+    admin_comment: str = ""
 
 
 @dataclass
@@ -380,6 +388,20 @@ class Reservation:
     comment: str = ""
     duration: Optional[int] = None
 
+
+# Base states a job can end in, as job_state_string() names them
+# (slurm://src/common/slurm_protocol_defs.c#job_state_string).
+FINISHED_JOB_STATES = (
+    "COMPLETED",
+    "CANCELLED",
+    "FAILED",
+    "TIMEOUT",
+    "NODE_FAIL",
+    "PREEMPTED",
+    "BOOT_FAIL",
+    "DEADLINE",
+    "OUT_OF_MEMORY",
+)
 
 CLUSTER_NAME_ENV_VAR = "SLURM_EMULATOR_CLUSTER_NAME"
 
@@ -1132,6 +1154,7 @@ class SlurmDatabase:
                 self.jobs = {}
                 for jid, data in state.get("jobs", {}).items():
                     data.setdefault("cluster", "default")
+                    data.setdefault("admin_comment", "")
                     # Handle datetime fields
                     for dt_field in ["submit_time", "start_time", "end_time", "begin_time"]:
                         if data.get(dt_field):
@@ -1177,6 +1200,7 @@ class SlurmDatabase:
         data.setdefault("job_id", None)
         data.setdefault("state", "COMPLETED")
         data.setdefault("partition", "compute")
+        data.setdefault("admin_comment", "")
         return UsageRecord(**data)
 
 

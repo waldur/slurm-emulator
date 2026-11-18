@@ -361,6 +361,8 @@ def _run_scenario_headless(server: EmulatorServer, scenario: ScenarioDefinition)
                     partition=params.get("partition"),
                     energy_joules=params.get("energy"),
                 )
+            elif action.type == ActionType.JOB_INJECT:
+                server.usage_simulator.inject_jobs([params])
             elif action.type == ActionType.ACCOUNT_CREATE:
                 name = params["name"]
                 if server.database.get_account(name):

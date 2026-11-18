@@ -1,9 +1,9 @@
 """Usage simulation for injecting node-hour consumption."""
 
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional, Union
 
-from emulator.core.database import SlurmDatabase, UsageRecord
+from emulator.core.database import FINISHED_JOB_STATES, SlurmDatabase, UsageRecord
 from emulator.core.energy import DEFAULT_PARTITION, energy_joules
 from emulator.core.time_engine import TimeEngine
 
@@ -36,6 +36,118 @@ def standard_node_raw_tres(
         if energy is None
         else int(energy),
     }
+
+
+def job_tres(cpus: int = 1, gpus: int = 0, mem_gb: Optional[int] = None) -> dict[str, int]:
+    """Requested = allocated TRES of one single-node job, as slurmdbd stores them.
+
+    ``mem`` is in MB, as in ``UsageRecord.tres_alloc``; ``mem_gb`` defaults
+    to the standard node's memory per CPU.
+    """
+    if cpus < 1 or gpus < 0:
+        msg = "cpus must be >= 1 and gpus >= 0"
+        raise ValueError(msg)
+    mem = mem_gb if mem_gb is not None else cpus * NODE_MEM_GB // NODE_CPUS
+    if mem < 0:
+        msg = "mem_gb must not be negative"
+        raise ValueError(msg)
+    tres = {"billing": cpus, "cpu": cpus, "mem": mem * 1024, "node": 1}
+    if gpus:
+        tres["gres/gpu"] = gpus
+    return tres
+
+
+def job_raw_tres(
+    elapsed_hours: float,
+    tres: dict[str, int],
+    partition: str = DEFAULT_PARTITION,
+    energy: Optional[int] = None,
+) -> dict[str, float]:
+    """Usage of one job: its allocation times how long it ran.
+
+    ``<count>-hours`` (Mem in GB) as the scheduler books a finished run, so
+    sshare/sreport weigh an injected job like a submitted one. Without
+    ``energy`` the power model charges the job's share of a node
+    (``cpus / NODE_CPUS``) plus its GPUs.
+    """
+    cpus = tres["cpu"]
+    gpu_hours = tres.get("gres/gpu", 0) * elapsed_hours
+    return {
+        "node-hours": int(elapsed_hours),
+        "CPU": round(cpus * elapsed_hours, 6),
+        "Mem": round(tres["mem"] / 1024 * elapsed_hours, 6),
+        "GRES/gpu": round(gpu_hours, 6),
+        "energy": energy_joules(elapsed_hours * cpus / NODE_CPUS, gpu_hours, partition)
+        if energy is None
+        else int(energy),
+    }
+
+
+def cluster_local(value: datetime) -> datetime:
+    """``value`` as naive cluster-local time, the clock sacct prints and filters on.
+
+    The emulator's records and simulated clock are naive local time
+    (``datetime.fromtimestamp``); an aware value is converted to the local
+    zone and its offset dropped, a naive one is taken as already local.
+    """
+    if value.tzinfo is None:
+        return value
+    return value.astimezone().replace(tzinfo=None)
+
+
+def parse_job_end(value: Union[str, datetime]) -> datetime:
+    """An ISO 8601 job end, with or without an offset, as naive local time.
+
+    ``Z`` is accepted for UTC even on Python 3.9, whose ``fromisoformat``
+    only takes ``+00:00``.
+    """
+    if isinstance(value, datetime):
+        return cluster_local(value)
+    text = str(value).strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        return cluster_local(datetime.fromisoformat(text))
+    except ValueError:
+        msg = f"end must be an ISO 8601 date-time, got {value!r}"
+        raise ValueError(msg) from None
+
+
+def job_total_cpu(
+    cpus: int,
+    elapsed_hours: float,
+    cpu_efficiency: Optional[float] = None,
+    total_cpu_seconds: Optional[float] = None,
+) -> float:
+    """CPU time a job consumed, from an efficiency or an explicit figure.
+
+    ``cpu_efficiency`` (0..1) scales ``cpus x elapsed``; the two inputs
+    are mutually exclusive, and neither means every CPU was busy for the
+    whole run.
+    """
+    if cpu_efficiency is not None and total_cpu_seconds is not None:
+        msg = "give cpu_efficiency or total_cpu_seconds, not both"
+        raise ValueError(msg)
+    if cpu_efficiency is not None:
+        if not 0 <= cpu_efficiency <= 1:
+            msg = "cpu_efficiency must be between 0 and 1"
+            raise ValueError(msg)
+        return cpus * elapsed_hours * 3600 * cpu_efficiency
+    if total_cpu_seconds is not None and total_cpu_seconds < 0:
+        msg = "total_cpu_seconds must not be negative"
+        raise ValueError(msg)
+    if total_cpu_seconds is not None:
+        return float(total_cpu_seconds)
+    return cpus * elapsed_hours * 3600.0
+
+
+def job_state(state: str) -> str:
+    """Upper-cased final state; anything but a finished base state is refused."""
+    upper = state.upper()
+    if upper not in FINISHED_JOB_STATES:
+        msg = f"state must be one of {', '.join(FINISHED_JOB_STATES)}"
+        raise ValueError(msg)
+    return upper
 
 
 class UsageSimulator:
@@ -101,6 +213,102 @@ class UsageSimulator:
 
         # Save state after injection
         self.database.save_state()
+
+    def build_job_record(
+        self,
+        account: str,
+        user: str,
+        elapsed_hours: float,
+        cpus: int = 1,
+        gpus: int = 0,
+        mem_gb: Optional[int] = None,
+        partition: Optional[str] = None,
+        energy: Optional[int] = None,
+        admin_comment: str = "",
+        end: Optional[Union[str, datetime]] = None,
+        cluster: Optional[str] = None,
+        state: str = "COMPLETED",
+        cpu_efficiency: Optional[float] = None,
+        total_cpu_seconds: Optional[float] = None,
+    ) -> UsageRecord:
+        """Validate one finished job and build its accounting record, writing nothing.
+
+        The record is a run as slurmdbd stores it, so ``sacct`` and
+        slurmrestd render it like a submitted job's: one node (``node001``),
+        ``AllocTRES``/``ReqTRES`` ``cpu=<cpus>[,gres/gpu=<gpus>]``,
+        ``Start``/``End`` ``elapsed_hours`` apart and ending at ``end``
+        (ISO 8601 or a datetime, aware or naive; default the simulated now),
+        ``TotalCPU`` from :func:`job_total_cpu`, ``State`` any finished base
+        state (:data:`FINISHED_JOB_STATES`; a cancelled job reads
+        ``CANCELLED by 1000``, its owner's default uid) and ``AdminComment``
+        verbatim. Raises ``ValueError`` (bad value) or ``TypeError``
+        (missing/unknown field).
+        """
+        if not elapsed_hours > 0:
+            msg = "elapsed_hours must be positive"
+            raise ValueError(msg)
+        part = partition or DEFAULT_PARTITION
+        tres = job_tres(cpus, gpus, mem_gb)
+        final_state = job_state(state)
+        total_cpu = job_total_cpu(cpus, elapsed_hours, cpu_efficiency, total_cpu_seconds)
+        end_time = parse_job_end(end) if end is not None else self.time_engine.get_current_time()
+        start_time = end_time - timedelta(hours=elapsed_hours)
+        return UsageRecord(
+            account=account,
+            user=user,
+            node_hours=elapsed_hours,
+            billing_units=elapsed_hours,
+            timestamp=end_time,
+            period=f"{end_time.year}-Q{(end_time.month - 1) // 3 + 1}",
+            raw_tres=job_raw_tres(elapsed_hours, tres, part, energy),
+            cluster=cluster or self.database.current_cluster,
+            partition=part,
+            state=final_state,
+            # Without NSS mode every job is uid 1000; the owner cancelled it.
+            requid=1000 if final_state == "CANCELLED" else None,
+            submit_time=start_time,
+            eligible_time=start_time,
+            start_time=start_time,
+            end_time=end_time,
+            node_count=1,
+            node_list="node001",
+            alloc_cpus=cpus,
+            req_mem_mb=tres["mem"],
+            cpu_time_seconds=total_cpu,
+            tres_req=dict(tres),
+            tres_alloc=dict(tres),
+            admin_comment=admin_comment,
+        )
+
+    def inject_job(self, *args: Any, **fields: Any) -> int:  # noqa: ANN401
+        """Record one finished job (see :meth:`build_job_record`) and return its id."""
+        return self._record_jobs([self.build_job_record(*args, **fields)])[0]
+
+    def inject_jobs(self, jobs: list[dict[str, Any]]) -> list[int]:
+        """Record several finished jobs from plain dicts (control API, scenarios).
+
+        Keys are :meth:`build_job_record`'s arguments. Every job is
+        validated before any is recorded, so a bad entry leaves the state
+        untouched; missing accounts, users and associations are created,
+        and the state is saved once at the end.
+        """
+        return self._record_jobs([self.build_job_record(**spec) for spec in jobs])
+
+    def _record_jobs(self, records: list[UsageRecord]) -> list[int]:
+        for record in records:
+            if not self.database.get_account(record.account):
+                self.database.add_account(record.account, f"Account {record.account}", "emulator")
+            if not self.database.get_user(record.user):
+                self.database.add_user(record.user, record.account)
+            if not self.database.get_association(
+                record.user, record.account, cluster=record.cluster
+            ):
+                self.database.add_association(record.user, record.account, cluster=record.cluster)
+            self.database.add_usage_record(record)
+        self.database.save_state()
+        job_ids = [int(record.job_id or 0) for record in records]
+        print(f"💾 Injected {len(job_ids)} job(s): {', '.join(map(str, job_ids))}")
+        return job_ids
 
     def inject_usage_pattern(self, account: str, user: str, pattern_config: dict) -> None:
         """Inject usage following a pattern over time."""

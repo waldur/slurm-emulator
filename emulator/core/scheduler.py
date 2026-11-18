@@ -463,6 +463,7 @@ def _ensure_usage_record(database: SlurmDatabase, job, sim_now: datetime) -> boo
             tres_req=tres_req,
             tres_alloc=tres_alloc,
             gpu_indices={node: list(i) for node, i in job.gpu_indices.items()},
+            admin_comment=job.admin_comment,
         )
     )
     return True

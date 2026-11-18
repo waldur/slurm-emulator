@@ -42,6 +42,17 @@ DEFAULT = "associations"
 ESLURM_INVALID_ACCOUNT = 2045  # slurm://src/slurmctld/job_mgr.c#_job_create
 ESLURM_USER_ID_UNKNOWN = 2166  # slurm://src/plugins/data_parser/v0.0.45/parsers.c#USER_ID@26.05+
 
+# validate_super_user (slurm://src/slurmctld/proc_req.c#validate_super_user)
+# admits uid 0, SlurmUser and AdminLevel=Administrator. The emulator keeps no
+# AdminLevel, so these two names stand in for all three.
+SUPER_USERS = frozenset({"root", "slurm"})
+
+
+def is_super_user(user: str) -> bool:
+    """Whether slurmctld would treat ``user`` as a super user."""
+    return user in SUPER_USERS
+
+
 # Tokens that set ACCOUNTING_ENFORCE_ASSOCS, directly or by implication
 # (slurm://src/common/read_config.c#_validate_accounting_storage_enforce).
 _ASSOC_TOKENS = {"1", "associations", "2", "limits", "safe", "wckeys", "qos", "all"}
