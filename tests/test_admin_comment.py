@@ -12,6 +12,7 @@ and accepts it on submit only from a super user
 """
 
 import json
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -59,6 +60,16 @@ def _clean_power_env(monkeypatch):
         "SLURM_EMULATOR_PARTITION_POWER_W",
     ):
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def tallinn(monkeypatch):
+    """Run in a non-UTC zone (UTC+2 in March), so offsets really get converted."""
+    monkeypatch.setenv("TZ", "Europe/Tallinn")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
 
 
 @pytest.fixture
@@ -162,9 +173,10 @@ class TestInjectJob:
             sim.inject_jobs([good, {**good, "bogus": 1}])
         assert db.usage_records == []
 
-    def test_end_with_offset_or_naive_lands_in_the_window(self, env):
+    def test_end_with_offset_or_naive_lands_in_the_window(self, env, tallinn):
         """Aware ends become naive cluster-local time; naive ones are taken as is."""
         db, te, sim = env
+        assert parse_job_end("2024-03-10T10:00:00Z") == datetime(2024, 3, 10, 12, 0, 0)
         naive = datetime(2024, 3, 10, 12, 0, 0)
         utc = cluster_local(naive).astimezone(timezone.utc)
         ends = [naive.isoformat(), utc.isoformat(), utc.strftime("%Y-%m-%dT%H:%M:%SZ")]
@@ -186,6 +198,20 @@ class TestInjectJob:
         assert parse_job_end(aware.isoformat()) == aware.astimezone().replace(tzinfo=None)
         with pytest.raises(ValueError, match="ISO 8601"):
             parse_job_end("next tuesday")
+
+    def test_non_finite_numbers_refused(self, env):
+        db, _te, sim = env
+        job = {"account": "p", "user": "u", "elapsed_hours": 1.0}
+        for bad in (
+            {"elapsed_hours": float("inf")},
+            {"elapsed_hours": float("nan")},
+            {"cpu_efficiency": float("nan")},
+            {"total_cpu_seconds": float("nan")},
+            {"total_cpu_seconds": float("inf")},
+        ):
+            with pytest.raises(ValueError, match="finite"):
+                sim.inject_jobs([{**job, **bad}])
+        assert db.usage_records == []
 
     def test_creates_account_user_and_association(self, env):
         db, _te, sim = env
@@ -229,6 +255,40 @@ class TestControlApi:
             f"1|proj|alice|billing=8,cpu=8,mem=64G,node=1|03:00:00|675000|{DOC}",
             "2|proj|bob|billing=1,cpu=1,mem=8G,node=1|01:00:00|28125|",
         ]
+
+    def test_keeps_what_other_processes_wrote(self, client):
+        """The handler reloads the state file before it saves it."""
+        server, http = client
+        job = {"account": "proj", "user": "alice", "elapsed_hours": 1, "end": "2024-03-10T12:00:00"}
+        assert http.post("/api/inject-jobs", json={"jobs": [job]}).status_code == 200
+        other = SlurmDatabase()
+        other.state_file = server.database.state_file
+        other.load_state()
+        other.add_account("siteacct", "Site account", "org")
+        other.usage_records[0].admin_comment = "hello"
+        other.save_state()
+        resp = http.post("/api/inject-jobs", json={"jobs": [job]})
+        assert resp.json()["job_ids"] == [2]
+        fresh = SlurmDatabase()
+        fresh.state_file = server.database.state_file
+        fresh.load_state()
+        assert fresh.get_account("siteacct") is not None
+        assert [r.admin_comment for r in fresh.usage_records] == ["hello", ""]
+
+    def test_unknown_field_is_422_non_finite_400(self, client):
+        server, http = client
+        job = {"account": "p", "user": "u", "elapsed_hours": 1}
+        typo = http.post("/api/inject-jobs", json={"jobs": [{**job, "cpu_effciency": 0.5}]})
+        assert typo.status_code == 422
+        nan = http.post(
+            "/api/inject-jobs",
+            content='{"jobs": [{"account": "p", "user": "u", "elapsed_hours": NaN}]}',
+            headers={"Content-Type": "application/json"},
+        )
+        assert nan.status_code == 400
+        huge = http.post("/api/inject-jobs", json={"jobs": [{**job, "elapsed_hours": 1e300}]})
+        assert huge.status_code == 400
+        assert server.database.usage_records == []
 
     def test_bad_job_is_400_and_writes_nothing(self, client):
         server, http = client

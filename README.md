@@ -286,7 +286,8 @@ GPUs. `state` is one of the
 finished states above (default `COMPLETED`). `TotalCPU` comes from
 `cpu_efficiency` (0–1, a share of `cpus × elapsed`) or `total_cpu_seconds`
 — not both; with neither, every CPU counts as busy for the whole run. Any
-invalid job rejects the whole request with 400, and nothing is written.
+invalid value (including a non-finite number) rejects the whole request
+with 400, an unknown field or a wrong type with 422, and nothing is written.
 
 **Scenario.** `scenario_run eessi_software_usage` (CLI or web UI) creates
 `eessi_demo` and records twelve March 2024 jobs by alice, bob and carol

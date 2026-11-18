@@ -1,5 +1,6 @@
 """Usage simulation for injecting node-hour consumption."""
 
+import math
 from datetime import datetime, timedelta
 from typing import Any, Optional, Union
 
@@ -125,6 +126,13 @@ def job_total_cpu(
     are mutually exclusive, and neither means every CPU was busy for the
     whole run.
     """
+    for name, value in (
+        ("cpu_efficiency", cpu_efficiency),
+        ("total_cpu_seconds", total_cpu_seconds),
+    ):
+        if value is not None and not math.isfinite(value):
+            msg = f"{name} must be a finite number"
+            raise ValueError(msg)
     if cpu_efficiency is not None and total_cpu_seconds is not None:
         msg = "give cpu_efficiency or total_cpu_seconds, not both"
         raise ValueError(msg)
@@ -244,8 +252,8 @@ class UsageSimulator:
         verbatim. Raises ``ValueError`` (bad value) or ``TypeError``
         (missing/unknown field).
         """
-        if not elapsed_hours > 0:
-            msg = "elapsed_hours must be positive"
+        if not (elapsed_hours > 0 and math.isfinite(elapsed_hours)):
+            msg = "elapsed_hours must be a positive, finite number"
             raise ValueError(msg)
         part = partition or DEFAULT_PARTITION
         tres = job_tres(cpus, gpus, mem_gb)

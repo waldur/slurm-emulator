@@ -1154,7 +1154,6 @@ class SlurmDatabase:
                 self.jobs = {}
                 for jid, data in state.get("jobs", {}).items():
                     data.setdefault("cluster", "default")
-                    data.setdefault("admin_comment", "")
                     # Handle datetime fields
                     for dt_field in ["submit_time", "start_time", "end_time", "begin_time"]:
                         if data.get(dt_field):
@@ -1200,7 +1199,6 @@ class SlurmDatabase:
         data.setdefault("job_id", None)
         data.setdefault("state", "COMPLETED")
         data.setdefault("partition", "compute")
-        data.setdefault("admin_comment", "")
         return UsageRecord(**data)
 
 

@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from emulator import __version__
 from emulator.api.slurmrestd.auth import DEFAULT_JWT_KEY, encode_jwt_hs256
@@ -118,7 +118,15 @@ class AccountCreateRequest(BaseModel):
 
 
 class JobInjectSpec(BaseModel):
-    """One finished job, as ``UsageSimulator.inject_job`` records it."""
+    """One finished job, as ``UsageSimulator.inject_job`` records it.
+
+    Unknown fields are refused (422), so a misspelt ``cpu_effciency``
+    cannot silently leave a job fully busy. Non-finite numbers are left to
+    ``build_job_record`` (400): a 422 would echo the NaN back in a body
+    JSON cannot encode.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     account: str
     user: str
@@ -497,11 +505,14 @@ class EmulatorServer:
             ``AdminComment`` — what a real cluster's accounting holds after
             the job ran and an epilog annotated it.
             """
+            # Other processes (sacctmgr, sbatch, slurmrestd) write the same
+            # state file; start from it so saving does not drop their writes.
+            self.database.load_state()
             try:
                 job_ids = self.usage_simulator.inject_jobs(
                     [spec.model_dump(exclude_none=True) for spec in request.jobs]
                 )
-            except (TypeError, ValueError) as e:
+            except (TypeError, ValueError, OverflowError) as e:
                 raise HTTPException(status_code=400, detail=str(e)) from e
             return {"status": "success", "job_ids": job_ids}
 

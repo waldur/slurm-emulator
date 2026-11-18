@@ -32,6 +32,13 @@ the emulator moves that single default. The ``default`` cluster the
 emulator always seeds is left out of "every cluster" when
 ``SLURM_EMULATOR_CLUSTER_NAME`` names another one — a real database has
 no such placeholder.
+
+``modify job`` (slurm://src/sacctmgr/job_functions.c#sacctmgr_modify_job)
+sets only ``AdminComment`` and filters only on job ids, accounts, users and
+clusters; job ids lose their step suffix and array ids are refused. Real
+slurmdbd also requires AdminLevel=Operator to set AdminComment; the
+emulator has no caller identity there and does not check it. Only
+finished jobs (accounting records) match.
 """
 
 import copy
