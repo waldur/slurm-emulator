@@ -280,7 +280,8 @@ Each job is stored like a submitted one that ran on `node001`:
 defaults to 8 GB per CPU or `mem_gb`), `Start`/`End` are `elapsed_hours`
 apart and end at `end` (default: the simulated now), both in whole
 seconds as slurmdbd stores them: `end` loses any fraction of a second and
-the run length is rounded to the nearest second (at least one). `end` is ISO 8601
+the run length is rounded to the nearest second (an exact half to the
+even neighbour, as Python rounds) and must come to at least one. `end` is ISO 8601
 with or without an offset (`Z` included): an aware time is converted to the
 emulator's local time and printed without an offset, as sacct prints the
 cluster's local time; a naive one is taken as local already. `energy` is
