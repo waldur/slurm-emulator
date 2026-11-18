@@ -116,13 +116,14 @@ def parse_job_end(value: Union[str, datetime]) -> datetime:
 
 def job_total_cpu(
     cpus: int,
-    elapsed_hours: float,
+    elapsed_seconds: int,
     cpu_efficiency: Optional[float] = None,
     total_cpu_seconds: Optional[float] = None,
 ) -> float:
     """CPU time a job consumed, from an efficiency or an explicit figure.
 
-    ``cpu_efficiency`` (0..1) scales ``cpus x elapsed``; the two inputs
+    ``cpu_efficiency`` (0..1) scales ``cpus x elapsed`` (the whole seconds
+    sacct prints as Elapsed, so the efficiency reads back exactly); the two inputs
     are mutually exclusive, and neither means every CPU was busy for the
     whole run.
     """
@@ -140,13 +141,13 @@ def job_total_cpu(
         if not 0 <= cpu_efficiency <= 1:
             msg = "cpu_efficiency must be between 0 and 1"
             raise ValueError(msg)
-        return cpus * elapsed_hours * 3600 * cpu_efficiency
+        return cpus * elapsed_seconds * cpu_efficiency
     if total_cpu_seconds is not None and total_cpu_seconds < 0:
         msg = "total_cpu_seconds must not be negative"
         raise ValueError(msg)
     if total_cpu_seconds is not None:
         return float(total_cpu_seconds)
-    return cpus * elapsed_hours * 3600.0
+    return float(cpus * elapsed_seconds)
 
 
 def job_state(state: str) -> str:
@@ -255,6 +256,12 @@ class UsageSimulator:
         if not (elapsed_hours > 0 and math.isfinite(elapsed_hours)):
             msg = "elapsed_hours must be a positive, finite number"
             raise ValueError(msg)
+        # Whole seconds, as slurmdbd stores times (time_t); Elapsed, Start
+        # and the TotalCPU default all derive from this one figure.
+        elapsed_seconds = round(elapsed_hours * 3600)
+        if elapsed_seconds < 1:
+            msg = "elapsed_hours must come to at least one second"
+            raise ValueError(msg)
         part = partition or DEFAULT_PARTITION
         if energy is not None and not energy >= 0:
             # slurmdbd keeps consumed energy as an unsigned counter.
@@ -262,11 +269,10 @@ class UsageSimulator:
             raise ValueError(msg)
         tres = job_tres(cpus, gpus, mem_gb)
         final_state = job_state(state)
-        total_cpu = job_total_cpu(cpus, elapsed_hours, cpu_efficiency, total_cpu_seconds)
-        # Whole seconds, as slurmdbd stores times (time_t).
+        total_cpu = job_total_cpu(cpus, elapsed_seconds, cpu_efficiency, total_cpu_seconds)
         end_time = parse_job_end(end) if end is not None else self.time_engine.get_current_time()
         end_time = end_time.replace(microsecond=0)
-        start_time = end_time - timedelta(seconds=round(elapsed_hours * 3600))
+        start_time = end_time - timedelta(seconds=elapsed_seconds)
         return UsageRecord(
             account=account,
             user=user,

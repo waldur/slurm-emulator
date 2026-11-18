@@ -189,6 +189,39 @@ class TestInjectJob:
         assert out.splitlines() == [f"{i}|2024-03-10T10:00:00|2024-03-10T12:00:00" for i in ids]
         assert all(r.end_time.tzinfo is None for r in db.usage_records)
 
+    def test_times_are_whole_seconds_and_total_cpu_matches_elapsed(self, env):
+        """End loses its fraction and Elapsed is rounded: slurmdbd stores time_t."""
+        db, te, sim = env
+        sim.inject_jobs(
+            [
+                {
+                    "account": "proj",
+                    "user": "a",
+                    "cpus": 4,
+                    "elapsed_hours": 0.01001,
+                    "end": "2024-03-10T12:00:00.700",
+                },
+                {
+                    "account": "proj",
+                    "user": "a",
+                    "cpus": 4,
+                    "elapsed_hours": 0.01001,
+                    "end": "2024-03-10T12:00:00",
+                    "cpu_efficiency": 1.0,
+                },
+            ]
+        )
+        out = SacctEmulator(db, te).handle_command(
+            [*SITE_AGENT_ARGS[1:], "--format=JobID,End,ElapsedRaw,TotalCPU"]
+        )
+        # 0.01001 h = 36.036 s -> 36 s; 4 CPUs x 36 s = 144 s either way.
+        assert out.splitlines() == [
+            "1|2024-03-10T12:00:00|36|00:02:24",
+            "2|2024-03-10T12:00:00|36|00:02:24",
+        ]
+        with pytest.raises(ValueError, match="at least one second"):
+            sim.inject_job("proj", "a", 0.0001)
+
     def test_parse_job_end(self):
         local = datetime(2024, 3, 10, 12, 0, 0)
         assert parse_job_end("2024-03-10T12:00:00") == local
