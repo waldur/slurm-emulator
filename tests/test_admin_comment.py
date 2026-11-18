@@ -211,6 +211,8 @@ class TestInjectJob:
         ):
             with pytest.raises(ValueError, match="finite"):
                 sim.inject_jobs([{**job, **bad}])
+        with pytest.raises(ValueError, match="energy must not be negative"):
+            sim.inject_jobs([{**job, "energy": -5}])
         assert db.usage_records == []
 
     def test_creates_account_user_and_association(self, env):

@@ -237,7 +237,8 @@ it wherever real Slurm does:
   `00:12:34`, `09:45:36`, `31-00:57:36`). In fixed-width output the
   10-character column truncates long values (`31-00:57:+`), as real sacct
   does. CPU efficiency is `TotalCPU / (cpus × Elapsed)`; slurmrestd
-  reports the same figure as `time.total` (and `time.user`).
+  reports the same figure as `time.total` (split 96/4 into `time.user`
+  and `time.system`, the emulator's synthetic split).
 - `State` is any finished base state — `COMPLETED`, `FAILED`, `TIMEOUT`,
   `OUT_OF_MEMORY`, `NODE_FAIL`, `CANCELLED`, `PREEMPTED`, `BOOT_FAIL`,
   `DEADLINE`; a cancelled job reads `CANCELLED by <uid>` (the job owner's

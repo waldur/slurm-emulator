@@ -256,11 +256,17 @@ class UsageSimulator:
             msg = "elapsed_hours must be a positive, finite number"
             raise ValueError(msg)
         part = partition or DEFAULT_PARTITION
+        if energy is not None and not energy >= 0:
+            # slurmdbd keeps consumed energy as an unsigned counter.
+            msg = "energy must not be negative"
+            raise ValueError(msg)
         tres = job_tres(cpus, gpus, mem_gb)
         final_state = job_state(state)
         total_cpu = job_total_cpu(cpus, elapsed_hours, cpu_efficiency, total_cpu_seconds)
+        # Whole seconds, as slurmdbd stores times (time_t).
         end_time = parse_job_end(end) if end is not None else self.time_engine.get_current_time()
-        start_time = end_time - timedelta(hours=elapsed_hours)
+        end_time = end_time.replace(microsecond=0)
+        start_time = end_time - timedelta(seconds=round(elapsed_hours * 3600))
         return UsageRecord(
             account=account,
             user=user,

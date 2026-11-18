@@ -714,7 +714,8 @@ def ctld_job_to_dict(job: Job) -> dict[str, Any]:
         end = expected_end(job)
 
     return {
-        # JOB_INFO dumps job_info_t.admin_comment as a flat ``admin_comment``.
+        # JOB_INFO dumps job_info_t.admin_comment as a flat ``admin_comment``
+        # (slurm://src/plugins/data_parser/v0.0.45/parsers.c#JOB_INFO@26.05+).
         "admin_comment": job.admin_comment,
         "job_id": int(job.job_id) if str(job.job_id).isdigit() else 0,
         "name": job.name or f"job_{job.job_id}",
