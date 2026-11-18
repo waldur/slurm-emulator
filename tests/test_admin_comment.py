@@ -219,6 +219,10 @@ class TestInjectJob:
             "1|2024-03-10T12:00:00|36|00:02:24",
             "2|2024-03-10T12:00:00|36|00:02:24",
         ]
+        # Usage and the default energy use the same 36 s, as the scheduler's
+        # records do: 4/64 of a 500 W node for 36 s.
+        assert db.usage_records[0].node_hours == 36 / 3600
+        assert db.usage_records[0].raw_tres["energy"] == 4 * 500 * 36 // 64
         with pytest.raises(ValueError, match="at least one second"):
             sim.inject_job("proj", "a", 0.0001)
 

@@ -245,7 +245,7 @@ class UsageSimulator:
         The record is a run as slurmdbd stores it, so ``sacct`` and
         slurmrestd render it like a submitted job's: one node (``node001``),
         ``AllocTRES``/``ReqTRES`` ``cpu=<cpus>[,gres/gpu=<gpus>]``,
-        ``Start``/``End`` ``elapsed_hours`` apart and ending at ``end``
+        ``Start``/``End`` ``elapsed_hours`` (rounded to whole seconds) apart and ending at ``end``
         (ISO 8601 or a datetime, aware or naive; default the simulated now),
         ``TotalCPU`` from :func:`job_total_cpu`, ``State`` any finished base
         state (:data:`FINISHED_JOB_STATES`; a cancelled job reads
@@ -256,12 +256,13 @@ class UsageSimulator:
         if not (elapsed_hours > 0 and math.isfinite(elapsed_hours)):
             msg = "elapsed_hours must be a positive, finite number"
             raise ValueError(msg)
-        # Whole seconds, as slurmdbd stores times (time_t); Elapsed, Start
-        # and the TotalCPU default all derive from this one figure.
+        # Whole seconds, as slurmdbd stores times (time_t); Elapsed, Start,
+        # TotalCPU, usage and the default energy all derive from this figure.
         elapsed_seconds = round(elapsed_hours * 3600)
         if elapsed_seconds < 1:
             msg = "elapsed_hours must come to at least one second"
             raise ValueError(msg)
+        elapsed_hours = elapsed_seconds / 3600
         part = partition or DEFAULT_PARTITION
         if energy is not None and not energy >= 0:
             # slurmdbd keeps consumed energy as an unsigned counter.
